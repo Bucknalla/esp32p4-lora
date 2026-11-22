@@ -20,7 +20,6 @@
     <form id="setup-form">
       <label>New admin password <input type="password" name="admin" minlength="8" maxlength="63" required autocomplete="new-password"></label>
       <label>Repeat admin password <input type="password" id="admin2" minlength="8" maxlength="63" required autocomplete="new-password"></label>
-      <label class="check"><input type="checkbox" name="ttn" checked> Report to The Things Network (eu1)</label>
       <button type="submit">Set admin password</button>
       <p id="setup-msg" class="msg"></p>
     </form>
@@ -39,14 +38,26 @@
   <section id="app" hidden>
     <nav>
       <button data-tab="status" class="on">Status</button>
+      <button data-tab="config">Config</button>
       <button data-tab="logs">Logs</button>
       <button data-tab="firmware">System</button>
     </nav>
     <div id="tab-status" class="tab">
       <ul id="notices"></ul>
       <div id="tiles" class="tiles"></div>
+      <details><summary>All details</summary><div id="groups"></div></details>
+    </div>
+    <div id="tab-config" class="tab" hidden>
+      <h3>The Things Network</h3>
+      <dl>
+        <dt>Reporting</dt><dd id="ttn-state"></dd>
+      </dl>
+      <p class="admin row">
+        <label><input type="checkbox" id="ttn-on"> Report to The Things Network (eu1)</label>
+        <button id="ttn-save">Save and restart</button>
+      </p>
       <div id="ttn" hidden>
-        <h3>Register on The Things Network</h3>
+        <h3>Register this gateway</h3>
         <div class="ttn">
           <img id="ttn-qr" alt="QR code of the gateway EUI" width="140" height="140">
           <div>
@@ -60,7 +71,7 @@
           </div>
         </div>
       </div>
-      <details><summary>All details</summary><div id="groups"></div></details>
+      <p id="cfg-msg" class="msg"></p>
     </div>
     <div id="tab-logs" class="tab" hidden>
       <p class="row">
@@ -75,10 +86,6 @@
       <p class="admin row">
         <button id="ota-check">Install latest release</button>
         <button id="reboot">Reboot</button>
-      </p>
-      <p class="admin row">
-        <label><input type="checkbox" id="ttn-on"> Report to The Things Network (eu1)</label>
-        <button id="ttn-save">Save</button>
       </p>
       <p class="admin row">Crash dump:
         <a id="cd-get" href="/api/coredump" download>Download</a>

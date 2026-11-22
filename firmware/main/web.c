@@ -614,8 +614,7 @@ static esp_err_t api_claim_post(httpd_req_t *req)
     if (!read_body(req, body, &got)) {
         return send_status(req, "400 Bad Request", "bad body\n");
     }
-    char admin[64], ttn[8];
-    const bool ttn_on = lwc_form_get(body, got, "ttn", ttn, sizeof ttn) > 0; /* checkbox */
+    char admin[64];
     const int al = lwc_form_get(body, got, "admin", admin, sizeof admin);
     memset(body, 0, sizeof body);
     if (al < 8) {
@@ -628,14 +627,7 @@ static esp_err_t api_claim_post(httpd_req_t *req)
         return send_status(req, "500 Internal Server Error", esp_err_to_name(err));
     }
     ESP_LOGW(TAG, "claim: admin password set from the LAN");
-    if (ttn_on == pktfwd_ttn_enabled()) {
-        return send_status(req, "200 OK", "claimed: log in as admin\n");
-    }
-    err = pktfwd_set_ttn(ttn_on);
-    if (err != ESP_OK) {
-        return send_status(req, "500 Internal Server Error", esp_err_to_name(err));
-    }
-    return reboot_soon(req, "claim changed TTN reporting", "claimed: the gateway restarts, then log in as admin\n");
+    return send_status(req, "200 OK", "claimed: log in as admin\n");
 }
 
 /* ---- start -------------------------------------------------------------------------- */

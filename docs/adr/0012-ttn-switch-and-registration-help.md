@@ -1,6 +1,6 @@
 # ADR-0012: TTN reporting switch and registration help (no TTN QR claim)
 
-- Status: accepted
+- Status: accepted (UI placement updated 2026-11-22: gateway settings live on a Config tab; TTN is not a setup step, ADR-0014)
 - Date: 2026-11-22
 
 ## Context
@@ -16,9 +16,9 @@ Gateway Pro units. A DIY gateway must be registered by hand with its EUI.
 
 - A setting **Report to The Things Network (eu1)**, stored in NVS
   (`pktfwd/ttn`, default on as before). Set on the setup page (ADR-0011) and on
-  the web UI's System tab (admin, `POST /api/settings ttn=on|off`); it applies
+  the web UI's Config tab (admin, `POST /api/settings ttn=on|off`); it applies
   after a restart. Off: the packet forwarder does not start.
-- While it is on, the Status page shows a **Register on The Things Network**
+- While it is on, the Config tab shows a **Register this gateway**
   card: the gateway EUI with a copy button, a QR code of the EUI (to scan with
   a phone into the console's EUI field), the frequency plan and server
   address to choose, and a link to the eu1 console's Register gateway page.

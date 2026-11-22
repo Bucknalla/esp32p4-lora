@@ -39,8 +39,9 @@ iPhone; Espressif's "ESP BLE Provisioning" app (iOS, Android) can.
   failed with "wrong password" or "network not found" from the last
   disconnect reason. Open networks are refused (WPA2 or newer, as before).
 - **Claim.** The app sends Wi-Fi only. With no admin password, the first
-  visit to the web UI from the LAN sets it (`GET|POST /api/claim`, with the
-  TTN switch) within 15 min of start or of a BLE setup that joined a network.
+  visit to the web UI from the LAN sets it (`GET|POST /api/claim`, password
+  only) within 15 min of start or of a BLE setup that joined a network. TTN
+  reporting stays a setting inside the web UI (ADR-0012), not a setup step.
   This also gives Ethernet-only installs a claim path. The console `WEB_PASS`
   always works.
 - **Removed.** The setup access point, captive DNS (`core/src/dns.c`, its

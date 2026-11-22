@@ -124,9 +124,10 @@ python tools/web_password.py <PORT> admin --generate   # random, saved to ~/.con
 python tools/web_password.py <PORT> viewer             # or type one (8-63 bytes)
 ```
 
-Registering on The Things Network: the Status page shows the gateway EUI, a
-QR code of it and the values to enter in the TTN console (ADR-0012). Reporting
-to TTN can be switched off on the System tab.
+Gateway settings are on the web UI's **Config** tab (admin to change). For The
+Things Network it shows the reporting switch and, while reporting is on, the
+gateway EUI, a QR code of it and the values to enter in the TTN console
+(ADR-0012). TTN is not part of first-time setup.
 
 Open `https://<gateway-ip>/`. The certificate is self-signed and made on the
 device: compare its SHA-256 with the one console `STATUS` prints (`WEB ...
