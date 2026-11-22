@@ -179,6 +179,30 @@ static void reply(const radio_tx_req_t *r, radio_tx_result_t res, int8_t pw, boo
     (void)xQueueSend(g_radio_tx_res, &out, 0);
 }
 
+#if CONFIG_GW_TX_ENABLE
+static void admit(const radio_tx_req_t *r);
+
+/* The first window was refused: try the request's second one (local server
+ * RX2), once. Returns false if it has none. */
+static bool try_alt(const radio_tx_req_t *r, radio_tx_result_t why)
+{
+    if (!r->alt.on || (why != RADIO_TX_TOO_LATE && why != RADIO_TX_COLLISION && why != RADIO_TX_DUTY)) {
+        return false;
+    }
+    static radio_tx_req_t a; /* radio task only */
+    a = *r;
+    a.alt.on = false;
+    a.pk.tmst = r->alt.tmst;
+    a.pk.freq_hz = r->alt.freq_hz;
+    a.pk.sf = r->alt.sf;
+    a.pk.bw_khz = r->alt.bw_khz;
+    ESP_LOGI(TAG, "downlink %u: first window %s, trying RX2 (%" PRIu32 " Hz SF%u)", (unsigned)r->token,
+             radio_tx_result_str(why), a.pk.freq_hz, a.pk.sf);
+    admit(&a);
+    return true;
+}
+#endif
+
 static void admit(const radio_tx_req_t *r)
 {
 #if !CONFIG_GW_TX_ENABLE
@@ -243,13 +267,17 @@ static void admit(const radio_tx_req_t *r)
                                                                : RADIO_TX_COLLISION;
         ESP_LOGW(TAG, "downlink refused: %s (start in %" PRId32 " us)", radio_tx_result_str(res),
                  (int32_t)(f.count_us - now));
-        reply(r, res, pw, capped);
+        if (!try_alt(r, res)) {
+            reply(r, res, pw, capped);
+        }
         return;
     }
     if (!lwc_dc_take(&s_dc, esp_timer_get_time(), f.freq_hz, air_us)) {
         lwc_jit_release(&s_jit, slot);
         ESP_LOGW(TAG, "downlink refused: duty-cycle budget used up on %" PRIu32 " Hz", f.freq_hz);
-        reply(r, RADIO_TX_DUTY, pw, capped);
+        if (!try_alt(r, RADIO_TX_DUTY)) {
+            reply(r, RADIO_TX_DUTY, pw, capped);
+        }
         return;
     }
     s_frames[slot] = f;

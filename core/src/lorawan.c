@@ -183,6 +183,42 @@ void lwc_lw_crypt(const uint8_t key[16], bool downlink, uint32_t dev_addr, uint3
     lwc_aes128_wipe(&ctx);
 }
 
+size_t lwc_lw_data_build(lwc_lw_mtype_t mtype, uint32_t dev_addr, uint8_t fctrl, uint32_t fcnt32,
+                         const uint8_t *fopts, size_t fopts_len, bool has_port, uint8_t port,
+                         const uint8_t *frm, size_t frm_len, const uint8_t nwk_s_key[16],
+                         const uint8_t app_s_key[16], uint8_t *out, size_t cap)
+{
+    if (mtype < LWC_LW_UNCONFIRMED_UP || mtype > LWC_LW_CONFIRMED_DOWN || nwk_s_key == NULL || out == NULL ||
+        fopts_len > 15U || (fopts_len != 0U && fopts == NULL) || (has_port && port == 0U && fopts_len != 0U) ||
+        (!has_port && frm_len != 0U) || (frm_len != 0U && frm == NULL) ||
+        (has_port && port != 0U && frm_len != 0U && app_s_key == NULL)) {
+        return 0;
+    }
+    const size_t len = 8U + fopts_len + (has_port ? 1U + frm_len : 0U) + 4U;
+    if (len > cap || len > LWC_LW_MAX_FRAME) {
+        return 0;
+    }
+    const bool down = mtype == LWC_LW_UNCONFIRMED_DOWN || mtype == LWC_LW_CONFIRMED_DOWN;
+    out[0] = (uint8_t)((unsigned)mtype << 5);
+    put_le(&out[1], dev_addr, 4);
+    out[5] = (uint8_t)((fctrl & 0xF0U) | fopts_len);
+    put_le(&out[6], fcnt32, 2);
+    size_t i = 8;
+    if (fopts_len != 0U) {
+        memcpy(&out[i], fopts, fopts_len);
+        i += fopts_len;
+    }
+    if (has_port) {
+        out[i++] = port;
+        if (frm_len != 0U) {
+            lwc_lw_crypt(port == 0U ? nwk_s_key : app_s_key, down, dev_addr, fcnt32, frm, frm_len, &out[i]);
+            i += frm_len;
+        }
+    }
+    lwc_lw_data_mic(nwk_s_key, down, dev_addr, fcnt32, out, i, &out[i]);
+    return len;
+}
+
 void lwc_lw_session_keys(const uint8_t app_key[16], uint32_t join_nonce, uint32_t net_id,
                          uint16_t dev_nonce, uint8_t nwk_s_key[16], uint8_t app_s_key[16])
 {

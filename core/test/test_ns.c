@@ -6,6 +6,7 @@
 
 #include "lwc/aes.h"
 #include "lwc/lorawan.h"
+#include "lwc/mac.h"
 
 static int failures;
 
@@ -56,7 +57,83 @@ static size_t uplink(uint8_t *f, const uint8_t nwk[16], const uint8_t app[16], u
     return 13U + len;
 }
 
+/* An uplink with MAC commands in FOpts (or none) and FCtrl bits. */
+static size_t uplink_mac(uint8_t *f, const uint8_t nwk[16], uint32_t addr, uint32_t fcnt, const uint8_t *fopts,
+                         size_t fo, uint8_t fctrl, bool confirmed)
+{
+    return lwc_lw_data_build(confirmed ? LWC_LW_CONFIRMED_UP : LWC_LW_UNCONFIRMED_UP, addr, fctrl, fcnt, fopts, fo,
+                             false, 0, NULL, 0, nwk, NULL, f, 64);
+}
+
 static lwc_ns_t ns; /* large: keep off the stack */
+
+/* Class A answers, checked the way the device reads them. */
+static void answers(size_t idx, uint32_t addr, const uint8_t nwk[16], const uint8_t app[16], uint32_t fcnt)
+{
+    uint8_t f[64];
+    lwc_ns_uplink_t up;
+    lwc_ns_dl_t dl;
+    lwc_ns_rx_t rx = {.snr10 = 55, .sf = 9, .now_s = 1000};
+    lwc_lw_data_t d;
+
+    /* unconfirmed, no MAC commands: nothing to send */
+    size_t n = uplink_mac(f, nwk, addr, fcnt, NULL, 0, 0, false);
+    lwc_ns_up_res_t r = lwc_ns_uplink(&ns, f, n, &up);
+    CHECK(r == LWC_NS_UP_OK);
+    CHECK(!lwc_ns_answer(&ns, r, &up, &rx, &dl));
+
+    /* confirmed: ACK, plus DevStatusReq (first downlink of the session) */
+    const uint32_t down0 = ns.dev[idx].fcnt_down;
+    n = uplink(f, nwk, app, addr, ++fcnt, 3, "c", true);
+    r = lwc_ns_uplink(&ns, f, n, &up);
+    CHECK(r == LWC_NS_UP_OK && lwc_ns_answer(&ns, r, &up, &rx, &dl));
+    CHECK(dl.ack && dl.dev_status && !dl.link_check && dl.fcnt == down0 && ns.dev[idx].fcnt_down == down0 + 1U);
+    CHECK(lwc_lw_data_parse(dl.frame, dl.len, &d) == LWC_LW_OK && d.mtype == LWC_LW_UNCONFIRMED_DOWN);
+    CHECK(d.dev_addr == addr && (d.fctrl & LWC_LW_FCTRL_ACK) != 0U && !d.has_port);
+    CHECK(d.fopts_len == 1 && d.fopts[0] == LWC_MAC_DEV_STATUS);
+    CHECK(lwc_lw_data_mic_ok(nwk, true, addr, down0, dl.frame, dl.len));
+
+    /* the device missed it and repeats: ACK again with a new counter, no payload, no new status request */
+    r = lwc_ns_uplink(&ns, f, n, &up);
+    CHECK(r == LWC_NS_UP_RETRANS && up.confirmed && up.len == 0);
+    CHECK(lwc_ns_answer(&ns, r, &up, &rx, &dl) && dl.ack && !dl.dev_status && dl.fcnt == down0 + 1U);
+    for (unsigned k = 1; k < LWC_NS_RETRANS_MAX; k++) {
+        CHECK(lwc_ns_uplink(&ns, f, n, &up) == LWC_NS_UP_RETRANS);
+    }
+    CHECK(lwc_ns_uplink(&ns, f, n, &up) == LWC_NS_UP_REPLAY); /* then a replay */
+
+    /* LinkCheckReq + DevStatusAns + DeviceTimeReq (clock not set: no time answer) */
+    static const uint8_t mreq[] = {0x02, 0x06, 0xFE, 0x05, 0x0D};
+    n = uplink_mac(f, nwk, addr, ++fcnt, mreq, sizeof mreq, 0, false);
+    r = lwc_ns_uplink(&ns, f, n, &up);
+    CHECK(r == LWC_NS_UP_OK && lwc_ns_answer(&ns, r, &up, &rx, &dl));
+    CHECK(!dl.ack && dl.link_check && !dl.device_time && !dl.dev_status);
+    CHECK(ns.link[idx].has_status && ns.link[idx].battery == 0xFE && ns.link[idx].margin == 5);
+    CHECK(lwc_lw_data_parse(dl.frame, dl.len, &d) == LWC_LW_OK && d.fopts_len == 3);
+    CHECK(d.fopts[0] == 0x02 && d.fopts[1] == 18 && d.fopts[2] == 1); /* 5.5 dB - (-12.5 dB) = 18 dB, 1 gateway */
+
+    /* DeviceTimeReq with the clock set, on port 0 */
+    rx.time_ok = true;
+    rx.gps_s = 0x01020304U;
+    rx.gps_frac = 0x40;
+    static const uint8_t treq[] = {0x0D};
+    n = lwc_lw_data_build(LWC_LW_UNCONFIRMED_UP, addr, 0, ++fcnt, NULL, 0, true, 0, treq, 1, nwk, NULL, f, 64);
+    r = lwc_ns_uplink(&ns, f, n, &up);
+    CHECK(r == LWC_NS_UP_OK && lwc_ns_answer(&ns, r, &up, &rx, &dl) && dl.device_time && !dl.link_check);
+    CHECK(lwc_lw_data_parse(dl.frame, dl.len, &d) == LWC_LW_OK && d.fopts_len == 6);
+    CHECK(d.fopts[0] == 0x0D && d.fopts[1] == 0x04 && d.fopts[4] == 0x01 && d.fopts[5] == 0x40);
+
+    /* ADRACKReq: an empty downlink; a day later DevStatusReq rides along again */
+    rx.now_s += LWC_NS_STATUS_PERIOD_S;
+    n = uplink_mac(f, nwk, addr, ++fcnt, NULL, 0, LWC_LW_FCTRL_ADR | LWC_LW_FCTRL_ADR_ACK_REQ, false);
+    r = lwc_ns_uplink(&ns, f, n, &up);
+    CHECK(r == LWC_NS_UP_OK && up.adr_ack_req && lwc_ns_answer(&ns, r, &up, &rx, &dl));
+    CHECK(!dl.ack && dl.dev_status);
+
+    /* not for us */
+    CHECK(!lwc_ns_answer(&ns, LWC_NS_UP_BAD_MIC, &up, &rx, &dl));
+    CHECK(!lwc_ns_answer(&ns, LWC_NS_UP_REPLAY, &up, &rx, &dl));
+}
 
 int main(void)
 {
@@ -113,7 +190,7 @@ int main(void)
     CHECK(lwc_ns_uplink(&ns, f, n, &up) == LWC_NS_UP_OK);
     CHECK(up.idx == idx && up.fcnt == 0 && up.port == 1 && up.len == 5 && memcmp(up.payload, "hello", 5) == 0);
     CHECK(up.adr && !up.confirmed);
-    CHECK(lwc_ns_uplink(&ns, f, n, &up) == LWC_NS_UP_REPLAY);
+    CHECK(lwc_ns_uplink(&ns, f, n, &up) == LWC_NS_UP_RETRANS && up.len == 0); /* the same frame again */
     n = uplink(f, nwk, app, addr, 0xFFFF, 2, "x", true);
     CHECK(lwc_ns_uplink(&ns, f, n, &up) == LWC_NS_UP_OK && up.fcnt == 0xFFFFU && up.confirmed);
     n = uplink(f, nwk, app, addr, 0x10001, 2, "y", false); /* 16-bit wrap */
@@ -125,11 +202,16 @@ int main(void)
     CHECK(lwc_ns_uplink(&ns, f, n, &up) == LWC_NS_UP_BAD_MIC);
     f[0] = 0x60; /* a downlink is not an uplink */
     CHECK(lwc_ns_uplink(&ns, f, n, &up) == LWC_NS_UP_MALFORMED);
+    n = uplink(f, nwk, app, addr, 0x10000, 2, "old", false); /* older counter: read as the next epoch */
+    CHECK(lwc_ns_uplink(&ns, f, n, &up) == LWC_NS_UP_BAD_MIC);
+
+    answers(idx, addr, nwk, app, 0x10002);
+    CHECK(ns.link[idx].has_status);
 
     /* rejoin keeps the address, resets counters */
     join_request(jr, KEY, DEV_EUI, 6);
     CHECK(lwc_ns_join(&ns, jr, 23, acc, sizeof acc, &alen, NULL) == LWC_NS_JOIN_ACCEPT);
-    CHECK(ns.dev[idx].dev_addr == addr && !ns.dev[idx].has_up);
+    CHECK(ns.dev[idx].dev_addr == addr && !ns.dev[idx].has_up && !ns.link[idx].has_status);
 
     /* 1.0.2: random nonces, recent ones rejected */
     size_t i2;
@@ -143,7 +225,9 @@ int main(void)
     CHECK(ns.dev[i2].dev_addr != addr);
 
     /* remove wipes the keys */
+    ns.link[i2].has_status = true;
     CHECK(lwc_ns_remove(&ns, 0x42) == LWC_NS_OK && !ns.dev[i2].used && ns.dev[i2].app_key[0] == 0);
+    CHECK(!ns.link[i2].has_status);
     CHECK(lwc_ns_remove(&ns, 0x42) == LWC_NS_ERR_NOT_FOUND);
 
     /* table full */

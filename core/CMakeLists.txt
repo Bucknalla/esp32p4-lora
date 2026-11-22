@@ -10,7 +10,7 @@ set(CMAKE_C_EXTENSIONS OFF)
 option(LWC_SANITIZE "Build with ASan + UBSan" ON)
 option(LWC_FUZZ "Build libFuzzer targets (clang only)" OFF)
 
-set(LWC_SOURCES src/frame.c src/console_cmd.c src/gwmp.c src/txpk.c src/logring.c src/supervisor.c src/session.c src/form.c src/netaddr.c src/led.c src/aes.c src/lorawan.c src/ns.c src/hex.c)
+set(LWC_SOURCES src/frame.c src/console_cmd.c src/gwmp.c src/txpk.c src/logring.c src/supervisor.c src/session.c src/form.c src/netaddr.c src/led.c src/aes.c src/lorawan.c src/ns.c src/hex.c src/mac.c)
 set(LWC_WARNINGS -Wall -Wextra -Werror -Wshadow -Wconversion -Wstrict-prototypes)
 
 add_library(lwc_core STATIC ${LWC_SOURCES})
@@ -44,7 +44,7 @@ target_link_libraries(test_txpk PRIVATE lwc_core)
 target_compile_options(test_txpk PRIVATE ${LWC_WARNINGS})
 add_test(NAME txpk COMMAND test_txpk)
 
-foreach(t logring supervisor session form netaddr led aes lorawan ns hex)
+foreach(t logring supervisor session form netaddr led aes lorawan ns hex mac)
     add_executable(test_${t} test/test_${t}.c)
     target_link_libraries(test_${t} PRIVATE lwc_core)
     target_compile_options(test_${t} PRIVATE ${LWC_WARNINGS})

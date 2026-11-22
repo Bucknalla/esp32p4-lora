@@ -4,8 +4,9 @@
  * (core/src/ns.c), stores devices and counters in NVS, and in hybrid mode
  * hands every frame it does not handle to the Semtech UDP forwarder.
  *
- * Transmit: join-accepts go through the radio task's JIT queue, duty-cycle
- * budget and power cap, tagged RADIO_SRC_LNS. Until CONFIG_GW_LNS_TX is on
+ * Transmit: join-accepts and class A answers (ACK, MAC commands) go through
+ * the radio task's JIT queue, duty-cycle budget and power cap, tagged
+ * RADIO_SRC_LNS, in RX1 with RX2 as the fallback. Until CONFIG_GW_LNS_TX is on
  * (approval to transmit), they are only logged: dry run.
  *
  * Keys: AppKeys and session keys are in plain NVS (ADR-0002); they are never
@@ -14,11 +15,13 @@
 #include "lns.h"
 
 #include <inttypes.h>
+#include <math.h>
 #include <stdarg.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
 
 #include "esp_check.h"
 #include "esp_log.h"
@@ -28,6 +31,7 @@
 #include "gwmode.h"
 #include "lwc/hex.h"
 #include "lwc/lorawan.h"
+#include "lwc/mac.h"
 #include "nvs.h"
 #include "radio_pkt.h"
 #include "radio_tx.h"
@@ -46,7 +50,7 @@ static const char *TAG = "lns";
 #define NVS_NS "lns"
 #define REC_VER 1U
 #define FCNT_DOWN_SKIP 16U /* downlink counter skip at boot: never reuse one */
-#define JOIN_POWER_DBM 14  /* EU868 RX1 default; the radio caps it (ADR-0007) */
+#define DOWN_POWER_DBM 14  /* EU868 RX1 default; the radio caps it (ADR-0007) */
 #define PAYLOAD_SHOW 32U
 
 typedef struct {
@@ -86,7 +90,7 @@ static SemaphoreHandle_t s_lock;
 static QueueHandle_t s_radio_q;
 static QueueHandle_t s_fwd_q;
 static atomic_bool s_running;
-static atomic_uint s_joins, s_uplinks, s_fwd, s_fwd_drop;
+static atomic_uint s_joins, s_uplinks, s_downs, s_fwd, s_fwd_drop;
 static uint16_t s_tx_token;
 
 bool lns_running(void)
@@ -121,7 +125,8 @@ static void erase_key(nvs_handle_t h, const char *key)
     }
 }
 
-static esp_err_t save_meta(void)
+/* Unused in a dry-run build, which stores no join. */
+__attribute__((unused)) static esp_err_t save_meta(void)
 {
     const meta_rec_t m = {REC_VER, s_ns.join_nonce, s_ns.next_addr};
     return save_blob("meta", &m, sizeof m);
@@ -213,27 +218,68 @@ static const char *eui_str(uint64_t e, char out[17])
     return out;
 }
 
-static void send_join_accept(const radio_pkt_t *p, const uint8_t *acc, size_t len, uint64_t dev_eui)
+/* Milliseconds from the uplink's arrival to now, or -1 without a wall clock:
+ * RX1 opens 1 s (join: 5 s) after the uplink. */
+static int32_t since_uplink_ms(const radio_pkt_t *p)
+{
+    struct timeval tv;
+    if (p->time_unix_us < 0 || gettimeofday(&tv, NULL) != 0) {
+        return -1;
+    }
+    const int64_t now = (int64_t)tv.tv_sec * 1000000LL + tv.tv_usec;
+    return (int32_t)((now - p->time_unix_us) / 1000LL);
+}
+
+/* Queue a class A downlink: RX1 `delay_us` after the uplink, RX2 one second
+ * later if RX1 is refused. `what` names it in the log. */
+static void send_down(const radio_pkt_t *p, const uint8_t *frame, size_t len, uint32_t delay_us, const char *what,
+                      uint64_t dev_eui)
 {
     static radio_tx_req_t req;
     memset(&req, 0, sizeof req);
     req.source = RADIO_SRC_LNS;
     req.token = ++s_tx_token;
-    lwc_ns_downlink(false, p->tmst, p->freq_hz, p->sf, p->bw_khz, LWC_NS_JOIN_DELAY_US, JOIN_POWER_DBM,
-                    acc, len, &req.pk);
+    lwc_ns_downlink(false, p->tmst, p->freq_hz, p->sf, p->bw_khz, delay_us, DOWN_POWER_DBM, frame, len, &req.pk);
+    lwc_txpk_t rx2;
+    lwc_ns_downlink(true, p->tmst, p->freq_hz, p->sf, p->bw_khz, delay_us, DOWN_POWER_DBM, NULL, 0, &rx2);
+    req.alt = (radio_tx_alt_t){.on = true, .tmst = rx2.tmst, .freq_hz = rx2.freq_hz, .sf = rx2.sf,
+                               .bw_khz = rx2.bw_khz};
     char e[17];
+    const int32_t late = since_uplink_ms(p);
 #if CONFIG_GW_LNS_TX
     if (g_radio_tx_req == NULL || xQueueSend(g_radio_tx_req, &req, pdMS_TO_TICKS(10)) != pdTRUE) {
-        ESP_LOGW(TAG, "join-accept for %s: radio queue full", eui_str(dev_eui, e));
+        ESP_LOGW(TAG, "%s for %s: radio queue full", what, eui_str(dev_eui, e));
         return;
     }
-    ESP_LOGI(TAG, "join-accept %u for %s: RX1 %" PRIu32 " Hz SF%u", (unsigned)req.token,
-             eui_str(dev_eui, e), req.pk.freq_hz, req.pk.sf);
+    atomic_fetch_add(&s_downs, 1U);
+    ESP_LOGI(TAG, "%s %u for %s: RX1 %" PRIu32 " Hz SF%u, queued %" PRId32 " ms after the uplink", what,
+             (unsigned)req.token, eui_str(dev_eui, e), req.pk.freq_hz, req.pk.sf, late);
 #else
-    ESP_LOGW(TAG, "DRY RUN: join-accept for %s (%u B) at RX1 %" PRIu32 " Hz SF%u tmst %" PRIu32
-                  " not sent (transmit not approved: CONFIG_GW_LNS_TX off)",
-             eui_str(dev_eui, e), (unsigned)len, req.pk.freq_hz, req.pk.sf, req.pk.tmst);
+    ESP_LOGW(TAG, "DRY RUN: %s for %s (%u B) at RX1 %" PRIu32 " Hz SF%u tmst %" PRIu32 ", %" PRId32
+                  " ms after the uplink, not sent (transmit not approved: CONFIG_GW_LNS_TX off)",
+             what, eui_str(dev_eui, e), (unsigned)len, req.pk.freq_hz, req.pk.sf, req.pk.tmst, late);
 #endif
+}
+
+/* After an accepted or repeated uplink: build the class A answer if the
+ * device needs one (this advances the downlink counter). Called with s_lock
+ * held; the caller stores the counters before sending. */
+static bool answer(const radio_pkt_t *p, lwc_ns_up_res_t r, const lwc_ns_uplink_t *up, lwc_ns_dl_t *dl)
+{
+    lwc_ns_rx_t rx = {
+        .snr10 = (int16_t)lroundf(p->lsnr * 10.0f),
+        .sf = p->sf,
+        .now_s = (uint32_t)(esp_timer_get_time() / 1000000LL),
+    };
+    rx.time_ok = lwc_gps_from_unix_us(p->time_unix_us, &rx.gps_s, &rx.gps_frac);
+    return lwc_ns_answer(&s_ns, r, up, &rx, dl);
+}
+
+static void describe(const lwc_ns_dl_t *dl, char *out, size_t cap)
+{
+    (void)snprintf(out, cap, "downlink FCnt %" PRIu32 "%s%s%s%s", dl->fcnt, dl->ack ? " ACK" : "",
+                   dl->link_check ? " LinkCheckAns" : "", dl->device_time ? " DeviceTimeAns" : "",
+                   dl->dev_status ? " DevStatusReq" : "");
 }
 
 /* Returns true when the frame was handled here (not to be forwarded). */
@@ -244,6 +290,7 @@ static bool handle(const radio_pkt_t *p)
     }
     static uint8_t acc[40];
     static lwc_ns_uplink_t up;
+    static lwc_ns_dl_t dl;
     char e[17];
     const int mt = lwc_lw_mtype(p->payload, p->size);
     bool handled = false;
@@ -276,7 +323,7 @@ static bool handle(const radio_pkt_t *p)
                      s_ns.dev[idx].name, s_ns.dev[idx].dev_addr, p->rssi, (double)p->lsnr);
             xSemaphoreGive(s_lock);
             if (err == ESP_OK) {
-                send_join_accept(p, acc, alen, eui);
+                send_down(p, acc, alen, LWC_NS_JOIN_DELAY_US, "join-accept", eui);
             } else {
                 ESP_LOGE(TAG, "join not answered: storing the device failed (%s)", esp_err_to_name(err));
             }
@@ -292,26 +339,46 @@ static bool handle(const radio_pkt_t *p)
         }
     } else if (mt == LWC_LW_UNCONFIRMED_UP || mt == LWC_LW_CONFIRMED_UP) {
         const lwc_ns_up_res_t r = lwc_ns_uplink(&s_ns, p->payload, p->size, &up);
-        if (r == LWC_NS_UP_OK) {
+        if (r == LWC_NS_UP_OK || r == LWC_NS_UP_RETRANS) {
             handled = true;
-            dev_stat_t *st = &s_stat[up.idx];
-            st->seen_us = esp_timer_get_time();
-            st->uplinks++;
-            st->rssi = p->rssi;
-            st->snr = p->lsnr;
-            st->sf = p->sf;
-            st->has_port = up.has_port;
-            st->port = up.port;
-            st->len = (uint8_t)(up.len < PAYLOAD_SHOW ? up.len : PAYLOAD_SHOW);
-            memcpy(st->payload, up.payload, st->len);
-            const esp_err_t err = save_cnt(up.idx);
-            atomic_fetch_add(&s_uplinks, 1U);
-            ESP_LOGI(TAG, "uplink %s FCnt %" PRIu32 " port %u, %u B, RSSI %d SNR %.1f%s%s",
-                     s_ns.dev[up.idx].name[0] ? s_ns.dev[up.idx].name : eui_str(s_ns.dev[up.idx].dev_eui, e),
-                     up.fcnt, up.port, (unsigned)up.len, p->rssi, (double)p->lsnr,
-                     up.confirmed ? " (confirmed: ACK not sent yet)" : "",
-                     err != ESP_OK ? " (counter not stored)" : "");
+            const char *who = s_ns.dev[up.idx].name[0] ? s_ns.dev[up.idx].name : eui_str(s_ns.dev[up.idx].dev_eui, e);
+            if (r == LWC_NS_UP_OK) {
+                dev_stat_t *st = &s_stat[up.idx];
+                st->seen_us = esp_timer_get_time();
+                st->uplinks++;
+                st->rssi = p->rssi;
+                st->snr = p->lsnr;
+                st->sf = p->sf;
+                st->has_port = up.has_port;
+                st->port = up.port;
+                st->len = (uint8_t)(up.len < PAYLOAD_SHOW ? up.len : PAYLOAD_SHOW);
+                memcpy(st->payload, up.payload, st->len);
+                atomic_fetch_add(&s_uplinks, 1U);
+                ESP_LOGI(TAG, "uplink %s FCnt %" PRIu32 " port %u, %u B, RSSI %d SNR %.1f%s", who, up.fcnt,
+                         up.port, (unsigned)up.len, p->rssi, (double)p->lsnr, up.confirmed ? " (confirmed)" : "");
+            } else {
+                ESP_LOGI(TAG, "uplink %s FCnt %" PRIu32 " repeated%s", who, up.fcnt,
+                         up.confirmed ? " (ACK missed?)" : "");
+            }
+            bool send = answer(p, r, &up, &dl);
+            /* One write for both counters; the downlink counter is stored
+             * before the frame goes out, so it is never reused. */
+            if (r == LWC_NS_UP_OK || send) {
+                const esp_err_t err = save_cnt(up.idx);
+                if (err != ESP_OK) {
+                    ESP_LOGE(TAG, "counters not stored (%s)%s", esp_err_to_name(err), send ? ": answer not sent" : "");
+                    send = false;
+                }
+            }
+            const uint64_t eui = s_ns.dev[up.idx].dev_eui;
             memset(&up, 0, sizeof up);
+            xSemaphoreGive(s_lock);
+            if (send) {
+                char what[96];
+                describe(&dl, what, sizeof what);
+                send_down(p, dl.frame, dl.len, LWC_NS_RX1_DELAY_US, what, eui);
+            }
+            return handled;
         } else if (r == LWC_NS_UP_REPLAY) {
             handled = true;
             ESP_LOGW(TAG, "uplink replay dropped (old frame counter)");
@@ -473,13 +540,15 @@ size_t lns_devices_json(char *out, size_t cap)
             o = put(out, cap, o,
                     "%s{\"dev_eui\":\"%s\",\"join_eui\":\"%s\",\"name\":\"%s\",\"mac\":\"%s\","
                     "\"joined\":%s,\"answered\":%s,\"dev_addr\":\"%08" PRIX32 "\",\"fcnt_up\":%" PRIu32 ",\"uplinks\":%" PRIu32
-                    ",\"seen_s\":%" PRId64 ",\"rssi\":%d,\"snr\":%.1f,\"sf\":%u,\"port\":%d,\"payload\":\"%s\"}",
+                    ",\"seen_s\":%" PRId64 ",\"rssi\":%d,\"snr\":%.1f,\"sf\":%u,\"port\":%d,\"payload\":\"%s\","
+                    "\"battery\":%d,\"margin\":%d}",
                     first ? "" : ",", eui_str(d->dev_eui, dev), eui_str(d->join_eui, join), name,
                     d->mac == LWC_NS_MAC_1_0_4 ? "1.0.4" : "1.0.2", d->joined ? "true" : "false",
                     st->join_unanswered ? "false" : "true",
                     d->joined ? d->dev_addr : 0U, d->has_up ? d->fcnt_up : 0U, st->uplinks,
                     st->seen_us != 0 ? (now - st->seen_us) / 1000000LL : (int64_t)-1, st->rssi,
-                    (double)st->snr, st->sf, st->has_port ? st->port : -1, pl);
+                    (double)st->snr, st->sf, st->has_port ? st->port : -1, pl,
+                    s_ns.link[i].has_status ? (int)s_ns.link[i].battery : -1, (int)s_ns.link[i].margin);
             first = false;
         }
         xSemaphoreGive(s_lock);
@@ -499,8 +568,9 @@ void lns_status_line(char *buf, size_t len)
         }
         xSemaphoreGive(s_lock);
     }
-    snprintf(buf, len, "mode=%s local=%s devices=%u joined=%u joins=%u uplinks=%u forwarded=%u fwd_dropped=%u tx=%s",
+    snprintf(buf, len,
+             "mode=%s local=%s devices=%u joined=%u joins=%u uplinks=%u downlinks=%u forwarded=%u fwd_dropped=%u tx=%s",
              gwmode_name(gwmode()), lns_running() ? "on" : "off", devs, joined, atomic_load(&s_joins),
-             atomic_load(&s_uplinks), atomic_load(&s_fwd), atomic_load(&s_fwd_drop),
+             atomic_load(&s_uplinks), atomic_load(&s_downs), atomic_load(&s_fwd), atomic_load(&s_fwd_drop),
              CONFIG_GW_LNS_TX ? "on" : "dry-run");
 }

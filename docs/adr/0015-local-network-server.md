@@ -54,7 +54,10 @@ mode was the Semtech UDP forwarder (ADR-0012), switched on or off.
 3. Firmware: router between radio, local server and forwarder; mode setting;
    persistence; TX path (dry run). Done (`lns.c`, `gwmode.c`).
 4. API and UI: mode selector and devices on the Config tab. Done.
-Then downlinks (ACK, MAC commands), ADR, and integrations (phase 4).
+5. Class A answers: ACK, LinkCheck, DeviceTime, DevStatus, RX2 fallback.
+   Done (`lwc/mac.h`, `lwc_ns_answer`).
+6. ADR (LinkADRReq).
+Then integrations (phase 4).
 
 ## Consequences
 
@@ -100,5 +103,35 @@ Then downlinks (ACK, MAC commands), ADR, and integrations (phase 4).
   device registered on both can keep joining TTN.
 - **API**: `GET /api/devices` (viewer, no keys), `POST /api/devices` and
   `POST /api/devices/delete` (admin). Devices can be added in every mode.
-- **Not yet**: ACK for confirmed uplinks, MAC commands, ADR, RX2 fallback,
-  application integrations; RSSI and payloads shown in the UI are RAM only.
+- RSSI and payloads shown in the UI are RAM only.
+
+## Notes from slice 5
+
+- **When a device gets a downlink**: a confirmed uplink (ACK), ADRACKReq set
+  (an empty frame is enough), LinkCheckReq, or DeviceTimeReq when the wall
+  clock is set. Nothing else causes a transmission. Answers go in FOpts (at
+  most 15 bytes), never on port 0. DevStatusReq rides along at most once a day,
+  only on a downlink that is sent anyway; the battery and margin show on the
+  Config tab (RAM only).
+- **Repeated uplinks**: an authentic frame with the same counter as the last
+  one is a repeat (a device that missed its ACK, or NbTrans > 1), not a
+  replay. It gets its ACK again with a new downlink counter; its payload is not
+  delivered twice and its MAC commands are not read twice. After 7 repeats it
+  is a replay (dropped), so a recorded frame cannot make the gateway transmit
+  without limit. An older counter is read as the next 16-bit epoch and fails
+  the MIC (`BAD_MIC`; in hybrid mode it goes to TTN).
+- **DeviceTimeAns**: GPS time = Unix time - 315964800 + 18 leap seconds
+  (checked against the GPS week 2048 rollover, 2019-04-06T23:59:42Z). The time
+  is when the uplink reached the radio task, from the SNTP clock; no answer
+  without a set clock.
+- **LinkCheckAns**: margin = uplink SNR minus the demodulation floor for its
+  SF (SF7 -7.5 dB ... SF12 -20 dB), gateway count 1.
+- **Counters**: one NVS write per accepted uplink holds both counters, and it
+  happens before the answer is queued; if it fails, the answer is not sent.
+  The log says how many milliseconds after the uplink the answer was queued
+  (RX1 opens at 1 s).
+- **RX2 fallback**: each local-server request carries its RX2 window (one
+  second after RX1, 869.525 MHz SF12). If the radio task refuses RX1 (too late,
+  collision, duty-cycle budget), it tries RX2 once, in the radio task, so no
+  result has to travel back to the server. Join-accepts use it too (RX2 at 6 s).
+

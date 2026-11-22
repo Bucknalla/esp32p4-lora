@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "lwc/lorawan.h"
+#include "lwc/mac.h"
 
 static void wipe(void *p, size_t n)
 {
@@ -71,6 +72,7 @@ lwc_ns_err_t lwc_ns_remove(lwc_ns_t *ns, uint64_t dev_eui)
         return LWC_NS_ERR_NOT_FOUND;
     }
     wipe(&ns->dev[i], sizeof ns->dev[i]);
+    memset(&ns->link[i], 0, sizeof ns->link[i]);
     return LWC_NS_OK;
 }
 
@@ -162,6 +164,7 @@ lwc_ns_join_res_t lwc_ns_join(lwc_ns_t *ns, const uint8_t *frame, size_t n, uint
     d->has_up = false;
     d->fcnt_up = 0;
     d->fcnt_down = 0;
+    memset(&ns->link[i], 0, sizeof ns->link[i]); /* new session */
     if (idx != NULL) {
         *idx = (size_t)i;
     }
@@ -188,16 +191,25 @@ lwc_ns_up_res_t lwc_ns_uplink(lwc_ns_t *ns, const uint8_t *frame, size_t n, lwc_
         if (!lwc_lw_data_mic_ok(d->nwk_s_key, false, f.dev_addr, fcnt, frame, n)) {
             continue; /* another device on the same address? */
         }
-        if (d->has_up && fcnt <= d->fcnt_up) {
-            return LWC_NS_UP_REPLAY;
-        }
-        d->has_up = true;
-        d->fcnt_up = fcnt;
+        lwc_ns_link_t *l = &ns->link[i];
         memset(out, 0, sizeof *out);
         out->idx = i;
         out->fcnt = fcnt;
         out->confirmed = f.mtype == LWC_LW_CONFIRMED_UP;
         out->adr = (f.fctrl & LWC_LW_FCTRL_ADR) != 0U;
+        out->adr_ack_req = (f.fctrl & LWC_LW_FCTRL_ADR_ACK_REQ) != 0U;
+        if (d->has_up && fcnt <= d->fcnt_up) {
+            /* The same counter again: a device that missed its ACK repeats the
+             * frame. Answer a few times, then treat it as a replay. */
+            if (fcnt == d->fcnt_up && l->retrans < LWC_NS_RETRANS_MAX) {
+                l->retrans++;
+                return LWC_NS_UP_RETRANS;
+            }
+            return LWC_NS_UP_REPLAY;
+        }
+        d->has_up = true;
+        d->fcnt_up = fcnt;
+        l->retrans = 0;
         out->fopts_len = f.fopts_len;
         if (f.fopts_len != 0U) {
             memcpy(out->fopts, f.fopts, f.fopts_len);
@@ -213,6 +225,80 @@ lwc_ns_up_res_t lwc_ns_uplink(lwc_ns_t *ns, const uint8_t *frame, size_t n, lwc_
         return LWC_NS_UP_OK;
     }
     return seen ? LWC_NS_UP_BAD_MIC : LWC_NS_UP_NOT_OURS;
+}
+
+int16_t lwc_ns_required_snr10(uint8_t sf)
+{
+    if (sf < 7U) {
+        sf = 7U;
+    }
+    if (sf > 12U) {
+        sf = 12U;
+    }
+    return (int16_t)(-75 - 25 * (int)(sf - 7U));
+}
+
+bool lwc_ns_answer(lwc_ns_t *ns, lwc_ns_up_res_t res, const lwc_ns_uplink_t *up, const lwc_ns_rx_t *rx,
+                   lwc_ns_dl_t *dl)
+{
+    if (ns == NULL || up == NULL || rx == NULL || dl == NULL || up->idx >= LWC_NS_MAX_DEVICES ||
+        (res != LWC_NS_UP_OK && res != LWC_NS_UP_RETRANS)) {
+        return false;
+    }
+    lwc_ns_dev_t *d = &ns->dev[up->idx];
+    lwc_ns_link_t *l = &ns->link[up->idx];
+    if (!d->used || !d->joined) {
+        return false;
+    }
+    memset(dl, 0, sizeof *dl);
+    uint8_t fopts[15];
+    size_t fo = 0;
+    bool need = up->confirmed || up->adr_ack_req; /* ADRACKReq: any downlink will do */
+    if (res == LWC_NS_UP_OK) {
+        lwc_mac_up_t m;
+        if (up->has_port && up->port == 0U) {
+            (void)lwc_mac_parse_up(up->payload, up->len, &m);
+        } else {
+            (void)lwc_mac_parse_up(up->fopts, up->fopts_len, &m);
+        }
+        if (m.dev_status_ans) {
+            l->has_status = true;
+            l->battery = m.battery;
+            l->margin = m.margin;
+            l->status_s = rx->now_s;
+        }
+        if (m.link_check_req) {
+            const int margin = (rx->snr10 - lwc_ns_required_snr10(rx->sf)) / 10;
+            dl->link_check = lwc_mac_link_check_ans(fopts, sizeof fopts, &fo,
+                                                    (uint8_t)(margin < 0 ? 0 : margin > 254 ? 254 : margin), 1);
+            need = true;
+        }
+        if (m.device_time_req && rx->time_ok) {
+            dl->device_time = lwc_mac_device_time_ans(fopts, sizeof fopts, &fo, rx->gps_s, rx->gps_frac);
+            need = true;
+        }
+    }
+    if (!need) {
+        return false;
+    }
+    /* ride along: battery and margin once a day */
+    if (!l->status_asked || rx->now_s - l->status_req_s >= LWC_NS_STATUS_PERIOD_S) {
+        dl->dev_status = lwc_mac_dev_status_req(fopts, sizeof fopts, &fo);
+        if (dl->dev_status) {
+            l->status_asked = true;
+            l->status_req_s = rx->now_s;
+        }
+    }
+    dl->ack = up->confirmed;
+    dl->fcnt = d->fcnt_down;
+    dl->len = lwc_lw_data_build(LWC_LW_UNCONFIRMED_DOWN, d->dev_addr, dl->ack ? LWC_LW_FCTRL_ACK : 0U,
+                                dl->fcnt, fopts, fo, false, 0, NULL, 0, d->nwk_s_key, NULL, dl->frame,
+                                sizeof dl->frame);
+    if (dl->len == 0U) {
+        return false;
+    }
+    d->fcnt_down++;
+    return true;
 }
 
 bool lwc_ns_forward(lwc_mode_t mode, bool handled_locally)

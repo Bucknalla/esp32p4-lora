@@ -24,11 +24,22 @@ typedef enum {
     RADIO_SRC_LNS = 1, /* the local network server: result logged only */
 } radio_tx_src_t;
 
+/* A second receive window to try if the first is refused (busy, duty cycle
+ * used up, too late): the local server's RX2. Same payload, power and coding. */
+typedef struct {
+    bool on;
+    uint32_t tmst;
+    uint32_t freq_hz;
+    uint8_t sf;
+    uint16_t bw_khz;
+} radio_tx_alt_t;
+
 typedef struct {
     uint16_t token;   /* GWMP token, echoed in the result; 0 = console test */
     bool test;        /* trace and log only, no result expected */
     uint8_t source;   /* radio_tx_src_t: only the forwarder reads g_radio_tx_res */
     lwc_txpk_t pk;
+    radio_tx_alt_t alt;
 } radio_tx_req_t;
 
 typedef struct {

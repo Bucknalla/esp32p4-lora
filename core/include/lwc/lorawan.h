@@ -95,6 +95,18 @@ bool lwc_lw_data_mic_ok(const uint8_t nwk_s_key[16], bool downlink, uint32_t dev
 void lwc_lw_crypt(const uint8_t key[16], bool downlink, uint32_t dev_addr, uint32_t fcnt32,
                   const uint8_t *in, size_t len, uint8_t *out);
 
+/**
+ * Build a data frame: MHDR, FHDR (FOptsLen is set here), optional FPort and
+ * FRMPayload, MIC. `frm` is plaintext and is encrypted here, with `nwk_s_key`
+ * on port 0 and `app_s_key` on other ports. The direction comes from `mtype`.
+ * Returns the frame length, or 0 if it does not fit in `cap`, FOpts is over
+ * 15 bytes, FOpts comes with port 0, or `mtype` is not a data frame.
+ */
+size_t lwc_lw_data_build(lwc_lw_mtype_t mtype, uint32_t dev_addr, uint8_t fctrl, uint32_t fcnt32,
+                         const uint8_t *fopts, size_t fopts_len, bool has_port, uint8_t port,
+                         const uint8_t *frm, size_t frm_len, const uint8_t nwk_s_key[16],
+                         const uint8_t app_s_key[16], uint8_t *out, size_t cap);
+
 /** LoRaWAN 1.0 session keys from AppKey, JoinNonce (24 bit), NetID (24 bit), DevNonce. */
 void lwc_lw_session_keys(const uint8_t app_key[16], uint32_t join_nonce, uint32_t net_id,
                          uint16_t dev_nonce, uint8_t nwk_s_key[16], uint8_t app_s_key[16]);
