@@ -9,7 +9,8 @@
  *   GET  /api/coredump, DELETE /api/coredump   admin
  *   POST /api/ota/check, POST /api/reboot      admin
  *   GET|POST /api/claim    set the first admin password from the LAN (ADR-0014)
- *   GET  /api/ttn/qr.svg (viewer), POST /api/settings ttn=on|off (admin)
+ *   GET  /api/ttn/qr.svg (viewer), POST /api/settings mode=ttn|standalone|hybrid (admin)
+ *   GET  /api/devices (viewer), POST /api/devices, POST /api/devices/delete (admin)
  * POST/DELETE need the header "X-Requested-With: gw" (CSRF guard).
  */
 #pragma once

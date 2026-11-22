@@ -55,6 +55,60 @@ function tile(k, v, sub, cls) {
   return t;
 }
 
+const MODES = { ttn: 'The Things Network', hybrid: 'Hybrid', standalone: 'Standalone' };
+
+function ago(s) {
+  if (s < 0) return 'not since boot';
+  if (s < 90) return s + ' s ago';
+  if (s < 5400) return Math.round(s / 60) + ' min ago';
+  return Math.round(s / 3600) + ' h ago';
+}
+
+async function refreshDevices() {
+  try {
+    const list = await (await api('/api/devices')).json();
+    const cell = (text, cls) => { const td = document.createElement('td'); td.textContent = text; if (cls) td.className = cls; return td; };
+    const rows = list.map((d) => {
+      const tr = document.createElement('tr');
+      const who = cell(d.name || d.dev_eui);
+      const sub = document.createElement('div');
+      sub.className = 'hint mono';
+      sub.textContent = d.dev_eui + ' · ' + d.mac;
+      who.append(sub);
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.textContent = 'Remove';
+      del.addEventListener('click', async () => {
+        if (!confirm('Remove ' + (d.name || d.dev_eui) + '? It must join again after you add it back.')) return;
+        try {
+          await api('/api/devices/delete', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'dev_eui=' + d.dev_eui });
+          refreshDevices();
+        } catch (e) { $('#cfg-msg').textContent = e.message; }
+      });
+      const act = cell('', 'admin');
+      act.append(del);
+      tr.append(
+        who,
+        cell(!d.answered ? 'Join request seen, not answered (transmit not approved)'
+          : d.joined ? 'Joined · ' + d.dev_addr + ' · FCnt ' + d.fcnt_up : 'Not joined'),
+        cell(ago(d.seen_s) + (d.uplinks ? ' · ' + d.uplinks + ' up' : '')),
+        cell(d.seen_s >= 0 ? d.rssi + ' dBm · ' + d.snr + ' dB · SF' + d.sf : '–'),
+        cell(d.port >= 0 ? 'port ' + d.port + ': ' + (d.payload || '(empty)') : '–', 'mono'),
+        act,
+      );
+      return tr;
+    });
+    if (!rows.length) {
+      const tr = document.createElement('tr');
+      const td = cell('No devices yet.');
+      td.colSpan = 6;
+      tr.append(td);
+      rows.push(tr);
+    }
+    $('#dev-rows').replaceChildren(...rows);
+  } catch (e) { /* the status refresh reports errors */ }
+}
+
 async function refreshStatus() {
   try {
     const s = await (await api('/api/status')).json();
@@ -62,6 +116,8 @@ async function refreshStatus() {
     for (const [g, line] of Object.entries(s)) all[g] = Object.fromEntries(kv(line));
     const o = all.ota || {}, r = all.radio || {}, f = all.faults || {}, g = all.ttn || {};
     const ttnOn = g.report !== 'off';
+    const ln = all.lns || {};
+    const mode = g.mode || (ttnOn ? 'ttn' : 'standalone');
     const rx = +r.rx || 0, ok = +r.crc_ok || 0;
     const restarts = +r.restarts || 0, run = +f.run || 0;
     const notices = [];
@@ -78,17 +134,22 @@ async function refreshStatus() {
     }));
     $('#tiles').replaceChildren(
       ttnOn ? tile('Upstream', r.upstream === 'up' ? 'Connected' : 'Down', 'TTN, Semtech UDP', r.upstream === 'up' ? 'ok' : 'warn')
-            : tile('Upstream', 'Off', 'TTN reporting is off'),
+            : tile('Upstream', 'Off', 'Standalone mode'),
+      ...(mode !== 'ttn' ? [tile('Local devices', (ln.joined || 0) + ' / ' + (ln.devices || 0), 'joined, ' + (ln.uplinks || 0) + ' uplinks since boot')] : []),
       tile('Packets', String(rx), ok + ' with valid CRC'),
       tile('Uptime', fmtUptime(r.uptime_s || 0), (f.boots || '?') + ' boots, ' + (f.panic || 0) + ' panics'),
       tile('Internal RAM', fmtKB(r.heap_internal || 0), 'lowest ' + fmtKB(r.heap_internal_min || 0)),
     );
     $('#ttn').hidden = !ttnOn;
-    $('#ttn-state').textContent = ttnOn ? 'On: uplinks go to eu1' : 'Off: received frames are not forwarded';
+    $('#mode-state').textContent = MODES[mode] + (mode !== 'ttn' && ln.tx === 'dry-run' ? ' (transmit not approved: joins are logged, not answered; in hybrid they still go to TTN)' : '');
+    if (!$('#mode-pick').dataset.dirty) for (const x of document.querySelectorAll('#mode-pick input')) x.checked = x.value === mode;
+    $('#dev-note').textContent = mode === 'ttn'
+      ? 'These devices are used in hybrid and standalone modes. You can add them now and change the mode later.'
+      : 'Up to 32 OTAA devices. EU868, class A.';
+    if (!$('#tab-config').hidden) refreshDevices();
     $('#ttn-eui').textContent = g.eui || '';
     $('#ttn-server').textContent = (g.server || '') + (g.port ? ' : ' + g.port + ' (UDP)' : '');
     if (ttnOn && !$('#ttn-qr').src) $('#ttn-qr').src = '/api/ttn/qr.svg';
-    if (!$('#ttn-on').dataset.dirty) $('#ttn-on').checked = ttnOn; /* keep an unsaved change */
     const fw = $('#fw');
     fw.replaceChildren();
     for (const k of ['version', 'slot', 'state', 'last_check', 'wifi', 'eth']) {
@@ -173,14 +234,26 @@ document.addEventListener('DOMContentLoaded', () => {
     try { await navigator.clipboard.writeText($('#ttn-eui').textContent); ev.target.textContent = 'Copied'; }
     catch (e) { getSelection().selectAllChildren($('#ttn-eui')); }
   });
-  $('#ttn-on').addEventListener('change', (ev) => { ev.target.dataset.dirty = '1'; });
-  $('#ttn-save').addEventListener('click', async () => {
-    if (!confirm('Save and restart the gateway?')) return;
+  $('#mode-pick').addEventListener('change', (ev) => { ev.currentTarget.dataset.dirty = '1'; });
+  $('#mode-save').addEventListener('click', async () => {
+    const m = document.querySelector('#mode-pick input:checked');
+    if (!m || !confirm('Change the mode to ' + MODES[m.value] + ' and restart the gateway?')) return;
     const el = $('#cfg-msg');
     try {
-      const r = await api('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'ttn=' + ($('#ttn-on').checked ? 'on' : 'off') });
+      const r = await api('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'mode=' + m.value });
       el.textContent = (await r.text()).trim();
     } catch (e) { el.textContent = e.message; }
+  });
+  $('#dev-add').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const el = $('#cfg-msg');
+    el.classList.remove('bad');
+    try {
+      const r = await api('/api/devices', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(new FormData(ev.target)) });
+      el.textContent = 'Device ' + (await r.text()).trim() + '.';
+      ev.target.reset();
+      refreshDevices();
+    } catch (e) { el.textContent = e.message; el.classList.add('bad'); }
   });
   $('#cd-del').addEventListener('click', () => { if (confirm('Erase the stored coredump?')) action('/api/coredump', 'DELETE'); });
   /* Claim: with no admin password yet, the first LAN visit sets it (ADR-0014). */

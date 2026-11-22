@@ -7,6 +7,8 @@
 
 #include "ble_prov.h"
 #include "board.h"
+#include "gwmode.h"
+#include "lns.h"
 #include "conc.h"
 #include "conc_hal.h"
 #include "pktfwd.h"
@@ -189,8 +191,16 @@ void app_main(void)
         ESP_LOGE(TAG, "status LED: %s", esp_err_to_name(err));
     }
 
-    if (s_rx_queue != NULL) {
-        err = pktfwd_start(s_rx_queue);
+    /* Gateway mode (ADR-0015): TTN mode forwards the radio queue; hybrid mode
+     * forwards what the local server leaves; standalone forwards nothing. */
+    QueueHandle_t fwd_q = NULL;
+    err = lns_start(s_rx_queue, &fwd_q);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "local network server: %s", esp_err_to_name(err));
+    }
+    QueueHandle_t up_q = gwmode() == LWC_MODE_TTN ? s_rx_queue : fwd_q;
+    if (up_q != NULL) {
+        err = pktfwd_start(up_q);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "packet forwarder: %s", esp_err_to_name(err));
         }

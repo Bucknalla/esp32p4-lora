@@ -16,6 +16,9 @@
 #include "esp_random.h"
 #include "esp_timer.h"
 #include "fault.h"
+#include "gwmode.h"
+#include "lns.h"
+#include "lwc/hex.h"
 #include "freertos/FreeRTOS.h"
 #include "led.h"
 #include "logbuf.h"
@@ -40,6 +43,7 @@ static const char *TAG = "web";
 #define SESSION_ABS_S (12U * 3600U)
 #define BODY_MAX 512
 #define CHUNK 2048
+#define STATUS_MAX 3072U
 #define HTTPD_STACK 10240 /* TLS handshake (ECDSA) + PBKDF2 */
 
 extern const uint8_t index_html_gz_start[] asm("_binary_index_html_gz_start");
@@ -313,7 +317,7 @@ static esp_err_t api_status(httpd_req_t *req)
         return r;
     }
     char line[256];
-    char *out = heap_caps_malloc(2048, MALLOC_CAP_DEFAULT);
+    char *out = heap_caps_malloc(STATUS_MAX, MALLOC_CAP_DEFAULT);
     if (out == NULL) {
         return send_status(req, "500 Internal Server Error", "no memory\n");
     }
@@ -321,11 +325,11 @@ static esp_err_t api_status(httpd_req_t *req)
     out[o++] = '{';
     out[o] = '\0';
     ota_status_line(line, sizeof line);
-    json_str(out, 2048, &o, "ota", line);
+    json_str(out, STATUS_MAX, &o, "ota", line);
     fault_status_line(line, sizeof line);
-    json_str(out, 2048, &o, "faults", line);
+    json_str(out, STATUS_MAX, &o, "faults", line);
     sv_status_line(line, sizeof line);
-    json_str(out, 2048, &o, "stack_free", line);
+    json_str(out, STATUS_MAX, &o, "stack_free", line);
     snprintf(line, sizeof line,
              "rx=%u crc_ok=%u dropped=%u starts=%u restarts=%u upstream=%s led=%s uptime_s=%" PRIu32
              " heap_internal=%u heap_internal_min=%u heap_psram=%u",
@@ -335,13 +339,16 @@ static esp_err_t api_status(httpd_req_t *req)
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
-    json_str(out, 2048, &o, "radio", line);
+    json_str(out, STATUS_MAX, &o, "radio", line);
     char eui[17] = "";
     (void)pktfwd_eui(eui);
-    snprintf(line, sizeof line, "eui=%s report=%s server=%s port=%d", eui,
-             pktfwd_ttn_enabled() ? "on" : "off", CONFIG_GW_PKTFWD_SERVER, CONFIG_GW_PKTFWD_PORT);
-    json_str(out, 2048, &o, "ttn", line);
-    if (o + 2U < 2048U) {
+    snprintf(line, sizeof line, "eui=%s report=%s mode=%s server=%s port=%d", eui,
+             gwmode_forwards() ? "on" : "off", gwmode_name(gwmode()), CONFIG_GW_PKTFWD_SERVER,
+             CONFIG_GW_PKTFWD_PORT);
+    json_str(out, STATUS_MAX, &o, "ttn", line);
+    lns_status_line(line, sizeof line);
+    json_str(out, STATUS_MAX, &o, "lns", line);
+    if (o + 2U < STATUS_MAX) {
         out[o++] = '}';
         out[o++] = '\n';
     }
@@ -524,24 +531,125 @@ static esp_err_t api_settings(httpd_req_t *req)
     if (!gate(req, LWC_ROLE_ADMIN, &r)) {
         return r;
     }
-    char body[64] = "", v[8];
+    char body[64] = "", v[16];
     const int n = req->content_len > 0 && req->content_len < sizeof body
                       ? httpd_req_recv(req, body, req->content_len)
                       : -1;
-    if (n <= 0 || lwc_form_get(body, (size_t)n, "ttn", v, sizeof v) < 0 ||
-        (strcmp(v, "on") != 0 && strcmp(v, "off") != 0)) {
-        return send_status(req, "400 Bad Request", "ttn=on|off\n");
+    lwc_mode_t m;
+    if (n <= 0 || lwc_form_get(body, (size_t)n, "mode", v, sizeof v) < 0 || !gwmode_parse(v, &m)) {
+        return send_status(req, "400 Bad Request", "mode=ttn|standalone|hybrid\n");
     }
-    const bool on = strcmp(v, "on") == 0;
-    if (on == pktfwd_ttn_enabled()) {
+    if (m == gwmode()) {
         return send_status(req, "200 OK", "unchanged\n");
     }
-    r = pktfwd_set_ttn(on);
+    r = gwmode_set(m);
     if (r != ESP_OK) {
         return send_status(req, "500 Internal Server Error", esp_err_to_name(r));
     }
-    return reboot_soon(req, "web settings changed", on ? "TTN reporting on: restarting\n"
-                                                         : "TTN reporting off: restarting\n");
+    static char msg[48];
+    snprintf(msg, sizeof msg, "mode %s: restarting\n", gwmode_name(m));
+    return reboot_soon(req, "web settings changed", msg);
+}
+
+/* ---- devices (ADR-0015) -----------------------------------------------------------
+ * GET lists the local network server's devices (viewer; no keys). POST adds
+ * one, POST /api/devices/delete removes one (admin). AppKeys go in, never out. */
+
+#define DEVICES_JSON_MAX 16384
+
+static esp_err_t api_devices_get(httpd_req_t *req)
+{
+    esp_err_t r;
+    if (!gate(req, LWC_ROLE_VIEWER, &r)) {
+        return r;
+    }
+    char *out = heap_caps_malloc(DEVICES_JSON_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (out == NULL) {
+        return send_status(req, "503 Service Unavailable", "no memory\n");
+    }
+    const size_t n = lns_devices_json(out, DEVICES_JSON_MAX);
+    common_headers(req);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    r = httpd_resp_send(req, out, (ssize_t)n);
+    free(out);
+    return r;
+}
+
+static const char *ns_err_text(lwc_ns_err_t e)
+{
+    return e == LWC_NS_ERR_EXISTS ? "A device with this DevEUI exists.\n"
+           : e == LWC_NS_ERR_FULL ? "No room: the table is full or storage failed.\n"
+           : e == LWC_NS_ERR_NOT_FOUND ? "No such device.\n"
+                                       : "Rejected.\n";
+}
+
+static bool read_body(httpd_req_t *req, char *body, size_t *got);
+
+static esp_err_t api_devices_post(httpd_req_t *req)
+{
+    esp_err_t r;
+    if (!gate(req, LWC_ROLE_ADMIN, &r)) {
+        return r;
+    }
+    char body[BODY_MAX + 1];
+    size_t got;
+    if (!read_body(req, body, &got)) {
+        return send_status(req, "400 Bad Request", "bad body\n");
+    }
+    char dev[24], join[24], key[40], mac[8], name[LWC_NS_NAME_MAX + 1U];
+    const int dl = lwc_form_get(body, got, "dev_eui", dev, sizeof dev);
+    const int jl = lwc_form_get(body, got, "join_eui", join, sizeof join);
+    const int kl = lwc_form_get(body, got, "app_key", key, sizeof key);
+    const int ml = lwc_form_get(body, got, "mac", mac, sizeof mac);
+    const int nl = lwc_form_get(body, got, "name", name, sizeof name);
+    memset(body, 0, sizeof body);
+    uint64_t dev_eui, join_eui;
+    uint8_t app_key[16];
+    const bool ok_dev = dl > 0 && lwc_hex_eui(dev, (size_t)dl, &dev_eui);
+    const bool ok_join = jl > 0 && lwc_hex_eui(join, (size_t)jl, &join_eui);
+    const bool ok_key = kl > 0 && lwc_hex_decode(key, (size_t)kl, app_key, sizeof app_key);
+    memset(key, 0, sizeof key);
+    const char *why = !ok_dev ? "DevEUI: 16 hex digits.\n"
+                      : !ok_join ? "JoinEUI (AppEUI): 16 hex digits.\n"
+                      : !ok_key ? "AppKey: 32 hex digits.\n"
+                      : (ml > 0 && strcmp(mac, "1.0.4") != 0 && strcmp(mac, "1.0.2") != 0)
+                          ? "LoRaWAN version: 1.0.2 or 1.0.4.\n"
+                          : NULL;
+    if (why != NULL) {
+        memset(app_key, 0, sizeof app_key);
+        return send_status(req, "400 Bad Request", why);
+    }
+    const lwc_ns_mac_t v = (ml > 0 && strcmp(mac, "1.0.4") == 0) ? LWC_NS_MAC_1_0_4 : LWC_NS_MAC_1_0_2;
+    const lwc_ns_err_t e = lns_add(dev_eui, join_eui, app_key, v, nl > 0 ? name : NULL);
+    memset(app_key, 0, sizeof app_key);
+    if (e != LWC_NS_OK) {
+        return send_status(req, e == LWC_NS_ERR_EXISTS ? "409 Conflict" : "507 Insufficient Storage",
+                           ns_err_text(e));
+    }
+    return send_status(req, "200 OK", "added\n");
+}
+
+static esp_err_t api_devices_delete(httpd_req_t *req)
+{
+    esp_err_t r;
+    if (!gate(req, LWC_ROLE_ADMIN, &r)) {
+        return r;
+    }
+    char body[BODY_MAX + 1];
+    size_t got;
+    char dev[24];
+    uint64_t dev_eui;
+    if (!read_body(req, body, &got)) {
+        return send_status(req, "400 Bad Request", "bad body\n");
+    }
+    const int dl = lwc_form_get(body, got, "dev_eui", dev, sizeof dev);
+    if (dl <= 0 || !lwc_hex_eui(dev, (size_t)dl, &dev_eui)) {
+        return send_status(req, "400 Bad Request", "DevEUI: 16 hex digits.\n");
+    }
+    const lwc_ns_err_t e = lns_remove(dev_eui);
+    return e == LWC_NS_OK ? send_status(req, "200 OK", "removed\n")
+                          : send_status(req, "404 Not Found", ns_err_text(e));
 }
 
 /* ---- claim (ADR-0014) ------------------------------------------------------------
@@ -652,7 +760,7 @@ esp_err_t web_start(void)
     cfg.httpd.core_id = 0;
     cfg.httpd.max_open_sockets = 3;
     cfg.httpd.lru_purge_enable = true;
-    cfg.httpd.max_uri_handlers = 16;
+    cfg.httpd.max_uri_handlers = 24;
     cfg.httpd.uri_match_fn = NULL;
     ESP_RETURN_ON_ERROR(httpd_ssl_start(&s_srv, &cfg), TAG, "httpd_ssl_start");
 
@@ -672,6 +780,9 @@ esp_err_t web_start(void)
         {.uri = "/api/ttn/qr.svg", .method = HTTP_GET, .handler = api_ttn_qr},
         {.uri = "/api/settings", .method = HTTP_POST, .handler = api_settings},
         {.uri = "/api/claim", .method = HTTP_POST, .handler = api_claim_post},
+        {.uri = "/api/devices", .method = HTTP_GET, .handler = api_devices_get},
+        {.uri = "/api/devices", .method = HTTP_POST, .handler = api_devices_post},
+        {.uri = "/api/devices/delete", .method = HTTP_POST, .handler = api_devices_delete},
     };
     for (size_t i = 0; i < sizeof uris / sizeof uris[0]; i++) {
         ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_srv, &uris[i]), TAG, "uri %s", uris[i].uri);

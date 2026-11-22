@@ -124,10 +124,20 @@ python tools/web_password.py <PORT> admin --generate   # random, saved to ~/.con
 python tools/web_password.py <PORT> viewer             # or type one (8-63 bytes)
 ```
 
-Gateway settings are on the web UI's **Config** tab (admin to change). For The
-Things Network it shows the reporting switch and, while reporting is on, the
-gateway EUI, a QR code of it and the values to enter in the TTN console
-(ADR-0012). TTN is not part of first-time setup.
+Gateway settings are on the web UI's **Config** tab (admin to change):
+
+- **Gateway mode** (ADR-0015): *The Things Network* (every frame to TTN),
+  *Hybrid* (local devices handled on the gateway, everything else to TTN) or
+  *Standalone* (local devices only, no internet needed). A change restarts the
+  gateway.
+- **Register this gateway** (TTN and hybrid modes): the gateway EUI, a QR code
+  of it and the values to enter in the TTN console (ADR-0012).
+- **Local devices**: up to 32 OTAA devices (DevEUI, JoinEUI, AppKey, LoRaWAN
+  1.0.2/1.0.3 or 1.0.4). The AppKey is stored and never shown again. Each row
+  shows join state, last uplink, signal and the last payload. Until transmit
+  is approved (`CONFIG_GW_LNS_TX`), joins are logged but not answered.
+
+TTN is not part of first-time setup.
 
 Open `https://<gateway-ip>/`. The certificate is self-signed and made on the
 device: compare its SHA-256 with the one console `STATUS` prints (`WEB ...

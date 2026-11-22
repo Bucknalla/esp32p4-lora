@@ -48,14 +48,16 @@
       <details><summary>All details</summary><div id="groups"></div></details>
     </div>
     <div id="tab-config" class="tab" hidden>
-      <h3>The Things Network</h3>
+      <h3>Gateway mode</h3>
       <dl>
-        <dt>Reporting</dt><dd id="ttn-state"></dd>
+        <dt>Mode</dt><dd id="mode-state"></dd>
       </dl>
-      <p class="admin row">
-        <label><input type="checkbox" id="ttn-on"> Report to The Things Network (eu1)</label>
-        <button id="ttn-save">Save and restart</button>
-      </p>
+      <fieldset class="admin modes" id="mode-pick">
+        <label><input type="radio" name="mode" value="ttn"> <b>The Things Network</b> <span class="hint">Every frame goes to TTN (eu1). No local devices.</span></label>
+        <label><input type="radio" name="mode" value="hybrid"> <b>Hybrid</b> <span class="hint">Devices listed below are handled on this gateway; everything else still goes to TTN.</span></label>
+        <label><input type="radio" name="mode" value="standalone"> <b>Standalone</b> <span class="hint">Only the devices below; nothing goes to TTN. Works without internet.</span></label>
+        <button id="mode-save" type="button">Save and restart</button>
+      </fieldset>
       <div id="ttn" hidden>
         <h3>Register this gateway</h3>
         <div class="ttn">
@@ -70,6 +72,25 @@
             <p><a href="https://eu1.cloud.thethings.network/console/gateways/add" target="_blank" rel="noopener noreferrer">Open the TTN console (eu1) →</a></p>
           </div>
         </div>
+      </div>
+      <div id="devices-box">
+        <h3>Local devices</h3>
+        <p id="dev-note" class="hint"></p>
+        <div class="table"><table>
+          <thead><tr><th>Device</th><th>Status</th><th>Last seen</th><th>Signal</th><th>Last payload</th><th class="admin"></th></tr></thead>
+          <tbody id="dev-rows"></tbody>
+        </table></div>
+        <details class="admin" id="dev-add-box">
+          <summary>Add a device (OTAA)</summary>
+          <form id="dev-add" autocomplete="off">
+            <label>Name <input name="name" maxlength="23" placeholder="optional"></label>
+            <label>DevEUI <input name="dev_eui" required pattern="[0-9A-Fa-f]{16}" maxlength="16" placeholder="16 hex digits"></label>
+            <label>JoinEUI / AppEUI <input name="join_eui" required pattern="[0-9A-Fa-f]{16}" maxlength="16" placeholder="16 hex digits"></label>
+            <label>AppKey <input name="app_key" type="password" required pattern="[0-9A-Fa-f]{32}" maxlength="32" placeholder="32 hex digits: stored, never shown again" autocomplete="off"></label>
+            <label>LoRaWAN version <select name="mac"><option value="1.0.2">1.0.2 / 1.0.3</option><option value="1.0.4">1.0.4</option></select></label>
+            <button type="submit">Add device</button>
+          </form>
+        </details>
       </div>
       <p id="cfg-msg" class="msg"></p>
     </div>

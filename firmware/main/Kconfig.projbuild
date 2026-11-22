@@ -72,6 +72,13 @@ menu "LoRaWAN gateway board"
         config GW_TX_ENABLE
             bool "Enable downlinks (TX on RF chain 0)"
             default y
+        config GW_LNS_TX
+            bool "Local network server transmits (join-accepts, downlinks)"
+            default n
+            help
+                Off: the local network server (standalone and hybrid modes) logs
+                the join-accept it would send and transmits nothing (dry run,
+                ADR-0015). Turn on only with approval to transmit.
         config GW_TX_MAX_DBM
             int "TX power cap at the connector (dBm)"
             range -6 27

@@ -75,3 +75,19 @@ details summary { cursor: pointer; color: var(--muted); margin: 10px 0 4px; font
 .ttn dd button { padding: 2px 8px; margin-left: 8px; }
 .hint { color: var(--muted); font-size: 13px; }
 [hidden] { display: none !important; }
+/* Config: gateway mode choices and the local device table */
+fieldset.modes { border: 1px solid var(--line); border-radius: var(--r); padding: 8px 12px 12px; margin: 8px 0 4px; display: grid; gap: 6px; }
+fieldset.modes label { margin: 0; display: grid; grid-template-columns: auto 1fr; column-gap: 8px; align-items: baseline; }
+fieldset.modes label .hint { grid-column: 2; }
+fieldset.modes button { justify-self: start; margin-top: 6px; }
+.table { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r); margin: 8px 0; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; font: 11px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); background: var(--bg); }
+th, td { padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+tbody tr:last-child td { border-bottom: 0; }
+.mono { font-family: var(--mono); word-break: break-all; }
+td button { padding: 3px 8px; }
+#dev-add { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 4px 16px; margin-top: 8px; }
+#dev-add label { display: grid; gap: 4px; margin: 0; font: 11px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+#dev-add input, #dev-add select { width: 100%; text-transform: none; letter-spacing: 0; font: 14px var(--mono); color: var(--fg); }
+#dev-add button { align-self: end; justify-self: start; }

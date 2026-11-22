@@ -19,9 +19,15 @@ typedef enum {
     RADIO_TX_BUSY,     /* radio not running */
 } radio_tx_result_t;
 
+typedef enum {
+    RADIO_SRC_UDP = 0, /* the Semtech UDP forwarder: result on g_radio_tx_res */
+    RADIO_SRC_LNS = 1, /* the local network server: result logged only */
+} radio_tx_src_t;
+
 typedef struct {
     uint16_t token;   /* GWMP token, echoed in the result; 0 = console test */
     bool test;        /* trace and log only, no result expected */
+    uint8_t source;   /* radio_tx_src_t: only the forwarder reads g_radio_tx_res */
     lwc_txpk_t pk;
 } radio_tx_req_t;
 

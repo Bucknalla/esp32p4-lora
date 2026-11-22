@@ -27,9 +27,9 @@
 #include "esp_random.h"
 #include "esp_timer.h"
 #include "eth.h"
+#include "gwmode.h"
 #include "freertos/task.h"
 #include "lwc/gwmp.h"
-#include "nvs.h"
 #include "sv.h"
 #include "lwc/txpk.h"
 #include "radio_tx.h"
@@ -427,32 +427,6 @@ bool pktfwd_link_up(void)
     return atomic_load(&s_link_up);
 }
 
-#define NVS_NS "pktfwd"
-#define NVS_KEY_TTN "ttn"
-
-bool pktfwd_ttn_enabled(void)
-{
-    nvs_handle_t h;
-    uint8_t on = 1; /* not set: on, as before the switch existed */
-    if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
-        (void)nvs_get_u8(h, NVS_KEY_TTN, &on);
-        nvs_close(h);
-    }
-    return on != 0U;
-}
-
-esp_err_t pktfwd_set_ttn(bool on)
-{
-    nvs_handle_t h;
-    ESP_RETURN_ON_ERROR(nvs_open(NVS_NS, NVS_READWRITE, &h), TAG, "nvs_open");
-    esp_err_t err = nvs_set_u8(h, NVS_KEY_TTN, on ? 1U : 0U);
-    if (err == ESP_OK) {
-        err = nvs_commit(h);
-    }
-    nvs_close(h);
-    return err;
-}
-
 esp_err_t pktfwd_eui(char out[17])
 {
     ESP_RETURN_ON_ERROR(init_eui(), TAG, "EUI");
@@ -466,8 +440,8 @@ esp_err_t pktfwd_start(QueueHandle_t rx_queue)
 {
     ESP_RETURN_ON_FALSE(rx_queue != NULL, ESP_ERR_INVALID_ARG, TAG, "queue");
     ESP_RETURN_ON_ERROR(init_eui(), TAG, "EUI");
-    if (!pktfwd_ttn_enabled()) {
-        ESP_LOGW(TAG, "reporting to The Things Network is off (web UI settings)");
+    if (!gwmode_forwards()) {
+        ESP_LOGW(TAG, "standalone mode: nothing is forwarded to The Things Network");
         return ESP_OK;
     }
     s_queue = rx_queue;
