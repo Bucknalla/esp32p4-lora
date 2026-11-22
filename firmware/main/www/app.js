@@ -93,6 +93,8 @@ async function refreshDevices() {
           : d.joined ? 'Joined · ' + d.dev_addr + ' · FCnt ' + d.fcnt_up : 'Not joined'),
         cell(ago(d.seen_s) + (d.uplinks ? ' · ' + d.uplinks + ' up' : '')),
         cell((d.seen_s >= 0 ? d.rssi + ' dBm · ' + d.snr + ' dB · SF' + d.sf : '–')
+          + (d.tx_power > 0 ? ' · power −' + (2 * d.tx_power) + ' dB (ADR)' : '')
+          + (d.adr === 'pending' ? ' · ADR change sent' : '')
           + (d.battery >= 0 ? ' · battery ' + (d.battery === 0 ? 'external' : d.battery === 255 ? 'unknown' : Math.round(d.battery * 100 / 254) + '%') + ' · margin ' + d.margin + ' dB' : '')),
         cell(d.port >= 0 ? 'port ' + d.port + ': ' + (d.payload || '(empty)') : '–', 'mono'),
         act,

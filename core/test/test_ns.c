@@ -73,7 +73,7 @@ static void answers(size_t idx, uint32_t addr, const uint8_t nwk[16], const uint
     uint8_t f[64];
     lwc_ns_uplink_t up;
     lwc_ns_dl_t dl;
-    lwc_ns_rx_t rx = {.snr10 = 55, .sf = 9, .now_s = 1000};
+    lwc_ns_rx_t rx = {.snr10 = 0, .sf = 9, .bw_khz = 125, .now_s = 1000}; /* no ADR change at 0 dB, SF9 */
     lwc_lw_data_t d;
 
     /* unconfirmed, no MAC commands: nothing to send */
@@ -110,7 +110,7 @@ static void answers(size_t idx, uint32_t addr, const uint8_t nwk[16], const uint
     CHECK(!dl.ack && dl.link_check && !dl.device_time && !dl.dev_status);
     CHECK(ns.link[idx].has_status && ns.link[idx].battery == 0xFE && ns.link[idx].margin == 5);
     CHECK(lwc_lw_data_parse(dl.frame, dl.len, &d) == LWC_LW_OK && d.fopts_len == 3);
-    CHECK(d.fopts[0] == 0x02 && d.fopts[1] == 18 && d.fopts[2] == 1); /* 5.5 dB - (-12.5 dB) = 18 dB, 1 gateway */
+    CHECK(d.fopts[0] == 0x02 && d.fopts[1] == 12 && d.fopts[2] == 1); /* 0 dB - (-12.5 dB) = 12 dB, 1 gateway */
 
     /* DeviceTimeReq with the clock set, on port 0 */
     rx.time_ok = true;
@@ -133,6 +133,115 @@ static void answers(size_t idx, uint32_t addr, const uint8_t nwk[16], const uint
     /* not for us */
     CHECK(!lwc_ns_answer(&ns, LWC_NS_UP_BAD_MIC, &up, &rx, &dl));
     CHECK(!lwc_ns_answer(&ns, LWC_NS_UP_REPLAY, &up, &rx, &dl));
+}
+
+static void adr_step(void)
+{
+    uint8_t dr, pw;
+    lwc_ns_adr(-200, 0, 3, 5, 5, &dr, &pw); /* at the SF12 floor: 10 dB short, 4 steps up in power */
+    CHECK(dr == 0 && pw == 0);
+    lwc_ns_adr(50, 0, 0, 5, 5, &dr, &pw); /* 5 dB at SF12: 15 dB spare, 5 steps: SF7 */
+    CHECK(dr == 5 && pw == 0);
+    lwc_ns_adr(100, 0, 0, 5, 5, &dr, &pw); /* 6 steps: SF7, then one power step */
+    CHECK(dr == 5 && pw == 1);
+    lwc_ns_adr(100, 5, 0, 5, 5, &dr, &pw); /* 10 dB at SF7: 7.5 dB spare, 2 steps */
+    CHECK(dr == 5 && pw == 2);
+    lwc_ns_adr(300, 5, 0, 5, 5, &dr, &pw); /* power stops at the cap */
+    CHECK(dr == 5 && pw == 5);
+    lwc_ns_adr(300, 2, 0, 3, 5, &dr, &pw); /* data rate stops at its cap */
+    CHECK(dr == 3 && pw == 5);
+    lwc_ns_adr(-100, 5, 5, 5, 5, &dr, &pw); /* 12.5 dB short: -4 steps (truncated), power only */
+    CHECK(dr == 5 && pw == 1);
+    lwc_ns_adr(-4, 5, 2, 5, 5, &dr, &pw); /* 2.9 dB short: no step */
+    CHECK(dr == 5 && pw == 2);
+    lwc_ns_adr(-6, 5, 2, 5, 5, &dr, &pw); /* 3.1 dB short: one step */
+    CHECK(dr == 5 && pw == 1);
+    lwc_ns_adr(54, 5, 2, 5, 5, &dr, &pw); /* 2.9 dB spare: no step */
+    CHECK(dr == 5 && pw == 2);
+}
+
+/* ADR end to end: history, LinkADRReq, its answer, a refusal. */
+static void adr_flow(void)
+{
+    static const uint64_t eui = 0x77;
+    size_t idx = 0, alen = 0;
+    uint8_t jr[23], acc[40], nwk[16], app[16], f[64];
+    CHECK(lwc_ns_add(&ns, eui, JOIN_EUI, KEY, LWC_NS_MAC_1_0_4, "adr", &idx) == LWC_NS_OK);
+    join_request(jr, KEY, eui, 1);
+    const uint32_t jn = ns.join_nonce;
+    CHECK(lwc_ns_join(&ns, jr, 23, acc, sizeof acc, &alen, NULL) == LWC_NS_JOIN_ACCEPT);
+    lwc_lw_session_keys(KEY, jn, 0, 1, nwk, app);
+    const uint32_t addr = ns.dev[idx].dev_addr;
+    lwc_ns_uplink_t up;
+    lwc_ns_dl_t dl;
+    lwc_lw_data_t d;
+    lwc_ns_rx_t rx = {.snr10 = 50, .sf = 12, .bw_khz = 125, .now_s = 1};
+    uint32_t fc = 0;
+
+    /* no ADR bit: no history, no request */
+    for (unsigned k = 0; k < LWC_NS_ADR_HISTORY + 2U; k++) {
+        size_t n = uplink_mac(f, nwk, addr, fc++, NULL, 0, 0, false);
+        CHECK(!lwc_ns_answer(&ns, lwc_ns_uplink(&ns, f, n, &up), &up, &rx, &dl));
+    }
+    CHECK(ns.link[idx].snr_n == 0);
+    /* the first ADR uplink: 5 dB at SF12 is 15 dB spare: SF7 (DR5) at once, power unchanged */
+    size_t n = uplink_mac(f, nwk, addr, fc++, NULL, 0, LWC_LW_FCTRL_ADR, false);
+    CHECK(lwc_ns_answer(&ns, lwc_ns_uplink(&ns, f, n, &up), &up, &rx, &dl));
+    CHECK(dl.link_adr && dl.adr_dr == 5 && dl.adr_power == 0 && dl.dev_status);
+    CHECK(lwc_lw_data_parse(dl.frame, dl.len, &d) == LWC_LW_OK && (d.fctrl & LWC_LW_FCTRL_ADR) != 0U);
+    CHECK(d.fopts_len == 6 && d.fopts[0] == 0x03 && d.fopts[1] == 0x50 && d.fopts[2] == 0xFF && d.fopts[3] == 0 &&
+          d.fopts[4] == 0x01 && d.fopts[5] == 0x06);
+    CHECK(ns.link[idx].adr_pending);
+
+    /* accepted: the device now sends at SF7; 5 dB there is 2.5 dB spare: nothing more */
+    static const uint8_t ok[] = {0x03, 0x07, 0x06, 0x00, 0x00};
+    rx.sf = 7;
+    n = uplink_mac(f, nwk, addr, fc++, ok, sizeof ok, LWC_LW_FCTRL_ADR, false);
+    CHECK(!lwc_ns_answer(&ns, lwc_ns_uplink(&ns, f, n, &up), &up, &rx, &dl));
+    CHECK(!ns.link[idx].adr_pending && ns.link[idx].tx_power == 0 && ns.link[idx].snr_n == 2);
+
+    /* a strong signal: 15 dB at SF7 is 12.5 dB spare: four power steps */
+    rx.snr10 = 150;
+    n = uplink_mac(f, nwk, addr, fc++, NULL, 0, LWC_LW_FCTRL_ADR, false);
+    CHECK(lwc_ns_answer(&ns, lwc_ns_uplink(&ns, f, n, &up), &up, &rx, &dl));
+    CHECK(dl.link_adr && dl.adr_dr == 5 && dl.adr_power == 4 && !dl.dev_status);
+    /* refused (power): cap the power at index 3, wait a full history, then ask for that */
+    static const uint8_t nack[] = {0x03, 0x03};
+    n = uplink_mac(f, nwk, addr, fc++, nack, sizeof nack, LWC_LW_FCTRL_ADR, false);
+    CHECK(!lwc_ns_answer(&ns, lwc_ns_uplink(&ns, f, n, &up), &up, &rx, &dl));
+    CHECK(ns.link[idx].power_cap == 4 && ns.link[idx].tx_power == 0 && ns.link[idx].adr_nacks == 1);
+    for (unsigned k = 0; k + 1U < LWC_NS_ADR_HISTORY; k++) {
+        n = uplink_mac(f, nwk, addr, fc++, NULL, 0, LWC_LW_FCTRL_ADR, false);
+        CHECK(!lwc_ns_answer(&ns, lwc_ns_uplink(&ns, f, n, &up), &up, &rx, &dl));
+    }
+    n = uplink_mac(f, nwk, addr, fc++, NULL, 0, LWC_LW_FCTRL_ADR, false);
+    CHECK(lwc_ns_answer(&ns, lwc_ns_uplink(&ns, f, n, &up), &up, &rx, &dl));
+    CHECK(dl.link_adr && dl.adr_power == 3);
+    /* the downlink was lost: no answer in the next uplink, so wait again */
+    n = uplink_mac(f, nwk, addr, fc++, NULL, 0, LWC_LW_FCTRL_ADR, false);
+    CHECK(!lwc_ns_answer(&ns, lwc_ns_uplink(&ns, f, n, &up), &up, &rx, &dl));
+    CHECK(!ns.link[idx].adr_pending && ns.link[idx].adr_wait == LWC_NS_ADR_HISTORY - 1U);
+    /* accepted after the wait: power changed, so the history starts again */
+    for (unsigned k = 0; k < LWC_NS_ADR_HISTORY; k++) {
+        n = uplink_mac(f, nwk, addr, fc++, NULL, 0, LWC_LW_FCTRL_ADR, false);
+        (void)lwc_ns_answer(&ns, lwc_ns_uplink(&ns, f, n, &up), &up, &rx, &dl);
+    }
+    CHECK(ns.link[idx].adr_pending && ns.link[idx].pend_power == 3);
+    n = uplink_mac(f, nwk, addr, fc++, ok, 2, LWC_LW_FCTRL_ADR, false);
+    CHECK(!lwc_ns_answer(&ns, lwc_ns_uplink(&ns, f, n, &up), &up, &rx, &dl));
+    CHECK(ns.link[idx].tx_power == 3 && ns.link[idx].snr_n == 1);
+
+    /* the signal drops to -5 dB at SF7 (7.5 dB short: 2 steps up in power), but
+     * raising the power waits until the strong entry has left a full history */
+    rx.snr10 = -50;
+    for (unsigned k = 0; k + 1U < LWC_NS_ADR_HISTORY; k++) {
+        n = uplink_mac(f, nwk, addr, fc++, NULL, 0, LWC_LW_FCTRL_ADR, false);
+        CHECK(!lwc_ns_answer(&ns, lwc_ns_uplink(&ns, f, n, &up), &up, &rx, &dl));
+    }
+    n = uplink_mac(f, nwk, addr, fc++, NULL, 0, LWC_LW_FCTRL_ADR, false);
+    CHECK(lwc_ns_answer(&ns, lwc_ns_uplink(&ns, f, n, &up), &up, &rx, &dl));
+    CHECK(dl.link_adr && dl.adr_dr == 5 && dl.adr_power == 1);
+    CHECK(lwc_ns_remove(&ns, eui) == LWC_NS_OK);
 }
 
 int main(void)
@@ -237,6 +346,9 @@ int main(void)
         CHECK(lwc_ns_add(&full, e, 0, KEY, LWC_NS_MAC_1_0_4, NULL, NULL) == LWC_NS_OK);
     }
     CHECK(lwc_ns_add(&full, 999, 0, KEY, LWC_NS_MAC_1_0_4, NULL, NULL) == LWC_NS_ERR_FULL);
+
+    adr_step();
+    adr_flow();
 
     /* routing */
     CHECK(lwc_ns_forward(LWC_MODE_TTN, true) && lwc_ns_forward(LWC_MODE_TTN, false));

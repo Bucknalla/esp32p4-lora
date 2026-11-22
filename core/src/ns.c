@@ -238,6 +238,98 @@ int16_t lwc_ns_required_snr10(uint8_t sf)
     return (int16_t)(-75 - 25 * (int)(sf - 7U));
 }
 
+void lwc_ns_adr(int16_t snr_max10, uint8_t dr, uint8_t tx_power, uint8_t max_dr, uint8_t max_power,
+                uint8_t *new_dr, uint8_t *new_power)
+{
+    const int req = lwc_ns_required_snr10((uint8_t)(12U - (dr > 5U ? 5U : dr)));
+    const int margin = (int)snr_max10 - req - LWC_NS_ADR_MARGIN10;
+    int nstep = margin / 30; /* margin / 3 dB, truncated toward zero (as ChirpStack) */
+    for (; nstep > 0; nstep--) {
+        if (dr < max_dr) {
+            dr++;
+        } else if (tx_power < max_power) {
+            tx_power++;
+        }
+    }
+    for (; nstep < 0; nstep++) {
+        if (tx_power > 0U) {
+            tx_power--;
+        }
+    }
+    *new_dr = dr;
+    *new_power = tx_power;
+}
+
+/* ADR bookkeeping for an accepted uplink: the answer to our last LinkADRReq,
+ * and the SNR history. */
+static void adr_rx(lwc_ns_link_t *l, const lwc_mac_up_t *m, const lwc_ns_uplink_t *up, const lwc_ns_rx_t *rx)
+{
+    if (l->adr_pending) {
+        l->adr_pending = false;
+        if (m->link_adr_ans == 0U) {
+            l->adr_wait = LWC_NS_ADR_HISTORY; /* request or answer lost: wait, then try again */
+        } else if (m->link_adr_status == LWC_MAC_ADR_ALL_ACK) {
+            if (l->pend_power != l->tx_power) {
+                l->snr_n = 0; /* SNR at the old power says nothing about the new one */
+                l->snr_pos = 0;
+            }
+            l->tx_power = l->pend_power;
+            l->adr_nacks = 0;
+        } else {
+            /* Refused (the device applies none of it): ask for less next time. */
+            if ((m->link_adr_status & LWC_MAC_ADR_POWER_ACK) == 0U && l->pend_power > l->tx_power) {
+                l->power_cap = l->pend_power; /* 1 + (pend_power - 1) */
+            }
+            if ((m->link_adr_status & LWC_MAC_ADR_DR_ACK) == 0U && l->pend_dr > 0U) {
+                l->dr_cap = l->pend_dr;
+            }
+            if (l->adr_nacks < UINT8_MAX) {
+                l->adr_nacks++;
+            }
+            l->adr_wait = LWC_NS_ADR_HISTORY;
+        }
+    }
+    if (up->adr && rx->bw_khz == 125U) {
+        l->snr10[l->snr_pos] = rx->snr10;
+        l->snr_pos = (uint8_t)((l->snr_pos + 1U) % LWC_NS_ADR_HISTORY);
+        if (l->snr_n < LWC_NS_ADR_HISTORY) {
+            l->snr_n++;
+        }
+    }
+}
+
+/* Whether to send a LinkADRReq now, and with what. */
+static bool adr_want(lwc_ns_link_t *l, const lwc_ns_uplink_t *up, const lwc_ns_rx_t *rx, uint8_t *dr, uint8_t *pw)
+{
+    if (!up->adr || rx->bw_khz != 125U || rx->sf < 7U || rx->sf > 12U) {
+        return false;
+    }
+    if (l->adr_wait != 0U) {
+        l->adr_wait--;
+        return false;
+    }
+    if (l->snr_n == 0U) {
+        return false;
+    }
+    int16_t best = l->snr10[0];
+    for (uint8_t k = 1; k < l->snr_n; k++) {
+        if (l->snr10[k] > best) {
+            best = l->snr10[k];
+        }
+    }
+    const uint8_t cur = (uint8_t)(12U - rx->sf);
+    const uint8_t max_dr = l->dr_cap != 0U ? (uint8_t)(l->dr_cap - 1U) : LWC_NS_ADR_MAX_DR;
+    const uint8_t max_pw = l->power_cap != 0U ? (uint8_t)(l->power_cap - 1U) : LWC_NS_ADR_MAX_POWER;
+    lwc_ns_adr(best, cur, l->tx_power, max_dr, max_pw, dr, pw);
+    /* Raising the power waits for a full history at the current power, so the
+     * power does not go up and down (ChirpStack); faster and quieter can come
+     * at once. */
+    if (*pw < l->tx_power && l->snr_n < LWC_NS_ADR_HISTORY) {
+        return false;
+    }
+    return *dr != cur || *pw != l->tx_power;
+}
+
 bool lwc_ns_answer(lwc_ns_t *ns, lwc_ns_up_res_t res, const lwc_ns_uplink_t *up, const lwc_ns_rx_t *rx,
                    lwc_ns_dl_t *dl)
 {
@@ -277,6 +369,15 @@ bool lwc_ns_answer(lwc_ns_t *ns, lwc_ns_up_res_t res, const lwc_ns_uplink_t *up,
             dl->device_time = lwc_mac_device_time_ans(fopts, sizeof fopts, &fo, rx->gps_s, rx->gps_frac);
             need = true;
         }
+        adr_rx(l, &m, up, rx);
+        uint8_t dr, pw;
+        if (adr_want(l, up, rx, &dr, &pw) &&
+            lwc_mac_link_adr_req(fopts, sizeof fopts, &fo, dr, pw, LWC_NS_CH_MASK, 0, 1)) {
+            dl->link_adr = true;
+            dl->adr_dr = dr;
+            dl->adr_power = pw;
+            need = true;
+        }
     }
     if (!need) {
         return false;
@@ -291,11 +392,17 @@ bool lwc_ns_answer(lwc_ns_t *ns, lwc_ns_up_res_t res, const lwc_ns_uplink_t *up,
     }
     dl->ack = up->confirmed;
     dl->fcnt = d->fcnt_down;
-    dl->len = lwc_lw_data_build(LWC_LW_UNCONFIRMED_DOWN, d->dev_addr, dl->ack ? LWC_LW_FCTRL_ACK : 0U,
-                                dl->fcnt, fopts, fo, false, 0, NULL, 0, d->nwk_s_key, NULL, dl->frame,
-                                sizeof dl->frame);
+    /* FCtrl.ADR: this network controls the data rate (when the device lets it) */
+    const uint8_t fctrl = (uint8_t)(LWC_LW_FCTRL_ADR | (dl->ack ? LWC_LW_FCTRL_ACK : 0U));
+    dl->len = lwc_lw_data_build(LWC_LW_UNCONFIRMED_DOWN, d->dev_addr, fctrl, dl->fcnt, fopts, fo, false, 0, NULL,
+                                0, d->nwk_s_key, NULL, dl->frame, sizeof dl->frame);
     if (dl->len == 0U) {
         return false;
+    }
+    if (dl->link_adr) {
+        l->adr_pending = true;
+        l->pend_dr = dl->adr_dr;
+        l->pend_power = dl->adr_power;
     }
     d->fcnt_down++;
     return true;
