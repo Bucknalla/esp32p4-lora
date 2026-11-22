@@ -8,6 +8,7 @@
 #include "ota.h"
 
 #include <inttypes.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "eh_host_api_types.h"
@@ -230,6 +231,16 @@ esp_err_t c6_update_check(void)
     err = image_size(p, &size, new_ver, sizeof new_ver);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "C6 version mismatch, but no usable image in '%s'", CP_FW_LABEL);
+        return ESP_OK;
+    }
+    /* App OTA never rewrites cp_fw: pushing an image that does not match the
+     * host would only repeat the mismatch and burn the attempt counter. */
+    unsigned img_major = 0, img_minor = 0;
+    if (sscanf(new_ver, "%u.%u", &img_major, &img_minor) != 2 ||
+        img_major != (unsigned)ESP_HOSTED_VERSION_MAJOR_1 ||
+        img_minor != (unsigned)ESP_HOSTED_VERSION_MINOR_1) {
+        ESP_LOGE(TAG, "'%s' holds C6 image %s, not host %d.%d: C6 not updated (flash cp_fw over USB)",
+                 CP_FW_LABEL, new_ver, ESP_HOSTED_VERSION_MAJOR_1, ESP_HOSTED_VERSION_MINOR_1);
         return ESP_OK;
     }
 
