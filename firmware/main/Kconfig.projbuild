@@ -84,7 +84,11 @@ menu "LoRaWAN gateway board"
                 there too until power is measured.
         config GW_TX_TRACE
             bool "Trace every TX (status transitions, counter check)"
-            default y
+            default n
+            help
+                Blocks the radio task for each frame's airtime (up to ~11 s at
+                SF12 with a 64-symbol preamble). Console TX_TEST frames are
+                always traced.
     endmenu
 
     menu "OTA and recovery"

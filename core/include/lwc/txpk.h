@@ -33,7 +33,7 @@ typedef struct {
     uint8_t cr_denom; /**< 5..8 */
     bool ipol;
     bool ncrc;        /**< true: no payload CRC */
-    uint16_t prea;    /**< preamble symbols, 0 = default */
+    uint16_t prea;    /**< preamble symbols 6..64, 0 = default */
     uint16_t size;
     uint8_t payload[255];
 } lwc_txpk_t;
@@ -75,6 +75,7 @@ typedef enum {
 
 typedef struct {
     bool used;
+    bool sent; /**< handed to the radio: still blocks others until it ends */
     uint32_t start;
     uint32_t airtime_us;
     uint32_t id;
@@ -98,6 +99,14 @@ lwc_jit_res_t lwc_jit_admit(lwc_jit_t *q, uint32_t now, uint32_t start, uint32_t
  *  `*expired` (slot index, else -1) so the caller can drop it. */
 int lwc_jit_due(const lwc_jit_t *q, uint32_t now, uint32_t lead_us, uint32_t min_send_us,
                 int *expired);
+
+/** The frame in `slot` is on its way to the air: never due again, but it
+ *  still collides with new frames until lwc_jit_ended reports it. */
+void lwc_jit_sent(lwc_jit_t *q, size_t slot);
+
+/** A sent frame that ended more than `margin_us` before `now`, or -1. The
+ *  caller checks the radio is idle, then releases the slot. */
+int lwc_jit_ended(const lwc_jit_t *q, uint32_t now, uint32_t margin_us);
 
 void lwc_jit_release(lwc_jit_t *q, size_t slot);
 

@@ -394,7 +394,9 @@ static lwc_txpk_err_t parse_txpk_obj(jr_t *r, lwc_txpk_t *t)
             if (!skip_value(r, 1)) {
                 return LWC_TXPK_ERR_JSON;
             }
-            t->mode = LWC_TXPK_GPS;
+            if (!(have & F_TIME)) { /* imme and tmst win, as in the Semtech forwarder */
+                t->mode = LWC_TXPK_GPS;
+            }
             have |= F_TIME;
         } else if (key_is(k, kn, "freq")) {
             if (!num(r, &v, &vn) || !tok_mhz_to_hz(v, vn, &t->freq_hz)) {
@@ -453,7 +455,8 @@ static lwc_txpk_err_t parse_txpk_obj(jr_t *r, lwc_txpk_t *t)
             }
         } else if (key_is(k, kn, "prea")) {
             uint32_t u;
-            if (!num(r, &v, &vn) || !tok_u32(v, vn, &u) || u > 65535U) {
+            /* The HAL sends at least 6; above 64 a frame can hold the radio for minutes. */
+            if (!num(r, &v, &vn) || !tok_u32(v, vn, &u) || u < 6U || u > 64U) {
                 return LWC_TXPK_ERR_FIELD;
             }
             t->prea = (uint16_t)u;
@@ -619,7 +622,7 @@ lwc_jit_res_t lwc_jit_admit(lwc_jit_t *q, uint32_t now, uint32_t start, uint32_t
     if (free_slot == LWC_JIT_SLOTS) {
         return LWC_JIT_FULL;
     }
-    q->slot[free_slot] = (lwc_jit_slot_t){true, start, airtime_us, id};
+    q->slot[free_slot] = (lwc_jit_slot_t){.used = true, .start = start, .airtime_us = airtime_us, .id = id};
     if (slot != NULL) {
         *slot = free_slot;
     }
@@ -635,7 +638,7 @@ int lwc_jit_due(const lwc_jit_t *q, uint32_t now, uint32_t lead_us, uint32_t min
         *expired = -1;
     }
     for (size_t i = 0; i < LWC_JIT_SLOTS; i++) {
-        if (!q->slot[i].used) {
+        if (!q->slot[i].used || q->slot[i].sent) {
             continue;
         }
         const int32_t d = diff(q->slot[i].start, now);
@@ -651,6 +654,25 @@ int lwc_jit_due(const lwc_jit_t *q, uint32_t now, uint32_t lead_us, uint32_t min
         }
     }
     return best;
+}
+
+void lwc_jit_sent(lwc_jit_t *q, size_t slot)
+{
+    if (slot < LWC_JIT_SLOTS) {
+        q->slot[slot].sent = true;
+    }
+}
+
+int lwc_jit_ended(const lwc_jit_t *q, uint32_t now, uint32_t margin_us)
+{
+    for (size_t i = 0; i < LWC_JIT_SLOTS; i++) {
+        const lwc_jit_slot_t *s = &q->slot[i];
+        if (s->used && s->sent &&
+            (int64_t)diff(now, s->start) > (int64_t)s->airtime_us + margin_us) {
+            return (int)i;
+        }
+    }
+    return -1;
 }
 
 void lwc_jit_release(lwc_jit_t *q, size_t slot)

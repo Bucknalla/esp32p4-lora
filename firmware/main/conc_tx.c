@@ -33,13 +33,12 @@
 static const char *TAG = "conc_tx";
 
 #define TX_RF_CHAIN 0
-#define TX_FREQ_MIN_HZ 863000000U /* Nebra EU868 tx_freq_min / tx_freq_max */
-#define TX_FREQ_MAX_HZ 870000000U
 #define TX_LEAD_US 40000U         /* hand to lgw_send this long before start */
 #define TX_MIN_SEND_US 5000U      /* below this, too late to load the frame */
 #define TX_MIN_ADMIT_US 20000U    /* reject on arrival below this */
 #define TX_MAX_ADVANCE_US 10000000U /* TTN RX1 join delay is 5 s */
-#define TX_GUARD_US 1000U
+#define TX_GUARD_US TX_LEAD_US /* the next frame loads only once this one is FREE */
+#define TX_END_MARGIN_US 100000 /* a sent frame still busy this long after its end is stuck */
 #define TX_IMME_DELAY_US 60000U
 #define TRACE_POLL_MS 1
 #define COUNTER_TOLERANCE_US 50000
@@ -113,7 +112,12 @@ int conc_tx_configure(void)
     ESP_LOGW(TAG, "TX disabled (CONFIG_GW_TX_ENABLE)");
 #endif
     lwc_jit_init(&s_jit, TX_MIN_ADMIT_US, TX_MAX_ADVANCE_US, TX_GUARD_US);
-    lwc_dc_init(&s_dc, esp_timer_get_time());
+    /* Once per boot: a HAL restart must not refill the hourly duty-cycle budget. */
+    static bool dc_ready;
+    if (!dc_ready) {
+        lwc_dc_init(&s_dc, esp_timer_get_time());
+        dc_ready = true;
+    }
     return 0;
 }
 
@@ -185,8 +189,7 @@ static void admit(const radio_tx_req_t *r)
         reply(r, RADIO_TX_GPS, 0, false);
         return;
     }
-    if (p->freq_hz < TX_FREQ_MIN_HZ || p->freq_hz > TX_FREQ_MAX_HZ ||
-        lwc_dc_band(p->freq_hz) < 0) {
+    if (lwc_dc_band(p->freq_hz) < 0) { /* inside an EU868 sub-band, so inside 863-870 MHz */
         reply(r, RADIO_TX_FREQ, 0, false);
         return;
     }
@@ -277,7 +280,7 @@ static bool trace_frame(const struct lgw_pkt_tx_s *f, uint32_t air_us)
                      (int32_t)(c - f->count_us));
             last = st;
         }
-        if (st == TX_FREE && last == TX_FREE && (int32_t)(c - f->count_us) > 0) {
+        if (st == TX_FREE && (int32_t)(c - f->count_us) > 0) {
             break;
         }
         if (esp_timer_get_time() - h0 > deadline_us) {
@@ -316,6 +319,19 @@ bool conc_tx_service(void)
     if (!counter_now(&now)) {
         return false;
     }
+    /* A sent frame blocks new ones until it ends; then check the radio let go. */
+    const int ended = lwc_jit_ended(&s_jit, now, TX_END_MARGIN_US);
+    if (ended >= 0) {
+        uint8_t est = TX_STATUS_UNKNOWN;
+        if (lgw_status(TX_STATUS, &est) != LGW_HAL_SUCCESS) {
+            return false;
+        }
+        if (est != TX_FREE) {
+            ESP_LOGE(TAG, "TX still busy %d us after its end: aborting", TX_END_MARGIN_US);
+            (void)lgw_abort_tx();
+        }
+        lwc_jit_release(&s_jit, (size_t)ended);
+    }
     int expired = -1;
     const int due = lwc_jit_due(&s_jit, now, TX_LEAD_US, TX_MIN_SEND_US, &expired);
     if (expired >= 0) {
@@ -341,12 +357,13 @@ bool conc_tx_service(void)
     const int64_t send_us = esp_timer_get_time() - t0;
     const bool trace = s_trace[due];
     const int32_t lead = (int32_t)(f->count_us - now);
-    lwc_jit_release(&s_jit, (size_t)due);
     if (rc != LGW_HAL_SUCCESS) {
+        lwc_jit_release(&s_jit, (size_t)due);
         ESP_LOGE(TAG, "lgw_send failed");
         atomic_fetch_add(&g_radio_tx_stats.txdrop, 1U);
         return true;
     }
+    lwc_jit_sent(&s_jit, (size_t)due);
     atomic_fetch_add(&g_radio_tx_stats.txnb, 1U);
     ESP_LOGI(TAG, "TX handed over %" PRId32 " us before start; lgw_send took %" PRId64 " us",
              lead, send_us);

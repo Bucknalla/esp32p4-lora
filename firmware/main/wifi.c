@@ -27,12 +27,16 @@ bool wifi_has_ip(void)
     return atomic_load(&s_has_ip);
 }
 
+static void schedule_retry(void);
+
 static void retry_cb(void *arg)
 {
     (void)arg;
     esp_err_t err = esp_wifi_connect();
     if (err != ESP_OK) {
+        /* No connect attempt, so no DISCONNECTED event will retry for us. */
         ESP_LOGW(TAG, "esp_wifi_connect: %s", esp_err_to_name(err));
+        schedule_retry();
     }
 }
 
@@ -89,9 +93,12 @@ static esp_err_t load_credentials(wifi_config_t *cfg)
     if (err != ESP_OK) {
         return err;
     }
-    size_t len = sizeof cfg->sta.ssid;
-    err = nvs_get_str(h, WIFI_NVS_KEY_SSID, (char *)cfg->sta.ssid, &len);
+    /* NVS adds a NUL; a 32-byte SSID fills sta.ssid with none. */
+    char ssid[sizeof cfg->sta.ssid + 1];
+    size_t len = sizeof ssid;
+    err = nvs_get_str(h, WIFI_NVS_KEY_SSID, ssid, &len);
     if (err == ESP_OK) {
+        memcpy(cfg->sta.ssid, ssid, len - 1U);
         len = sizeof cfg->sta.password;
         err = nvs_get_str(h, WIFI_NVS_KEY_PASS, (char *)cfg->sta.password, &len);
     }

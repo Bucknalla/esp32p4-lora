@@ -67,6 +67,20 @@ static void test_modes_and_rejects(void)
                 "\"SF7BW125\",\"codr\":\"4/5\",\"data\":\"AA==\"}}", &t) == LWC_TXPK_ERR_FIELD);
     CHECK(parse("{\"txpk\":{\"tmst\":1,\"freq\":868.1000001,\"modu\":\"LORA\",\"datr\":"
                 "\"SF7BW125\",\"codr\":\"4/5\",\"data\":\"AA==\"}}", &t) == LWC_TXPK_ERR_FIELD);
+    /* tmst and imme win over tmms, in either key order */
+    CHECK(parse("{\"txpk\":{\"tmst\":5,\"tmms\":7,\"freq\":868.1,\"modu\":\"LORA\",\"datr\":"
+                "\"SF7BW125\",\"codr\":\"4/5\",\"data\":\"AA==\"}}", &t) == LWC_TXPK_OK && t.mode == LWC_TXPK_TIMED);
+    CHECK(parse("{\"txpk\":{\"tmms\":7,\"tmst\":5,\"freq\":868.1,\"modu\":\"LORA\",\"datr\":"
+                "\"SF7BW125\",\"codr\":\"4/5\",\"data\":\"AA==\"}}", &t) == LWC_TXPK_OK && t.mode == LWC_TXPK_TIMED);
+    CHECK(parse("{\"txpk\":{\"imme\":true,\"tmms\":7,\"freq\":868.1,\"modu\":\"LORA\",\"datr\":"
+                "\"SF7BW125\",\"codr\":\"4/5\",\"data\":\"AA==\"}}", &t) == LWC_TXPK_OK && t.mode == LWC_TXPK_IMMEDIATE);
+    /* preamble bounds */
+    CHECK(parse("{\"txpk\":{\"tmst\":1,\"prea\":8,\"freq\":868.1,\"modu\":\"LORA\",\"datr\":"
+                "\"SF7BW125\",\"codr\":\"4/5\",\"data\":\"AA==\"}}", &t) == LWC_TXPK_OK && t.prea == 8);
+    CHECK(parse("{\"txpk\":{\"tmst\":1,\"prea\":5,\"freq\":868.1,\"modu\":\"LORA\",\"datr\":"
+                "\"SF7BW125\",\"codr\":\"4/5\",\"data\":\"AA==\"}}", &t) == LWC_TXPK_ERR_FIELD);
+    CHECK(parse("{\"txpk\":{\"tmst\":1,\"prea\":1000,\"freq\":868.1,\"modu\":\"LORA\",\"datr\":"
+                "\"SF12BW125\",\"codr\":\"4/5\",\"data\":\"AA==\"}}", &t) == LWC_TXPK_ERR_FIELD);
     CHECK(parse("{\"rxpk\":[]}", &t) == LWC_TXPK_ERR_JSON);
     CHECK(parse("{\"txpk\":{\"tmst\":1}", &t) != LWC_TXPK_OK); /* truncated */
     CHECK(parse("{\"txpk\":{}} trailing", &t) != LWC_TXPK_OK);
@@ -111,6 +125,20 @@ static void test_jit(void)
     CHECK(lwc_jit_due(&q, now + 997000, 40000, 5000, &expired) == -1 && expired == (int)s0);
     lwc_jit_release(&q, s0);
     CHECK(lwc_jit_due(&q, now + 1980000, 40000, 5000, &expired) == (int)s1);
+
+    /* a sent frame is never due again but still blocks overlaps until it ends */
+    lwc_jit_t g;
+    lwc_jit_init(&g, 20000, 10000000, 40000);
+    size_t sa;
+    CHECK(lwc_jit_admit(&g, now, now + 100000, 1500000, 7, &sa) == LWC_JIT_OK);
+    lwc_jit_sent(&g, sa);
+    CHECK(lwc_jit_due(&g, now + 90000, 40000, 5000, &expired) == -1 && expired == -1);
+    CHECK(lwc_jit_admit(&g, now + 90000, now + 600000, 50000, 8, NULL) == LWC_JIT_COLLISION);
+    CHECK(lwc_jit_admit(&g, now + 90000, now + 1620000, 50000, 8, NULL) == LWC_JIT_COLLISION); /* inside guard */
+    CHECK(lwc_jit_ended(&g, now + 1600000, 0) == -1);
+    CHECK(lwc_jit_ended(&g, now + 1600001, 0) == (int)sa);
+    lwc_jit_release(&g, sa);
+    CHECK(lwc_jit_admit(&g, now + 1600001, now + 1700000, 50000, 9, NULL) == LWC_JIT_OK);
 
     /* counter wrap: now near UINT32_MAX, start after the wrap */
     lwc_jit_t w;
