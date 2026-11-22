@@ -65,7 +65,7 @@ async function refreshStatus() {
     const rx = +r.rx || 0, ok = +r.crc_ok || 0;
     const restarts = +r.restarts || 0, run = +f.run || 0;
     const notices = [];
-    if (ttnOn && r.upstream !== 'up') notices.push(['warn', 'Upstream (TTN) is down: uplinks are not forwarded.']);
+    if (ttnOn && r.upstream !== 'up') notices.push(['warn', 'Upstream (TTN) is down: uplinks are not forwarded. Check the registration under Config.']);
     if (o.state && o.state !== 'valid') notices.push(['warn', 'Firmware ' + o.state + ': it rolls back unless its health check passes.']);
     if (run > 0) notices.push(['warn', run + ' crash or watchdog reset(s) in a row. See Logs → Previous boot.']);
     if (restarts > 0) notices.push(['warn', 'The concentrator restarted ' + restarts + ' time(s) since boot.']);
@@ -84,10 +84,11 @@ async function refreshStatus() {
       tile('Internal RAM', fmtKB(r.heap_internal || 0), 'lowest ' + fmtKB(r.heap_internal_min || 0)),
     );
     $('#ttn').hidden = !ttnOn;
+    $('#ttn-state').textContent = ttnOn ? 'On: uplinks go to eu1' : 'Off: received frames are not forwarded';
     $('#ttn-eui').textContent = g.eui || '';
     $('#ttn-server').textContent = (g.server || '') + (g.port ? ' : ' + g.port + ' (UDP)' : '');
     if (ttnOn && !$('#ttn-qr').src) $('#ttn-qr').src = '/api/ttn/qr.svg';
-    $('#ttn-on').checked = ttnOn;
+    if (!$('#ttn-on').dataset.dirty) $('#ttn-on').checked = ttnOn; /* keep an unsaved change */
     const fw = $('#fw');
     fw.replaceChildren();
     for (const k of ['version', 'slot', 'state', 'last_check', 'wifi', 'eth']) {
@@ -160,7 +161,7 @@ document.addEventListener('DOMContentLoaded', () => {
       for (const x of document.querySelectorAll('nav button')) x.classList.toggle('on', x === b);
       for (const t of document.querySelectorAll('.tab')) t.hidden = t.id !== 'tab-' + b.dataset.tab;
       if (b.dataset.tab === 'logs') refreshLogs();
-      if (b.dataset.tab === 'status' || b.dataset.tab === 'firmware') refreshStatus();
+      if (b.dataset.tab !== 'logs') refreshStatus();
     });
   }
   $('#logs-refresh').addEventListener('click', refreshLogs);
@@ -172,9 +173,10 @@ document.addEventListener('DOMContentLoaded', () => {
     try { await navigator.clipboard.writeText($('#ttn-eui').textContent); ev.target.textContent = 'Copied'; }
     catch (e) { getSelection().selectAllChildren($('#ttn-eui')); }
   });
+  $('#ttn-on').addEventListener('change', (ev) => { ev.target.dataset.dirty = '1'; });
   $('#ttn-save').addEventListener('click', async () => {
     if (!confirm('Save and restart the gateway?')) return;
-    const el = $('#fw-msg');
+    const el = $('#cfg-msg');
     try {
       const r = await api('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'ttn=' + ($('#ttn-on').checked ? 'on' : 'off') });
       el.textContent = (await r.text()).trim();
@@ -208,7 +210,7 @@ document.addEventListener('DOMContentLoaded', () => {
       ev.target.reset();
       $('#setup').hidden = true;
       $('#login').hidden = false;
-      $('#login-msg').textContent = t.includes('restarts') ? 'Admin password set. The gateway restarts; log in when it is back.' : 'Admin password set. Log in as admin.';
+      $('#login-msg').textContent = 'Admin password set. Log in as admin.';
     } catch (e) { msg.textContent = e.message; msg.classList.add('bad'); }
   });
   const role = sessionStorage.getItem('role');
