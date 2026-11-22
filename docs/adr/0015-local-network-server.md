@@ -1,7 +1,7 @@
 # ADR-0015: Local network server and gateway modes (phase 3)
 
-- Status: accepted (slices 1–6 built and host-tested; transmit off until
-  approved; on-board test pending)
+- Status: accepted (slices 1–6 built; modes tested on the board; transmit off
+  until approved; see Verification)
 - Date: 2026-11-22
 
 ## Context
@@ -168,3 +168,21 @@ Then integrations (phase 4).
   index 0 and relearns.
 - Every LinkADRReq is a transmission, so it is also dry run until
   `CONFIG_GW_LNS_TX` is approved.
+
+## Verification
+
+| What | How | Result |
+| --- | --- | --- |
+| AES, CMAC | FIPS-197, RFC 4493 vectors | pass |
+| Frames, keys, MICs | ChirpStack `lrwn` vectors; the downlink rebuilt byte for byte | pass |
+| GPS time | 2019 GPS week rollover (week 2048 at 23:59:42 UTC) | pass |
+| Joins, uplinks, repeats, answers, ADR | host tests (`test_ns`, `test_mac`), ASan/UBSan | pass |
+| Untrusted input | libFuzzer on frames, MAC commands and the answer path (CI) | CI |
+| Static checks | cppcheck; core with GCC and the CI warning flags | clean |
+| Standalone boot (rev3 bench board) | local server on, no forwarder, dry run | pass |
+| Add a device (Config tab) | `devices=1` in STATUS | pass |
+| Hybrid boot | device loaded from NVS, local server and TTN link up | pass |
+| TTN boot | device loaded, local server off, TTN link up | pass |
+| Remove a device | logged, record erased | pass |
+| Join, uplink, answers, RX2 fallback, ADR on air | needs an EU868 OTAA device and transmit approval | not yet |
+| TTN downlinks after the `conc_tx.c` change | no TTN downlink seen during the test | not yet |
