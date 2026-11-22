@@ -196,6 +196,8 @@ We port Semtech's `sx1302_hal` to ESP-IDF and keep its logic intact; only the pl
 
 **First output: Semtech UDP protocol** to TTN or ChirpStack. It has no TLS but is the fastest way to prove the radio path end to end. In later phases the same receive path feeds the local network server, with UDP kept for hybrid forwarding.
 
+**TTN link: LoRa Basics Station** (ADR-0016, next after phase 3). The LNS protocol over a TLS WebSocket, authenticated with a TTN API key that can only connect this gateway, replaces UDP as the recommended way to reach TTN: encrypted, downlinks confirmed, and the TTN console shows the gateway as connected. UDP stays for ChirpStack and other servers that use it.
+
 ## Network server and join server
 
 With one gateway there is no deduplication, so the network server reduces to per-device state, MAC handling and downlink scheduling — all light work for the P4's AES hardware. ChirpStack's open-source code is the behavioural reference for MAC commands and ADR.
@@ -250,7 +252,7 @@ The gateway publishes standard formats so existing tools (Node-RED, Grafana, Hom
 **Hybrid forwarding**
 
 - A frame is local if its DevAddr is in our range (data uplinks) or its DevEUI is in our join table (join requests).
-- Everything else is forwarded unchanged over Semtech UDP to TTN or a central ChirpStack.
+- Everything else is forwarded unchanged to TTN (Basics Station, ADR-0016) or a central ChirpStack (Semtech UDP).
 - Downlinks from upstream share the same scheduler and duty-cycle budget as local downlinks, with local traffic taking priority.
 
 ## Management, OTA and observability
@@ -306,6 +308,8 @@ Six phases, each closed by a gate; OTA and recovery (phase 2) come before any Lo
 &#91;embedded content: build roadmap · 6 phases, 5 gates\]
 
 Phase 3 is the core of the project: once it passes, the board is a working stand-alone network and a credible Pi replacement. Phases 4 to 6 can be reordered to suit whichever site goes live first.
+
+Planned main mode after phase 3: hybrid, with our own devices on the board and every other frame sent to TTN over Basics Station (ADR-0016), so the gateway also serves the community network. Basics Station is built straight after the phase 3 gate, before the phase 4 integrations.
 
 CI — both chip-revision builds, static analysis, host tests and fuzzing — is set up in phase 1 and must be green at every gate.
 
