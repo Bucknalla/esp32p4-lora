@@ -46,7 +46,7 @@ void lwc_sess_create(lwc_sess_table_t *t, const uint8_t token[LWC_SESS_TOKEN_LEN
     size_t pick = 0;
     bool found = false;
     for (size_t i = 0; i < LWC_SESS_MAX; i++) {
-        lwc_sess_slot_t *s = &t->slot[i];
+        const lwc_sess_slot_t *s = &t->slot[i];
         if (s->role == LWC_ROLE_NONE || expired(t, s, now_s)) {
             pick = i;
             found = true;
