@@ -1,9 +1,11 @@
 #include "wifi.h"
 
 #include <stdatomic.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "esp_check.h"
+#include "esp_mac.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -19,6 +21,10 @@ static const char *TAG = "wifi";
 
 static atomic_bool s_has_ip;
 static esp_timer_handle_t s_retry_timer;
+static esp_timer_handle_t s_setup_timer;
+static atomic_bool s_setup;
+static char s_nets[WIFI_SETUP_MAX_NETS][33];
+static size_t s_net_count;
 static uint32_t s_backoff_ms = BACKOFF_MIN_MS;
 static uint32_t s_disconnects;
 
@@ -106,7 +112,8 @@ static esp_err_t load_credentials(wifi_config_t *cfg)
     return err;
 }
 
-static void log_scan(void)
+/* Scan once (proves the C6 link) and keep the names for the setup page. */
+static void scan_networks(void)
 {
     const wifi_scan_config_t scan = {0};
     esp_err_t err = esp_wifi_scan_start(&scan, true);
@@ -122,9 +129,79 @@ static void log_scan(void)
         return;
     }
     ESP_LOGI(TAG, "scan: %u network(s) (C6 link OK)", n);
-    for (uint16_t i = 0; i < n; i++) {
-        ESP_LOGI(TAG, "  ch %2u  %4d dBm  %s", aps[i].primary, aps[i].rssi, (const char *)aps[i].ssid);
+    for (uint16_t i = 0; i < n && s_net_count < WIFI_SETUP_MAX_NETS; i++) {
+        if (aps[i].ssid[0] != 0) {
+            memcpy(s_nets[s_net_count], aps[i].ssid, 32);
+            s_nets[s_net_count++][32] = '\0';
+        }
     }
+}
+
+static void setup_end_cb(void *arg)
+{
+    (void)arg;
+    atomic_store(&s_setup, false);
+    ESP_LOGW(TAG, "setup access point closed after %d min: power-cycle to open it again",
+             WIFI_SETUP_MINUTES);
+    (void)esp_wifi_set_mode(WIFI_MODE_STA);
+}
+
+/* No credentials: an open access point for a few minutes, so a phone can
+ * reach the setup page (ADR-0011). */
+static esp_err_t start_setup_ap(void)
+{
+    ESP_RETURN_ON_FALSE(esp_netif_create_default_wifi_ap() != NULL, ESP_FAIL, TAG, "ap netif");
+    ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_APSTA), TAG, "mode");
+    uint8_t mac[6] = {0};
+    (void)esp_read_mac(mac, ESP_MAC_BASE);
+    wifi_config_t ap = {0};
+    ap.ap.ssid_len = (uint8_t)snprintf((char *)ap.ap.ssid, sizeof ap.ap.ssid,
+                                       "lorawan-gateway-%02X%02X%02X", mac[3], mac[4], mac[5]);
+    ap.ap.channel = 6;
+    ap.ap.authmode = WIFI_AUTH_OPEN;
+    ap.ap.max_connection = 2;
+    ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_AP, &ap), TAG, "ap config");
+    ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "start");
+    scan_networks();
+    const esp_timer_create_args_t targs = {.callback = setup_end_cb, .name = "wifi_setup"};
+    ESP_RETURN_ON_ERROR(esp_timer_create(&targs, &s_setup_timer), TAG, "setup timer");
+    ESP_RETURN_ON_ERROR(esp_timer_start_once(s_setup_timer, WIFI_SETUP_MINUTES * 60ULL * 1000000ULL),
+                        TAG, "setup timer");
+    atomic_store(&s_setup, true);
+    ESP_LOGW(TAG, "no Wi-Fi credentials: setup access point \"%s\" open for %d min; "
+                  "join it and open https://192.168.4.1/",
+             (const char *)ap.ap.ssid, WIFI_SETUP_MINUTES);
+    return ESP_OK;
+}
+
+esp_err_t wifi_store_credentials(const char *ssid, const char *pass)
+{
+    const size_t sl = strlen(ssid), pl = strlen(pass);
+    ESP_RETURN_ON_FALSE(sl >= 1U && sl <= 32U && pl >= 8U && pl <= 63U, ESP_ERR_INVALID_ARG, TAG,
+                        "length");
+    nvs_handle_t h;
+    ESP_RETURN_ON_ERROR(nvs_open(WIFI_NVS_NAMESPACE, NVS_READWRITE, &h), TAG, "nvs_open");
+    esp_err_t err = nvs_set_str(h, WIFI_NVS_KEY_SSID, ssid);
+    if (err == ESP_OK) {
+        err = nvs_set_str(h, WIFI_NVS_KEY_PASS, pass);
+    }
+    if (err == ESP_OK) {
+        err = nvs_commit(h);
+    }
+    nvs_close(h);
+    return err;
+}
+
+bool wifi_setup_active(void)
+{
+    return atomic_load(&s_setup);
+}
+
+size_t wifi_setup_networks(char names[][33], size_t max)
+{
+    const size_t n = s_net_count < max ? s_net_count : max;
+    memcpy(names, s_nets, n * sizeof s_nets[0]);
+    return n;
 }
 
 esp_err_t wifi_start(void)
@@ -139,11 +216,8 @@ esp_err_t wifi_start(void)
     wifi_config_t cfg = {0};
     const esp_err_t cred = load_credentials(&cfg);
     if (cred != ESP_OK) {
-        ESP_LOGW(TAG, "no credentials in NVS (%s): scan only. Run tools/provision_wifi.py",
-                 esp_err_to_name(cred));
-        ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "start");
-        log_scan();
-        return ESP_OK;
+        ESP_LOGW(TAG, "no credentials in NVS (%s)", esp_err_to_name(cred));
+        return start_setup_ap();
     }
 
     cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;

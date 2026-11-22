@@ -109,6 +109,13 @@ dependencies:
     - esp32p4
     - esp32s31
     version: 1.1.0
+  espressif/qrcode:
+    component_hash: 31e70991ce22f28d73a4386417fc9c0993f61e1aab1832474fd9e3db8da9dcbd
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 0.2.0
   espressif/wifi_remote_over_eppp:
     component_hash: 1fd6968af20f0b19e421f6b519b0a8caf81d689afc3783b564c28559e45f66ef
     dependencies:
@@ -131,7 +138,8 @@ direct_dependencies:
 - espressif/esp_hosted
 - espressif/esp_wifi_remote
 - espressif/ip101
+- espressif/qrcode
 - idf
-manifest_hash: 3bd986b10a44cd38f326bab50e4264a1c64406550dd8f2aed83bf83a0edea686
+manifest_hash: ed27281e961e7e09f33168abb6ae298111d837e1c87eacba203139cb4a1d6556
 target: esp32p4
 version: 3.0.0

@@ -17,6 +17,7 @@
 #include "esp_timer.h"
 #include "fault.h"
 #include "freertos/FreeRTOS.h"
+#include "led.h"
 #include "logbuf.h"
 #include "lwc/form.h"
 #include "lwc/netaddr.h"
@@ -25,9 +26,12 @@
 #include "ota.h"
 #include "pktfwd.h"
 #include "radio_pkt.h"
+#include "sdkconfig.h"
 #include "sv.h"
 #include "psa/crypto.h"
 #include "webauth.h"
+#include "wifi.h"
+#include "qrcode.h"
 
 static const char *TAG = "web";
 
@@ -268,13 +272,12 @@ static esp_err_t api_logout(httpd_req_t *req)
 
 /* ---- status, logs ------------------------------------------------------------------ */
 
-static void json_str(char *out, size_t cap, size_t *o, const char *key, const char *val)
+/* Append `val` as a JSON string ("..." with escapes); stops at the buffer end. */
+static void json_quote(char *out, size_t cap, size_t *o, const char *val)
 {
-    if (*o >= cap) {
-        return;
+    if (*o + 1U < cap) {
+        out[(*o)++] = '"';
     }
-    int n = snprintf(out + *o, cap - *o, "%s\"%s\":\"", *o > 1 ? "," : "", key);
-    *o += n > 0 ? (size_t)n : 0U;
     for (const char *p = val; *p != '\0' && *o + 7U < cap; p++) {
         const unsigned char c = (unsigned char)*p;
         if (c == '"' || c == '\\') {
@@ -290,6 +293,16 @@ static void json_str(char *out, size_t cap, size_t *o, const char *key, const ch
         out[(*o)++] = '"';
     }
     out[*o < cap ? *o : cap - 1U] = '\0';
+}
+
+static void json_str(char *out, size_t cap, size_t *o, const char *key, const char *val)
+{
+    if (*o >= cap) {
+        return;
+    }
+    int n = snprintf(out + *o, cap - *o, "%s\"%s\":", *o > 1 ? "," : "", key);
+    *o += n > 0 ? (size_t)n : 0U;
+    json_quote(out, cap, o, val);
 }
 
 static esp_err_t api_status(httpd_req_t *req)
@@ -313,15 +326,20 @@ static esp_err_t api_status(httpd_req_t *req)
     sv_status_line(line, sizeof line);
     json_str(out, 2048, &o, "stack_free", line);
     snprintf(line, sizeof line,
-             "rx=%u crc_ok=%u dropped=%u starts=%u restarts=%u upstream=%s uptime_s=%" PRIu32
+             "rx=%u crc_ok=%u dropped=%u starts=%u restarts=%u upstream=%s led=%s uptime_s=%" PRIu32
              " heap_internal=%u heap_internal_min=%u heap_psram=%u",
              atomic_load(&g_radio_stats.rxnb), atomic_load(&g_radio_stats.rxok),
              atomic_load(&g_radio_stats.dropped), atomic_load(&g_radio_stats.starts),
-             atomic_load(&g_radio_stats.restarts), pktfwd_link_up() ? "up" : "down", now_s(),
+             atomic_load(&g_radio_stats.restarts), pktfwd_link_up() ? "up" : "down", led_state(), now_s(),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     json_str(out, 2048, &o, "radio", line);
+    char eui[17] = "";
+    (void)pktfwd_eui(eui);
+    snprintf(line, sizeof line, "eui=%s report=%s server=%s port=%d", eui,
+             pktfwd_ttn_enabled() ? "on" : "off", CONFIG_GW_PKTFWD_SERVER, CONFIG_GW_PKTFWD_PORT);
+    json_str(out, 2048, &o, "ttn", line);
     if (o + 2U < 2048U) {
         out[o++] = '}';
         out[o++] = '\n';
@@ -411,8 +429,20 @@ static esp_err_t api_ota_check(httpd_req_t *req)
 
 static void reboot_cb(void *arg)
 {
-    (void)arg;
-    fault_restart("web UI reboot");
+    fault_restart(arg);
+}
+
+/* Reply first, restart a second later. */
+static esp_err_t reboot_soon(httpd_req_t *req, const char *why, const char *msg)
+{
+    static esp_timer_handle_t t;
+    const esp_timer_create_args_t a = {.callback = reboot_cb, .arg = (void *)why, .name = "web_reboot"};
+    if (t == NULL && esp_timer_create(&a, &t) != ESP_OK) {
+        return send_status(req, "500 Internal Server Error", "timer\n");
+    }
+    const esp_err_t r = send_status(req, "202 Accepted", msg);
+    (void)esp_timer_start_once(t, 1000000);
+    return r;
 }
 
 static esp_err_t api_reboot(httpd_req_t *req)
@@ -421,14 +451,183 @@ static esp_err_t api_reboot(httpd_req_t *req)
     if (!gate(req, LWC_ROLE_ADMIN, &r)) {
         return r;
     }
-    static esp_timer_handle_t t;
-    const esp_timer_create_args_t a = {.callback = reboot_cb, .name = "web_reboot"};
-    if (t == NULL && esp_timer_create(&a, &t) != ESP_OK) {
-        return send_status(req, "500 Internal Server Error", "timer\n");
+    return reboot_soon(req, "web UI reboot", "rebooting\n");
+}
+
+/* ---- TTN registration help and settings (ADR-0012) ---------------------------- */
+
+typedef struct {
+    char *buf;
+    size_t cap, len;
+} svg_t;
+
+/* QR modules -> one SVG path (a 1x1 square per dark module). */
+static void qr_to_svg(esp_qrcode_handle_t qr, void *arg)
+{
+    svg_t *v = arg;
+    const int n = esp_qrcode_get_size(qr);
+    v->len = (size_t)snprintf(v->buf, v->cap,
+                              "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"-4 -4 %d %d\" "
+                              "shape-rendering=\"crispEdges\"><rect x=\"-4\" y=\"-4\" width=\"%d\" "
+                              "height=\"%d\" fill=\"#fff\"/><path fill=\"#000\" d=\"",
+                              n + 8, n + 8, n + 8, n + 8);
+    for (int y = 0; y < n; y++) {
+        for (int x = 0; x < n && v->len + 24U < v->cap; x++) {
+            if (esp_qrcode_get_module(qr, x, y)) {
+                v->len += (size_t)snprintf(v->buf + v->len, v->cap - v->len, "M%d %dh1v1h-1z", x, y);
+            }
+        }
     }
-    r = send_status(req, "202 Accepted", "rebooting\n");
-    (void)esp_timer_start_once(t, 1000000);
+    v->len += (size_t)snprintf(v->buf + v->len, v->cap - v->len, "\"/></svg>");
+}
+
+static esp_err_t api_ttn_qr(httpd_req_t *req)
+{
+    esp_err_t r;
+    if (!gate(req, LWC_ROLE_VIEWER, &r)) {
+        return r;
+    }
+    char eui[17];
+    svg_t v = {.cap = 12288};
+    v.buf = heap_caps_malloc(v.cap, MALLOC_CAP_SPIRAM);
+    if (v.buf == NULL || pktfwd_eui(eui) != ESP_OK) {
+        heap_caps_free(v.buf);
+        return send_status(req, "500 Internal Server Error", "qr\n");
+    }
+    esp_qrcode_config_t cfg = ESP_QRCODE_CONFIG_DEFAULT();
+    cfg.display_func_with_cb = qr_to_svg;
+    cfg.user_data = &v;
+    cfg.max_qrcode_version = 4;
+    cfg.qrcode_ecc_level = ESP_QRCODE_ECC_MED;
+    if (esp_qrcode_generate(&cfg, eui) != ESP_OK || v.len == 0U) {
+        heap_caps_free(v.buf);
+        return send_status(req, "500 Internal Server Error", "qr\n");
+    }
+    common_headers(req);
+    httpd_resp_set_type(req, "image/svg+xml");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    r = httpd_resp_send(req, v.buf, (ssize_t)v.len);
+    heap_caps_free(v.buf);
     return r;
+}
+
+static esp_err_t api_settings(httpd_req_t *req)
+{
+    esp_err_t r;
+    if (!gate(req, LWC_ROLE_ADMIN, &r)) {
+        return r;
+    }
+    char body[64] = "", v[8];
+    const int n = req->content_len > 0 && req->content_len < sizeof body
+                      ? httpd_req_recv(req, body, req->content_len)
+                      : -1;
+    if (n <= 0 || lwc_form_get(body, (size_t)n, "ttn", v, sizeof v) < 0 ||
+        (strcmp(v, "on") != 0 && strcmp(v, "off") != 0)) {
+        return send_status(req, "400 Bad Request", "ttn=on|off\n");
+    }
+    const bool on = strcmp(v, "on") == 0;
+    if (on == pktfwd_ttn_enabled()) {
+        return send_status(req, "200 OK", "unchanged\n");
+    }
+    r = pktfwd_set_ttn(on);
+    if (r != ESP_OK) {
+        return send_status(req, "500 Internal Server Error", esp_err_to_name(r));
+    }
+    return reboot_soon(req, "web settings changed", on ? "TTN reporting on: restarting\n"
+                                                         : "TTN reporting off: restarting\n");
+}
+
+/* ---- first-time setup (ADR-0011) -----------------------------------------------
+ * Only while the setup access point is open (no Wi-Fi credentials). With no
+ * admin password yet, the form also sets it (claim); otherwise it needs an
+ * admin session. */
+
+static esp_err_t api_setup_get(httpd_req_t *req)
+{
+    esp_err_t r;
+    if (!gate(req, LWC_ROLE_NONE, &r)) {
+        return r;
+    }
+    if (!wifi_setup_active()) {
+        return send_status(req, "404 Not Found", "setup is closed\n");
+    }
+    char names[WIFI_SETUP_MAX_NETS][33];
+    const size_t n = wifi_setup_networks(names, WIFI_SETUP_MAX_NETS);
+    char out[WIFI_SETUP_MAX_NETS * 72 + 64];
+    size_t o = (size_t)snprintf(out, sizeof out, "{\"admin_set\":%s,\"networks\":[",
+                                webauth_has_password(LWC_ROLE_ADMIN) ? "true" : "false");
+    for (size_t i = 0; i < n; i++) {
+        if (i > 0 && o + 1U < sizeof out) {
+            out[o++] = ',';
+        }
+        json_quote(out, sizeof out, &o, names[i]);
+    }
+    o += (size_t)snprintf(out + o, sizeof out - o, "]}\n");
+    common_headers(req);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_send(req, out, (ssize_t)o);
+}
+
+static esp_err_t api_setup_post(httpd_req_t *req)
+{
+    esp_err_t r;
+    if (!gate(req, LWC_ROLE_NONE, &r)) {
+        return r;
+    }
+    if (!wifi_setup_active()) {
+        return send_status(req, "404 Not Found", "setup is closed\n");
+    }
+    const bool claim = !webauth_has_password(LWC_ROLE_ADMIN);
+    if (!claim && role_of(req) != LWC_ROLE_ADMIN) {
+        return send_status(req, "401 Unauthorized", "log in as admin to change Wi-Fi\n");
+    }
+    if (req->content_len == 0 || req->content_len > BODY_MAX) {
+        return send_status(req, "400 Bad Request", "bad body\n");
+    }
+    char body[BODY_MAX + 1];
+    size_t got = 0;
+    while (got < req->content_len) {
+        const int n = httpd_req_recv(req, body + got, req->content_len - got);
+        if (n <= 0) {
+            return ESP_FAIL;
+        }
+        got += (size_t)n;
+    }
+    char ssid[33], pass[64], admin[64], ttn[8];
+    const bool ttn_on = lwc_form_get(body, got, "ttn", ttn, sizeof ttn) > 0; /* checkbox */
+    const int sl = lwc_form_get(body, got, "ssid", ssid, sizeof ssid);
+    const int pl = lwc_form_get(body, got, "password", pass, sizeof pass);
+    const int al = claim ? lwc_form_get(body, got, "admin", admin, sizeof admin) : 8;
+    memset(body, 0, sizeof body);
+    const char *why = NULL;
+    if (sl < 1) {
+        why = "choose a network\n";
+    } else if (pl < 8) {
+        why = "Wi-Fi password: 8 to 63 characters\n";
+    } else if (al < 8) {
+        why = "admin password: 8 to 63 characters\n";
+    }
+    esp_err_t err = ESP_OK;
+    if (why == NULL && claim) {
+        err = webauth_set_password(LWC_ROLE_ADMIN, admin, (size_t)al);
+    }
+    if (why == NULL && err == ESP_OK) {
+        err = wifi_store_credentials(ssid, pass);
+    }
+    if (why == NULL && err == ESP_OK) {
+        err = pktfwd_set_ttn(ttn_on);
+    }
+    memset(pass, 0, sizeof pass);
+    memset(admin, 0, sizeof admin);
+    if (why != NULL) {
+        return send_status(req, "400 Bad Request", why);
+    }
+    if (err != ESP_OK) {
+        return send_status(req, "500 Internal Server Error", esp_err_to_name(err));
+    }
+    ESP_LOGW(TAG, "setup: Wi-Fi stored%s; restarting", claim ? " and admin password set" : "");
+    return reboot_soon(req, "web setup complete", "saved: the gateway restarts and joins the network\n");
 }
 
 /* ---- start -------------------------------------------------------------------------- */
@@ -452,7 +651,7 @@ esp_err_t web_start(void)
     cfg.httpd.core_id = 0;
     cfg.httpd.max_open_sockets = 3;
     cfg.httpd.lru_purge_enable = true;
-    cfg.httpd.max_uri_handlers = 12;
+    cfg.httpd.max_uri_handlers = 16;
     cfg.httpd.uri_match_fn = NULL;
     ESP_RETURN_ON_ERROR(httpd_ssl_start(&s_srv, &cfg), TAG, "httpd_ssl_start");
 
@@ -468,6 +667,10 @@ esp_err_t web_start(void)
         {.uri = "/api/coredump", .method = HTTP_DELETE, .handler = api_coredump_delete},
         {.uri = "/api/ota/check", .method = HTTP_POST, .handler = api_ota_check},
         {.uri = "/api/reboot", .method = HTTP_POST, .handler = api_reboot},
+        {.uri = "/api/setup", .method = HTTP_GET, .handler = api_setup_get},
+        {.uri = "/api/ttn/qr.svg", .method = HTTP_GET, .handler = api_ttn_qr},
+        {.uri = "/api/settings", .method = HTTP_POST, .handler = api_settings},
+        {.uri = "/api/setup", .method = HTTP_POST, .handler = api_setup_post},
     };
     for (size_t i = 0; i < sizeof uris / sizeof uris[0]; i++) {
         ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_srv, &uris[i]), TAG, "uri %s", uris[i].uri);
