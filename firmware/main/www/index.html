@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LoRaWAN Gateway</title>
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<header>
+  <h1>LoRaWAN Gateway</h1>
+  <span id="who"></span>
+  <button id="logout" hidden>Log out</button>
+</header>
+<main>
+  <section id="login" hidden>
+    <h2>Log in</h2>
+    <form id="login-form">
+      <label>User
+        <select name="user"><option>admin</option><option>viewer</option></select>
+      </label>
+      <label>Password <input type="password" name="password" autocomplete="current-password" required></label>
+      <button type="submit">Log in</button>
+      <p id="login-msg" class="msg"></p>
+    </form>
+  </section>
+  <section id="app" hidden>
+    <nav>
+      <button data-tab="status" class="on">Status</button>
+      <button data-tab="logs">Logs</button>
+      <button data-tab="firmware">Firmware</button>
+    </nav>
+    <div id="tab-status" class="tab">
+      <ul id="notices"></ul>
+      <div id="tiles" class="tiles"></div>
+      <details><summary>All details</summary><div id="groups"></div></details>
+    </div>
+    <div id="tab-logs" class="tab" hidden>
+      <p class="row">
+        <label><input type="checkbox" id="prev"> Previous boot</label>
+        <label><input type="checkbox" id="warn-only"> Warnings and errors only</label>
+        <button id="logs-refresh">Refresh</button>
+      </p>
+      <pre id="logs"></pre>
+    </div>
+    <div id="tab-firmware" class="tab" hidden>
+      <dl id="fw"></dl>
+      <p class="admin row">
+        <button id="ota-check">Install latest release</button>
+        <button id="reboot">Reboot</button>
+      </p>
+      <p class="admin row">Crash dump:
+        <a id="cd-get" href="/api/coredump" download>Download</a>
+        <button id="cd-del">Erase</button>
+      </p>
+      <p id="fw-msg" class="msg"></p>
+    </div>
+  </section>
+</main>
+</body>
+</html>

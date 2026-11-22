@@ -44,6 +44,13 @@ void lwc_sv_pause(lwc_sv_t *sv, int id);
  *  `*late_ms` (optional) gets how long ago it last beat. */
 int lwc_sv_expired(const lwc_sv_t *sv, uint32_t now_ms, uint32_t *late_ms);
 
+/** Abort on a stall only while the run of abnormal resets in a row is below
+ *  `limit`; from then on only log, so OTA can still bring a fix. */
+static inline bool lwc_sv_should_abort(uint32_t abnormal_run, uint32_t limit)
+{
+    return abnormal_run < limit;
+}
+
 #ifdef __cplusplus
 }
 #endif

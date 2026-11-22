@@ -110,6 +110,16 @@ void logbuf_print_previous(void)
     printf("---- previous boot, last lines ----\n%s---- end of previous boot ----\n", start);
 }
 
+bool logbuf_current(char *out, size_t cap)
+{
+    if (s_lock == NULL || xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) != pdTRUE) {
+        return false;
+    }
+    (void)lwc_logring_tail(&s_ring, out, cap);
+    xSemaphoreGive(s_lock);
+    return true;
+}
+
 const char *logbuf_previous(void)
 {
     return s_prev;

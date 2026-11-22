@@ -87,6 +87,19 @@ check result. After OTA updates, use `flash` (not `app-flash`) over USB.
   on their own (`OTA_CHECK` does) and accept `TEST_ABORT` / `TEST_STALL`.
   Release builds come only from `tools/ota_release.sh`.
 
+## Web UI (ADR-0010)
+
+HTTPS on port 443, LAN only, roles `admin` and `viewer`:
+
+```sh
+python tools/web_password.py <PORT> admin --generate   # random, saved to ~/.config/esp32p4-lora/web_admin_password
+python tools/web_password.py <PORT> viewer             # or type one (8-63 bytes)
+```
+
+Open `https://<gateway-ip>/`. The certificate is self-signed and made on the
+device: compare its SHA-256 with the one console `STATUS` prints (`WEB ...
+cert_sha256=`) before you accept it.
+
 ## Host tests
 
 ```sh

@@ -122,6 +122,25 @@ lwc_cmd_err_t lwc_cmd_parse(const char *line, size_t len, lwc_cmd_t *out)
         out->kind = LWC_CMD_WIFI_SET;
         return LWC_CMD_OK;
     }
+    if (word_is(&f[0], "WEB_PASS")) {
+        if (n != 3U) {
+            return LWC_CMD_ERR_SYNTAX;
+        }
+        if (word_is(&f[1], "admin")) {
+            out->role = 2U;
+        } else if (word_is(&f[1], "viewer")) {
+            out->role = 1U;
+        } else {
+            return LWC_CMD_ERR_SYNTAX;
+        }
+        const lwc_cmd_err_t e = hex_to_str(&f[2], out->pass, LWC_WIFI_PASS_MIN, LWC_WIFI_PASS_MAX);
+        if (e != LWC_CMD_OK) {
+            lwc_cmd_wipe(out);
+            return e;
+        }
+        out->kind = LWC_CMD_WEB_PASS;
+        return LWC_CMD_OK;
+    }
     if (word_is(&f[0], "WIFI_CLEAR")) {
         if (n != 1U) {
             return LWC_CMD_ERR_SYNTAX;

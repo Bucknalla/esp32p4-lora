@@ -52,6 +52,12 @@ CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT=y
 # (outside the repo), off otherwise (CI). An unsigned image cannot accept OTA.
 # CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES is not set
 
+# Management web UI over HTTPS (ADR-0010): on-device self-signed certificate.
+CONFIG_ESP_HTTPS_SERVER_ENABLE=y
+CONFIG_MBEDTLS_X509_CREATE_C=y
+CONFIG_MBEDTLS_X509_CRT_WRITE_C=y
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+
 # Wi-Fi: ESP32-C6 co-processor via ESP-Hosted (SDIO inside the module)
 CONFIG_SLAVE_IDF_TARGET_ESP32C6=y
 CONFIG_ESP_HOSTED_SDIO_HOST_INTERFACE=y
