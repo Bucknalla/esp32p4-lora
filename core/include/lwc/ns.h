@@ -54,6 +54,14 @@ typedef struct {
 #define LWC_NS_RETRANS_MAX 7U        /* ACKs again for one repeated confirmed uplink */
 #define LWC_NS_STATUS_PERIOD_S 86400U /* DevStatusReq at most once a day, with another downlink */
 
+/* ADR (after ChirpStack's default algorithm, EU868 DR0-DR5 at 125 kHz) */
+#define LWC_NS_ADR_HISTORY 20U     /* SNR history; a full one is needed before raising the power */
+#define LWC_NS_ADR_MARGIN10 100    /* installation margin, 0.1 dB */
+#define LWC_NS_ADR_MAX_DR 5U       /* SF7 */
+#define LWC_NS_ADR_MAX_POWER 5U    /* TXPower index: MaxEIRP - 10 dB (RP002 allows 7; kept low
+                                      for older regional parameter versions) */
+#define LWC_NS_CH_MASK 0x00FFU     /* channels 0-7: three defaults and the CFList */
+
 /* Per-device state that is not stored: it is rebuilt after a restart. */
 typedef struct {
     uint8_t retrans;     /* repeats of the last uplink seen */
@@ -63,6 +71,18 @@ typedef struct {
     uint8_t battery;     /* 0 external, 1..254, 255 unknown */
     int8_t margin;       /* dB */
     uint32_t status_s;
+    /* ADR */
+    int16_t snr10[LWC_NS_ADR_HISTORY];
+    uint8_t snr_n;       /* entries in snr10 */
+    uint8_t snr_pos;
+    uint8_t tx_power;    /* TXPower index the device uses, as far as known (0: max, the default) */
+    uint8_t power_cap;   /* 0: LWC_NS_ADR_MAX_POWER; else 1 + the highest index the device accepts */
+    uint8_t dr_cap;      /* 0: LWC_NS_ADR_MAX_DR; else 1 + the highest data rate the device accepts */
+    bool adr_pending;    /* LinkADRReq sent, answer not seen yet */
+    uint8_t pend_dr;
+    uint8_t pend_power;
+    uint8_t adr_wait;    /* uplinks to wait before asking again */
+    uint8_t adr_nacks;
 } lwc_ns_link_t;
 
 typedef struct {
@@ -146,6 +166,7 @@ lwc_ns_up_res_t lwc_ns_uplink(lwc_ns_t *ns, const uint8_t *frame, size_t n, lwc_
 typedef struct {
     int16_t snr10;   /* SNR in 0.1 dB */
     uint8_t sf;
+    uint16_t bw_khz; /* ADR runs at 125 kHz only */
     bool time_ok;    /* gps_s/gps_frac hold the uplink's GPS time */
     uint32_t gps_s;
     uint8_t gps_frac;
@@ -163,12 +184,15 @@ typedef struct {
     bool link_check;
     bool device_time;
     bool dev_status;
+    bool link_adr;   /* LinkADRReq to adr_dr / adr_power */
+    uint8_t adr_dr;
+    uint8_t adr_power;
 } lwc_ns_dl_t;
 
 /**
  * After LWC_NS_UP_OK or LWC_NS_UP_RETRANS: read the device's MAC commands
  * and decide whether it needs a downlink now (ACK for a confirmed uplink,
- * ADRACKReq, LinkCheckReq, DeviceTimeReq). If so, build it (MAC answers in
+ * ADRACKReq, LinkCheckReq, DeviceTimeReq, an ADR change). If so, build it (MAC answers in
  * FOpts, no FRMPayload), advance the downlink counter and return true: store
  * the counter before the frame goes out. A repeated uplink gets its ACK
  * again; its MAC commands are not read again.
@@ -178,6 +202,16 @@ bool lwc_ns_answer(lwc_ns_t *ns, lwc_ns_up_res_t res, const lwc_ns_uplink_t *up,
 
 /** Demodulation floor for an SF at 125 kHz, in 0.1 dB (SF7 -7.5 dB ... SF12 -20 dB). */
 int16_t lwc_ns_required_snr10(uint8_t sf);
+
+/**
+ * ADR step (as ChirpStack's default algorithm): from the best SNR of the
+ * history, the data rate in use and the TXPower index, the data rate and
+ * TXPower index to ask for. Steps are the spare margin over 3 dB, truncated
+ * toward zero. Spare margin raises the data rate first, then lowers the power;
+ * a shortfall raises the power only (the device lowers its data rate itself).
+ */
+void lwc_ns_adr(int16_t snr_max10, uint8_t dr, uint8_t tx_power, uint8_t max_dr, uint8_t max_power,
+                uint8_t *new_dr, uint8_t *new_power);
 
 /* ---- modes ---------------------------------------------------------------- */
 

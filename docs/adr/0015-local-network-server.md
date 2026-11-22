@@ -1,6 +1,7 @@
 # ADR-0015: Local network server and gateway modes (phase 3)
 
-- Status: accepted (slices 1–4 built; transmit off until approved; see Verification)
+- Status: accepted (slices 1–6 built and host-tested; transmit off until
+  approved; on-board test pending)
 - Date: 2026-11-22
 
 ## Context
@@ -56,7 +57,7 @@ mode was the Semtech UDP forwarder (ADR-0012), switched on or off.
 4. API and UI: mode selector and devices on the Config tab. Done.
 5. Class A answers: ACK, LinkCheck, DeviceTime, DevStatus, RX2 fallback.
    Done (`lwc/mac.h`, `lwc_ns_answer`).
-6. ADR (LinkADRReq).
+6. ADR (LinkADRReq). Done (`lwc_ns_adr`).
 Then integrations (phase 4).
 
 ## Consequences
@@ -135,3 +136,35 @@ Then integrations (phase 4).
   collision, duty-cycle budget), it tries RX2 once, in the radio task, so no
   result has to travel back to the server. Join-accepts use it too (RX2 at 6 s).
 
+## Notes from slice 6
+
+- **Algorithm**: ChirpStack's default ADR (`chirpstack/src/adr/default.rs`,
+  read for this slice). Take the best SNR of the last 20 uplinks with the ADR
+  bit (125 kHz only), subtract the demodulation floor of the data rate in use
+  and a 10 dB installation margin, divide by 3 dB and truncate toward zero.
+  Each spare step raises the data rate up to DR5 (SF7), then lowers the power
+  by one TXPower index (2 dB); a shortfall only raises the power, and only
+  once the history is full at the current power (so the power does not go up
+  and down). Faster and quieter can come from the first uplink. The device
+  lowers its own data rate when it hears nothing (ADRACKReq), so the server
+  never does.
+- **Differences from ChirpStack**:
+  - NbTrans stays 1 (ChirpStack sets it from packet loss).
+  - The history starts again when the power changes, instead of being
+    filtered by power.
+  - After a refused or unanswered LinkADRReq the server waits 20 uplinks
+    before asking again.
+  - TXPower index 5 at most (MaxEIRP - 10 dB). RP002 allows 7; 5 is kept for
+    devices on older regional parameter versions, and a device that refuses
+    an index gets a lower cap.
+- **Answers**: the next uplink must carry LinkADRAns. All three bits set: the
+  new power is recorded. A refusal lowers the cap for what was refused (power
+  or data rate). Downlinks set FCtrl.ADR. ChMask keeps channels 0-7 (the
+  three defaults and the CFList).
+- **Not sent**: DutyCycleReq, RXParamSetupReq, NewChannelReq and
+  RXTimingSetupReq. The channels and RX settings come in the join-accept and
+  do not change.
+- **After a restart** the ADR state is gone (RAM only): the server assumes
+  index 0 and relearns.
+- Every LinkADRReq is a transmission, so it is also dry run until
+  `CONFIG_GW_LNS_TX` is approved.

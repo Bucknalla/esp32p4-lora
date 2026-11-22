@@ -269,6 +269,7 @@ static bool answer(const radio_pkt_t *p, lwc_ns_up_res_t r, const lwc_ns_uplink_
     lwc_ns_rx_t rx = {
         .snr10 = (int16_t)lroundf(p->lsnr * 10.0f),
         .sf = p->sf,
+        .bw_khz = p->bw_khz,
         .now_s = (uint32_t)(esp_timer_get_time() / 1000000LL),
     };
     rx.time_ok = lwc_gps_from_unix_us(p->time_unix_us, &rx.gps_s, &rx.gps_frac);
@@ -277,8 +278,12 @@ static bool answer(const radio_pkt_t *p, lwc_ns_up_res_t r, const lwc_ns_uplink_
 
 static void describe(const lwc_ns_dl_t *dl, char *out, size_t cap)
 {
-    (void)snprintf(out, cap, "downlink FCnt %" PRIu32 "%s%s%s%s", dl->fcnt, dl->ack ? " ACK" : "",
-                   dl->link_check ? " LinkCheckAns" : "", dl->device_time ? " DeviceTimeAns" : "",
+    char adr[40] = "";
+    if (dl->link_adr) {
+        (void)snprintf(adr, sizeof adr, " LinkADRReq(DR%u, power -%u dB)", dl->adr_dr, 2U * dl->adr_power);
+    }
+    (void)snprintf(out, cap, "downlink FCnt %" PRIu32 "%s%s%s%s%s", dl->fcnt, dl->ack ? " ACK" : "",
+                   dl->link_check ? " LinkCheckAns" : "", dl->device_time ? " DeviceTimeAns" : "", adr,
                    dl->dev_status ? " DevStatusReq" : "");
 }
 
@@ -374,7 +379,7 @@ static bool handle(const radio_pkt_t *p)
             memset(&up, 0, sizeof up);
             xSemaphoreGive(s_lock);
             if (send) {
-                char what[96];
+                char what[128];
                 describe(&dl, what, sizeof what);
                 send_down(p, dl.frame, dl.len, LWC_NS_RX1_DELAY_US, what, eui);
             }
@@ -541,14 +546,15 @@ size_t lns_devices_json(char *out, size_t cap)
                     "%s{\"dev_eui\":\"%s\",\"join_eui\":\"%s\",\"name\":\"%s\",\"mac\":\"%s\","
                     "\"joined\":%s,\"answered\":%s,\"dev_addr\":\"%08" PRIX32 "\",\"fcnt_up\":%" PRIu32 ",\"uplinks\":%" PRIu32
                     ",\"seen_s\":%" PRId64 ",\"rssi\":%d,\"snr\":%.1f,\"sf\":%u,\"port\":%d,\"payload\":\"%s\","
-                    "\"battery\":%d,\"margin\":%d}",
+                    "\"battery\":%d,\"margin\":%d,\"tx_power\":%u,\"adr\":%s}",
                     first ? "" : ",", eui_str(d->dev_eui, dev), eui_str(d->join_eui, join), name,
                     d->mac == LWC_NS_MAC_1_0_4 ? "1.0.4" : "1.0.2", d->joined ? "true" : "false",
                     st->join_unanswered ? "false" : "true",
                     d->joined ? d->dev_addr : 0U, d->has_up ? d->fcnt_up : 0U, st->uplinks,
                     st->seen_us != 0 ? (now - st->seen_us) / 1000000LL : (int64_t)-1, st->rssi,
                     (double)st->snr, st->sf, st->has_port ? st->port : -1, pl,
-                    s_ns.link[i].has_status ? (int)s_ns.link[i].battery : -1, (int)s_ns.link[i].margin);
+                    s_ns.link[i].has_status ? (int)s_ns.link[i].battery : -1, (int)s_ns.link[i].margin,
+                    s_ns.link[i].tx_power, s_ns.link[i].adr_pending ? "\"pending\"" : "null");
             first = false;
         }
         xSemaphoreGive(s_lock);
