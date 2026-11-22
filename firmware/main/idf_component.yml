@@ -8,3 +8,5 @@ dependencies:
   espressif/esp_hosted: "^3.1.0"
   # QR code of the gateway EUI for TTN registration (web UI, ADR-0012)
   espressif/qrcode: "^0.2.0"
+  # lorawan-gateway-xxxxxx.local for the web UI (ADR-0013)
+  espressif/mdns: "^1.15.1"

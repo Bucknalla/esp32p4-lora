@@ -182,13 +182,23 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   $('#cd-del').addEventListener('click', () => { if (confirm('Erase the stored coredump?')) action('/api/coredump', 'DELETE'); });
   /* First-time setup: the page exists only while the setup access point is open. */
+  let setupHost = 'lorawan-gateway.local';
   fetch('/api/setup', { headers: H }).then((r) => (r.ok ? r.json() : null)).then((st) => {
     if (!st) return;
+    setupHost = st.host;
     $('#setup').hidden = false;
     $('#claim').hidden = st.admin_set;
     if (!st.admin_set) $('#login').hidden = true; /* nothing to log in to yet */
     for (const x of document.querySelectorAll('#claim input')) x.required = !st.admin_set;
-    $('#nets').replaceChildren(...st.networks.map((n) => { const o = document.createElement('option'); o.value = n; return o; }));
+    const opt = (value, text) => { const o = document.createElement('option'); o.value = value; o.textContent = text; return o; };
+    $('#ssid').replaceChildren(...st.networks.map((n) => opt(n, n)), opt('', 'Other network…'));
+    const other = () => {
+      const on = $('#ssid').value === '';
+      $('#ssid-other-row').hidden = !on;
+      $('#ssid-other-row input').required = on;
+    };
+    $('#ssid').addEventListener('change', other);
+    other();
   }).catch(() => {});
   $('#setup-form').addEventListener('submit', async (ev) => {
     ev.preventDefault();
@@ -205,7 +215,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const t = (await r.text()).trim();
       if (!r.ok) throw new Error(t);
       ev.target.reset();
-      msg.textContent = 'Saved. The gateway restarts and joins that network. Reconnect this device to your own network and open the gateway by its new address (see your router).';
+      msg.textContent = 'Saved. The gateway restarts and joins that network. Switch this device back to your own Wi-Fi, then open https://' + setupHost + '/ (or its address from your router).';
     } catch (e) { msg.textContent = e.message; msg.classList.add('bad'); }
   });
   const role = sessionStorage.getItem('role');

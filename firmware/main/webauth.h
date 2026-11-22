@@ -14,6 +14,11 @@
 #include "esp_err.h"
 #include "lwc/session.h"
 
+#define WEBAUTH_HOST_LEN 24
+
+/** "lorawan-gateway-xxxxxx" (last 3 MAC bytes): mDNS name and certificate CN/SAN. */
+void webauth_hostname(char out[WEBAUTH_HOST_LEN]);
+
 /** Load or create the key and certificate (DER). Pointers stay valid. */
 esp_err_t webauth_cert(const uint8_t **crt, size_t *crt_len, const uint8_t **key, size_t *key_len);
 

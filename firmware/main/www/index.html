@@ -17,8 +17,8 @@
   <section id="setup" hidden>
     <h2>Set up this gateway</h2>
     <form id="setup-form">
-      <label>Wi-Fi network <input name="ssid" list="nets" maxlength="32" required autocomplete="off"></label>
-      <datalist id="nets"></datalist>
+      <label>Wi-Fi network <select name="ssid" id="ssid"></select></label>
+      <label id="ssid-other-row" hidden>Network name <input name="ssid_other" maxlength="32" autocomplete="off"></label>
       <label>Wi-Fi password <input type="password" name="password" minlength="8" maxlength="63" required autocomplete="off"></label>
       <div id="claim" hidden>
         <label>New admin password <input type="password" name="admin" minlength="8" maxlength="63" autocomplete="new-password"></label>

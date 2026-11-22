@@ -48,6 +48,13 @@ static void wipe(void *p, size_t n)
     }
 }
 
+void webauth_hostname(char out[WEBAUTH_HOST_LEN])
+{
+    uint8_t mac[6] = {0};
+    (void)esp_read_mac(mac, ESP_MAC_BASE);
+    snprintf(out, WEBAUTH_HOST_LEN, "lorawan-gateway-%02x%02x%02x", mac[3], mac[4], mac[5]);
+}
+
 /* ---- certificate ---------------------------------------------------------- */
 
 static esp_err_t load_blob(nvs_handle_t h, const char *k, uint8_t **out, size_t *len)
@@ -99,20 +106,18 @@ static esp_err_t make_cert(void)
     uint8_t *buf = heap_caps_malloc(DER_MAX, MALLOC_CAP_DEFAULT);
     esp_err_t err = buf != NULL ? ESP_OK : ESP_ERR_NO_MEM;
 
-    uint8_t mac[6] = {0};
-    (void)esp_read_mac(mac, ESP_MAC_BASE);
-    char subject[96];
-    snprintf(subject, sizeof subject, "CN=lorawan-gateway-%02x%02x%02x,O=esp32p4-lora", mac[3], mac[4],
-             mac[5]);
+    char host[WEBAUTH_HOST_LEN], subject[96], dns[WEBAUTH_HOST_LEN + 6];
+    webauth_hostname(host);
+    snprintf(subject, sizeof subject, "CN=%s,O=esp32p4-lora", host);
+    snprintf(dns, sizeof dns, "%s.local", host);
     uint8_t serial[16];
     esp_fill_random(serial, sizeof serial);
     serial[0] &= 0x7FU; /* positive */
 
-    static const char dns[] = "lorawan-gateway.local";
     mbedtls_x509_san_list san = {0};
     san.node.type = MBEDTLS_X509_SAN_DNS_NAME;
     san.node.san.unstructured_name.p = (unsigned char *)dns;
-    san.node.san.unstructured_name.len = sizeof dns - 1U;
+    san.node.san.unstructured_name.len = strlen(dns);
 
     if (err == ESP_OK && mbedtls_pk_copy_from_psa(kid, &pk) != 0) {
         err = ESP_FAIL;

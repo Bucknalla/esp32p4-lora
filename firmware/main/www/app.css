@@ -76,3 +76,4 @@ details summary { cursor: pointer; color: var(--muted); margin: 10px 0 4px; font
 .hint { color: var(--muted); font-size: 13px; }
 #setup label.check { display: flex; gap: 8px; align-items: center; font: 14px system-ui, sans-serif; text-transform: none; letter-spacing: 0; color: var(--fg); }
 #setup label.check input { width: auto; }
+[hidden] { display: none !important; }

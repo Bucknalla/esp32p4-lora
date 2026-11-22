@@ -109,6 +109,16 @@ dependencies:
     - esp32p4
     - esp32s31
     version: 1.1.0
+  espressif/mdns:
+    component_hash: 2fa43caa78cc170842255bc7bf71f306bc815cae12e9496bfb12372423019ac7
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.15.1
   espressif/qrcode:
     component_hash: 31e70991ce22f28d73a4386417fc9c0993f61e1aab1832474fd9e3db8da9dcbd
     dependencies: []
@@ -138,8 +148,9 @@ direct_dependencies:
 - espressif/esp_hosted
 - espressif/esp_wifi_remote
 - espressif/ip101
+- espressif/mdns
 - espressif/qrcode
 - idf
-manifest_hash: ed27281e961e7e09f33168abb6ae298111d837e1c87eacba203139cb4a1d6556
+manifest_hash: 4fa53e197236294ed0235a656f630075e6ce506c4c5c9a24108224ed6442a267
 target: esp32p4
 version: 3.0.0

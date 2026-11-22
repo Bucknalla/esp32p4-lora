@@ -47,8 +47,10 @@ RTS-on/DTR-off state for a moment, which resets the board.
 
 A gateway with no Wi-Fi credentials opens the open access point
 `lorawan-gateway-XXXXXX` for 15 minutes after power-on (ADR-0011). Join it
-with a phone, open `https://192.168.4.1/`, pick the network, enter its
-password and a new admin password. Over USB instead:
+with a phone: the sign-in sheet opens the secure setup page (captive portal,
+ADR-0013); otherwise open `https://192.168.4.1/`. Pick the network, enter its
+password and a new admin password. Afterwards the gateway answers at
+`https://lorawan-gateway-xxxxxx.local/` (mDNS). Over USB instead:
 
 ```sh
 python tools/provision_wifi.py <PORT> "<SSID>"   # asks for the password, writes NVS
