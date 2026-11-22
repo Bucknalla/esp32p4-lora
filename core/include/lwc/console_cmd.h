@@ -4,6 +4,8 @@
  *   WIFI_SET <ssid-hex> <password-hex>
  *   WIFI_CLEAR
  *   TX_TEST          one low-power test frame (bring-up)
+ *   OTA_CHECK        check the update URL now (install if newer)
+ *   STATUS           firmware version, slot, OTA state, IP
  *
  * Values are hex-encoded so any byte (spaces, quotes) survives the line format
  * and the console never needs an escaping rule. Input is untrusted: every
@@ -28,6 +30,8 @@ typedef enum {
     LWC_CMD_WIFI_SET,
     LWC_CMD_WIFI_CLEAR,
     LWC_CMD_TX_TEST,
+    LWC_CMD_OTA_CHECK,
+    LWC_CMD_STATUS,
 } lwc_cmd_kind_t;
 
 typedef enum {

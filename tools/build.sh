@@ -3,6 +3,12 @@
 #   tools/build.sh rev3 [idf.py args...]     e.g. tools/build.sh rev3 -p /dev/cu.usbmodemX flash
 #   tools/build.sh rev1
 # Needs ESP-IDF exported (. $IDF_PATH/export.sh) at the version in .esp-idf-version.
+#
+# Signing (ADR-0008): when the OTA signing key exists, the app is signed during
+# the build. The key never lives in the repo:
+#   OTA_SIGNING_KEY (default ~/.config/esp32p4-lora/ota_signing_key.pem)
+# Create it once with tools/ota_keygen.sh. Without it the build is unsigned:
+# fine for CI, but an unsigned image on the board refuses every OTA.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -20,12 +26,33 @@ if [ "$have" != "$want" ]; then
     exit 1
 fi
 
-build_dir="$root/build/fw-$rev"
+build_dir="${GW_BUILD_DIR:-$root/build/fw-$rev}"
+mkdir -p "$build_dir"
+
+key="${OTA_SIGNING_KEY:-$HOME/.config/esp32p4-lora/ota_signing_key.pem}"
+frag="$build_dir/sdkconfig.signing"
+if [ -f "$key" ]; then
+    printf 'CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES=y\nCONFIG_SECURE_BOOT_SIGNING_KEY="%s"\n' "$key" >"$frag"
+else
+    printf '# CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES is not set\n' >"$frag"
+    echo "warning: no signing key at $key: building UNSIGNED (cannot accept OTA)" >&2
+fi
+# An existing sdkconfig wins over defaults: start it again if signing changed.
+if [ -f "$build_dir/sdkconfig" ]; then
+    while IFS= read -r line; do
+        if ! grep -qxF "$line" "$build_dir/sdkconfig"; then
+            echo "signing setting changed: regenerating $build_dir/sdkconfig" >&2
+            rm -f "$build_dir/sdkconfig"
+            break
+        fi
+    done <"$frag"
+fi
+
 args=("$@")
 [ ${#args[@]} -eq 0 ] && args=(build)
 
 exec idf.py -C "$root/firmware" -B "$build_dir" \
     -DIDF_TARGET=esp32p4 \
     -DSDKCONFIG="$build_dir/sdkconfig" \
-    -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.$rev" \
+    -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.$rev;$frag" \
     "${args[@]}"

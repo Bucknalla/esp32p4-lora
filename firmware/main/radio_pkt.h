@@ -28,6 +28,7 @@ typedef struct {
     atomic_uint rxok;    /* CRC ok */
     atomic_uint dropped; /* queue full */
     atomic_uint restarts;
+    atomic_uint starts; /* successful lgw_start calls */
 } radio_stats_t;
 
 extern radio_stats_t g_radio_stats;

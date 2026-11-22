@@ -11,4 +11,9 @@ if(NOT "${IDF_VERSION_MAJOR}.${IDF_VERSION_MINOR}.${IDF_VERSION_PATCH}" STREQUAL
 endif()
 
 idf_build_set_property(MINIMAL_BUILD ON)
+
+# Release builds set the version (tools/ota_release.sh); otherwise git describe.
+if(DEFINED ENV{GW_FW_VERSION})
+    set(PROJECT_VER "$ENV{GW_FW_VERSION}")
+endif()
 project(lorawan_gateway)

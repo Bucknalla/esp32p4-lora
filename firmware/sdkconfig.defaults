@@ -37,6 +37,19 @@ CONFIG_ETH_USE_ESP32_EMAC=y
 # Declined 2026-11-21 until secure boot is decided.
 # CONFIG_NVS_ENCRYPTION is not set
 
+# OTA and rollback (ADR-0008). No eFuse is burned by any of these.
+# Rollback lives in the bootloader: it arrives only with a USB flash.
+# Never add CONFIG_BOOTLOADER_APP_ANTI_ROLLBACK: it burns eFuses.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+# OTA images must be signed (Secure Boot v2 RSA-3072 signature block) by the
+# key in the running image. Not checked at boot; hardware secure boot is off.
+CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT=y
+CONFIG_SECURE_SIGNED_APPS_RSA_SCHEME=y
+CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT=y
+# Signing during the build is set by tools/build.sh: on when the key exists
+# (outside the repo), off otherwise (CI). An unsigned image cannot accept OTA.
+# CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES is not set
+
 # Wi-Fi: ESP32-C6 co-processor via ESP-Hosted (SDIO inside the module)
 CONFIG_SLAVE_IDF_TARGET_ESP32C6=y
 CONFIG_ESP_HOSTED_SDIO_HOST_INTERFACE=y

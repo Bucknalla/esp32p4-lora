@@ -4,6 +4,7 @@
  * 3.1.0 examples/ota/coprocessor_ota (partition method).
  */
 #include "c6_update.h"
+#include "ota.h"
 
 #include <inttypes.h>
 #include <string.h>
@@ -207,6 +208,13 @@ esp_err_t c6_update_check(void)
             tries_set(0);
             ESP_LOGI(TAG, "C6 update confirmed");
         }
+        return ESP_OK;
+    }
+
+    /* The C6 update ends in a restart, and a restart while a new P4 image is
+     * pending verify rolls that image back (ADR-0008). */
+    if (ota_pending_verify()) {
+        ESP_LOGW(TAG, "C6 version differs, but this image is pending verify: C6 update skipped");
         return ESP_OK;
     }
 

@@ -225,6 +225,7 @@ static void radio_task(void *arg)
             const TickType_t t0 = xTaskGetTickCount();
             if (lgw_start() == LGW_HAL_SUCCESS) {
                 (void)conc_tx_after_start();
+                atomic_fetch_add(&g_radio_stats.starts, 1U);
                 ESP_LOGI(TAG, "lgw_start OK in %" PRIu32 " ms; receiving on EU868",
                          (uint32_t)((xTaskGetTickCount() - t0) * portTICK_PERIOD_MS));
                 ESP_LOGI(TAG, "stack high-water mark: %u bytes free of %u",

@@ -560,12 +560,12 @@ uint32_t lwc_lora_airtime_us(uint8_t sf, uint16_t bw_khz, uint8_t cr_denom, uint
     /* Symbol time in ns: 2^SF / BW. Exact for these bandwidths. */
     const uint64_t tsym_ns = ((uint64_t)1U << sf) * 1000000U / bw_khz;
     const int de = tsym_ns >= 16000000U ? 1 : 0;
-    const int64_t num = 8 * (int64_t)size - 4 * (int64_t)sf + 28 + (crc ? 16 : 0) -
+    const int64_t bits = 8 * (int64_t)size - 4 * (int64_t)sf + 28 + (crc ? 16 : 0) -
                         (implicit_header ? 20 : 0);
     const int64_t den = 4 * ((int64_t)sf - 2 * de);
     int64_t blocks = 0;
-    if (num > 0) {
-        blocks = (num + den - 1) / den;
+    if (bits > 0) {
+        blocks = (bits + den - 1) / den;
     }
     const uint64_t payload_sym = 8U + (uint64_t)blocks * cr_denom;
     /* Preamble: (n + 4.25) symbols = (4n + 17) / 4 symbols. */

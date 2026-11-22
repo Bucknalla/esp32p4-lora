@@ -1,6 +1,7 @@
 /*
- * Phase 1 bring-up: identity, header I2C probe, Ethernet with DHCP.
- * No concentrator access yet; the SX1302 HAL port comes next.
+ * Start-up order: identity and boot report, NVS, console, concentrator,
+ * C6 check, Wi-Fi, update task, packet
+ * forwarder, Ethernet, then a heartbeat.
  */
 #include <inttypes.h>
 
@@ -22,9 +23,14 @@
 #include "freertos/task.h"
 #include "lwc/frame.h"
 #include "nvs_flash.h"
+#include "ota.h"
 #include "sdkconfig.h"
 
 static const char *TAG = "main";
+
+#ifndef CONFIG_GW_OTA_TEST_HANG_BEFORE_START
+#define CONFIG_GW_OTA_TEST_HANG_BEFORE_START 0
+#endif
 
 static QueueHandle_t s_rx_queue;
 
@@ -70,6 +76,8 @@ void app_main(void)
     board_log_identity();
 
     ESP_ERROR_CHECK(init_nvs());
+    ota_boot_report();
+    ota_health_start();
 
     esp_err_t err = console_start();
     if (err != ESP_OK) {
@@ -132,6 +140,19 @@ void app_main(void)
     err = wifi_start();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Wi-Fi start: %s", esp_err_to_name(err));
+    }
+
+#if CONFIG_GW_OTA_TEST_HANG_BEFORE_START
+    ESP_LOGW(TAG, "TEST BUILD: start-up stops here; the health check must roll back");
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+#endif
+
+    /* Before anything that can fail late: this is the recovery path. */
+    err = ota_start();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "OTA server: %s", esp_err_to_name(err));
     }
 
     if (s_rx_queue != NULL) {
