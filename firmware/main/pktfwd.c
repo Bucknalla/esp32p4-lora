@@ -65,6 +65,7 @@ static lwc_rxpk_t s_pk[RX_PER_PUSH];
 static uint32_t s_push_sent, s_push_acked, s_rxfw, s_dwnb;
 static uint16_t s_push_token, s_pull_token;
 static int64_t s_last_pull_ack_s;
+static atomic_bool s_link_up; /* read by other tasks (status page) */
 
 static int64_t now_s(void)
 {
@@ -320,6 +321,7 @@ static void handle_downstream(void)
                     ESP_LOGI(TAG, "server answered PULL_DATA: link up");
                 }
                 s_last_pull_ack_s = now_s();
+                atomic_store(&s_link_up, true);
             }
             break;
         case LWC_GWMP_PULL_RESP:
@@ -405,9 +407,15 @@ static void pktfwd_task(void *arg)
                 ok = false;
             }
         }
+        atomic_store(&s_link_up, false);
         close_socket();
         vTaskDelay(pdMS_TO_TICKS(backoff));
     }
+}
+
+bool pktfwd_link_up(void)
+{
+    return atomic_load(&s_link_up);
 }
 
 esp_err_t pktfwd_start(QueueHandle_t rx_queue)

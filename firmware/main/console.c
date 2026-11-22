@@ -12,6 +12,7 @@
 #include "freertos/task.h"
 #include "lwc/console_cmd.h"
 #include "nvs.h"
+#include "ota.h"
 #include "sdkconfig.h"
 #include "radio_tx.h"
 #include "wifi.h"
@@ -110,6 +111,16 @@ static void handle_line(char *line, size_t len)
         lwc_cmd_wipe(&cmd);
         return; /* no restart */
     }
+    case LWC_CMD_OTA_CHECK:
+        ota_check_now();
+        REPLY("OK OTA_CHECK (result in the log)");
+        return;
+    case LWC_CMD_STATUS: {
+        char line_out[256];
+        ota_status_line(line_out, sizeof line_out);
+        REPLY("STATUS %s", line_out);
+        return;
+    }
     case LWC_CMD_WIFI_CLEAR:
         err = clear_wifi();
         if (err == ESP_OK) {
@@ -125,6 +136,9 @@ static void handle_line(char *line, size_t len)
     if (err != ESP_OK) {
         REPLY("ERR %s", esp_err_to_name(err));
         return;
+    }
+    if (ota_pending_verify()) {
+        ESP_LOGW(TAG, "restart while the image is pending verify: the bootloader rolls back");
     }
     fflush(stdout);
     vTaskDelay(pdMS_TO_TICKS(RESTART_DELAY_MS));

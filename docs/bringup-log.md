@@ -176,3 +176,31 @@ lgw_stop OK; HAL task stack: 15516 of 24576 bytes free
   both on (no change) does not reset the board, on open or on close. Tools now
   do that; `capture_log.py` resets only on purpose (`--no-reset` to watch).
 - TX: see ADR-0007 for the test frame trace and limits.
+
+### Update: OTA signing and rollback (ADR-0008), first as push
+
+- One USB flash brought the rollback bootloader (0x5B30 bytes, 59 % free)
+  and the first signed image (RSA-3072 signature block, 1 MB app).
+- Boot: `reset reason power-on; running ota_0 (valid)`; OTA server on port
+  8032 with no token: requests refused until `OTA_TOKEN` was set.
+- Upload over Wi-Fi: ~70 KB/s (1 MB in 15 s). During one upload the radio
+  received a packet, a `stat` was acked by TTN (1/1) and radio restarts
+  stayed 0.
+- All tests in ADR-0008 passed. A reset from `capture_log.py` (EN pin) while
+  an image is pending verify rolls it back, so watch a new image with
+  `--no-reset`.
+
+### Update: OTA changed to esp_https_ota pull from GitHub releases
+
+- First host: public files-only repo `Bucknalla/esp32p4-lora-firmware`
+  (source then private); the gateway polls
+  `releases/latest/download/lorawan_gateway-rev3.bin`. Later the source repo
+  went public and became the host (see below). GitHub answers
+  with two redirects (to `release-assets.githubusercontent.com`);
+  esp_https_ota follows them over TLS with the IDF CA bundle.
+- The pull build went onto the board through the old push endpoint one last
+  time; since then, updates come only from releases.
+- Header check ~3.5 s; full 1.2 MB download and flash ~18 s.
+- All pull tests in ADR-0008 passed. Test releases were deleted afterwards;
+  v0.2.0-dev.1 and -dev.2 (dirty-tree builds) remain, dev.2 is latest and
+  runs on the board.

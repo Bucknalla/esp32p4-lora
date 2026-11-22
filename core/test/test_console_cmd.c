@@ -71,6 +71,10 @@ static void test_other(void)
     CHECK(parse("WIFI_CLEAR x", &c) == LWC_CMD_ERR_SYNTAX);
     CHECK(parse("TX_TEST\r\n", &c) == LWC_CMD_OK && c.kind == LWC_CMD_TX_TEST);
     CHECK(parse("TX_TEST 1", &c) == LWC_CMD_ERR_SYNTAX);
+    CHECK(parse("STATUS\r\n", &c) == LWC_CMD_OK && c.kind == LWC_CMD_STATUS);
+    CHECK(parse("STATUS x", &c) == LWC_CMD_ERR_SYNTAX);
+    CHECK(parse("OTA_CHECK", &c) == LWC_CMD_OK && c.kind == LWC_CMD_OTA_CHECK);
+    CHECK(parse("OTA_CHECK now", &c) == LWC_CMD_ERR_SYNTAX);
     CHECK(parse("", &c) == LWC_CMD_OK && c.kind == LWC_CMD_NONE);
     CHECK(parse("   \r\n", &c) == LWC_CMD_OK && c.kind == LWC_CMD_NONE);
     CHECK(parse("wifi_set 41 3132333435363738", &c) == LWC_CMD_ERR_UNKNOWN);

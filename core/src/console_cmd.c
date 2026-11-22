@@ -136,6 +136,20 @@ lwc_cmd_err_t lwc_cmd_parse(const char *line, size_t len, lwc_cmd_t *out)
         out->kind = LWC_CMD_TX_TEST;
         return LWC_CMD_OK;
     }
+    if (word_is(&f[0], "OTA_CHECK")) {
+        if (n != 1U) {
+            return LWC_CMD_ERR_SYNTAX;
+        }
+        out->kind = LWC_CMD_OTA_CHECK;
+        return LWC_CMD_OK;
+    }
+    if (word_is(&f[0], "STATUS")) {
+        if (n != 1U) {
+            return LWC_CMD_ERR_SYNTAX;
+        }
+        out->kind = LWC_CMD_STATUS;
+        return LWC_CMD_OK;
+    }
     return LWC_CMD_ERR_UNKNOWN;
 }
 

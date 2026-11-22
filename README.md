@@ -50,6 +50,32 @@ python tools/provision_wifi.py <PORT> "<SSID>"   # asks for the password, writes
 tools/flash_c6_image.sh <PORT>                    # C6 firmware via the P4 (see c6-firmware/)
 ```
 
+## Firmware updates over the network (ADR-0008)
+
+Gateways pull signed images from this repo's
+[latest release](https://github.com/Bucknalla/esp32p4-lora/releases/latest)
+every 15 minutes, or at once on the console command `OTA_CHECK`.
+
+One-time setup on the build machine, then a USB flash of a signed build:
+
+```sh
+tools/ota_keygen.sh                          # ~/.config/esp32p4-lora/ota_signing_key.pem: back it up
+tools/build.sh rev3 -p <PORT> flash          # signed, because the key now exists
+```
+
+Each release after that (gateways update within one poll interval):
+
+```sh
+tools/ota_release.sh v0.3.0                  # clean, pushed tree; builds rev3 + rev1, signs, publishes
+```
+
+The gateway installs only images signed with the key. A new image must pass
+its health check within 300 s (IP up, update URL reached, radio started) or
+the bootloader boots the previous one, and that build is not tried again. A
+reset in that window also rolls back: watch with `capture_log.py --no-reset`.
+The console command `STATUS` prints version, slot, state, IP and the last
+check result. After OTA updates, use `flash` (not `app-flash`) over USB.
+
 ## Host tests
 
 ```sh
