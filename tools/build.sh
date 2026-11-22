@@ -37,11 +37,19 @@ else
     printf '# CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES is not set\n' >"$frag"
     echo "warning: no signing key at $key: building UNSIGNED (cannot accept OTA)" >&2
 fi
-# An existing sdkconfig wins over defaults: start it again if signing changed.
+# Dev builds (default): no automatic install of the latest release (a USB-
+# flashed build would be replaced within a minute) and console test commands.
+# Release builds (GW_RELEASE=1, tools/ota_release.sh): the opposite.
+if [ "${GW_RELEASE:-0}" = 1 ]; then
+    printf 'CONFIG_GW_OTA_AUTO_INSTALL=y\n# CONFIG_GW_TEST_COMMANDS is not set\n' >>"$frag"
+else
+    printf '# CONFIG_GW_OTA_AUTO_INSTALL is not set\nCONFIG_GW_TEST_COMMANDS=y\n' >>"$frag"
+fi
+# An existing sdkconfig wins over defaults: start it again if the fragment changed.
 if [ -f "$build_dir/sdkconfig" ]; then
     while IFS= read -r line; do
         if ! grep -qxF "$line" "$build_dir/sdkconfig"; then
-            echo "signing setting changed: regenerating $build_dir/sdkconfig" >&2
+            echo "signing/release setting changed: regenerating $build_dir/sdkconfig" >&2
             rm -f "$build_dir/sdkconfig"
             break
         fi

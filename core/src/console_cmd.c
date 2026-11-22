@@ -143,12 +143,22 @@ lwc_cmd_err_t lwc_cmd_parse(const char *line, size_t len, lwc_cmd_t *out)
         out->kind = LWC_CMD_OTA_CHECK;
         return LWC_CMD_OK;
     }
-    if (word_is(&f[0], "STATUS")) {
-        if (n != 1U) {
-            return LWC_CMD_ERR_SYNTAX;
+    static const struct {
+        const char *word;
+        lwc_cmd_kind_t kind;
+    } bare[] = {
+        {"STATUS", LWC_CMD_STATUS},
+        {"TEST_ABORT", LWC_CMD_TEST_ABORT},
+        {"TEST_STALL", LWC_CMD_TEST_STALL},
+    };
+    for (size_t i = 0; i < sizeof bare / sizeof bare[0]; i++) {
+        if (word_is(&f[0], bare[i].word)) {
+            if (n != 1U) {
+                return LWC_CMD_ERR_SYNTAX;
+            }
+            out->kind = bare[i].kind;
+            return LWC_CMD_OK;
         }
-        out->kind = LWC_CMD_STATUS;
-        return LWC_CMD_OK;
     }
     return LWC_CMD_ERR_UNKNOWN;
 }

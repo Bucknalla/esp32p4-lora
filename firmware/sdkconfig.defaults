@@ -16,7 +16,9 @@ CONFIG_SPIRAM_SPEED_200M=y
 # RTOS
 CONFIG_FREERTOS_HZ=1000
 
-# Recovery and diagnostics
+# Recovery and diagnostics (ADR-0009)
+# Log ring in PSRAM .noinit: kept across software resets and panics.
+CONFIG_SPIRAM_ALLOW_NOINIT_SEG_EXTERNAL_MEMORY=y
 CONFIG_ESP_TASK_WDT_EN=y
 CONFIG_ESP_TASK_WDT_PANIC=y
 CONFIG_ESP_BROWNOUT_DET=y

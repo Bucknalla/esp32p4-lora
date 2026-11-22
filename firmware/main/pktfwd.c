@@ -28,6 +28,7 @@
 #include "eth.h"
 #include "freertos/task.h"
 #include "lwc/gwmp.h"
+#include "sv.h"
 #include "lwc/txpk.h"
 #include "radio_tx.h"
 #include "lwip/netdb.h"
@@ -334,13 +335,17 @@ static void handle_downstream(void)
     }
 }
 
+/* Watchdog budget: covers a DNS lookup that times out (getaddrinfo). */
+#define SV_BUDGET_MS 90000
+
 static void pktfwd_task(void *arg)
 {
     (void)arg;
     uint32_t backoff = BACKOFF_MIN_MS;
+    const sv_id_t sv = sv_register("pktfwd", SV_BUDGET_MS);
 
     while (!have_ip()) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        sv_delay(sv, 1000);
     }
     esp_sntp_config_t sntp = ESP_NETIF_SNTP_DEFAULT_CONFIG(CONFIG_GW_PKTFWD_NTP_SERVER);
     if (esp_netif_sntp_init(&sntp) != ESP_OK) {
@@ -348,11 +353,12 @@ static void pktfwd_task(void *arg)
     }
 
     for (;;) {
+        sv_beat(sv);
         while (!have_ip()) {
-            vTaskDelay(pdMS_TO_TICKS(1000));
+            sv_delay(sv, 1000);
         }
         if (open_socket() != ESP_OK) {
-            vTaskDelay(pdMS_TO_TICKS(backoff));
+            sv_delay(sv, backoff);
             backoff = (backoff * 2U > BACKOFF_MAX_MS) ? BACKOFF_MAX_MS : backoff * 2U;
             continue;
         }
@@ -364,6 +370,7 @@ static void pktfwd_task(void *arg)
         bool ok = true;
 
         while (ok) {
+            sv_beat(sv);
             /* Uplinks: wait briefly for the first, then take what is queued. */
             size_t n = 0;
             if (xQueueReceive(s_queue, &s_items[0], pdMS_TO_TICKS(RECV_TIMEOUT_MS)) == pdTRUE) {
@@ -409,7 +416,7 @@ static void pktfwd_task(void *arg)
         }
         atomic_store(&s_link_up, false);
         close_socket();
-        vTaskDelay(pdMS_TO_TICKS(backoff));
+        sv_delay(sv, backoff);
     }
 }
 

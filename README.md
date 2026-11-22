@@ -76,6 +76,17 @@ reset in that window also rolls back: watch with `capture_log.py --no-reset`.
 The console command `STATUS` prints version, slot, state, IP and the last
 check result. After OTA updates, use `flash` (not `app-flash`) over USB.
 
+## Faults, watchdog and logs (ADR-0009)
+
+- Every long-lived task has a software watchdog budget; a stall aborts with
+  a coredump (`idf.py -C firmware -B build/fw-rev3 -p <PORT> coredump-info`).
+- The next boot logs why the previous one ended, the reset counters and,
+  after a crash, the previous boot's last log lines (kept in PSRAM).
+- Console `STATUS` prints version, slot, OTA state, links and fault counters.
+- Builds from `tools/build.sh` are dev builds: they do not install releases
+  on their own (`OTA_CHECK` does) and accept `TEST_ABORT` / `TEST_STALL`.
+  Release builds come only from `tools/ota_release.sh`.
+
 ## Host tests
 
 ```sh

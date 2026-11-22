@@ -38,11 +38,13 @@
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "eth.h"
+#include "fault.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "pktfwd.h"
 #include "radio_pkt.h"
 #include "sdkconfig.h"
+#include "sv.h"
 #include "wifi.h"
 
 static const char *TAG = "ota";
@@ -53,6 +55,9 @@ static const char *TAG = "ota";
 #endif
 #ifndef CONFIG_GW_OTA_REQUIRE_RADIO
 #define CONFIG_GW_OTA_REQUIRE_RADIO 0
+#endif
+#ifndef CONFIG_GW_OTA_AUTO_INSTALL
+#define CONFIG_GW_OTA_AUTO_INSTALL 0
 #endif
 #ifndef CONFIG_GW_OTA_HEALTH_REQUIRE_SERVER
 #define CONFIG_GW_OTA_HEALTH_REQUIRE_SERVER 0
@@ -69,8 +74,14 @@ static const char *TAG = "ota";
 #define HTTP_TX_BUF 2048 /* signed redirect URLs are long */
 #define RESTART_DELAY_MS 500
 #define SHA_LEN 32
+#define WAIT_SLICE_MS 10000
+/* Watchdog budget: a check is up to three TLS connects (two redirects) with
+ * a 15 s timeout each, plus header reads; downloads beat per chunk. */
+#define SV_BUDGET_MS 180000
 
 static TaskHandle_t s_ota_task;
+static sv_id_t s_sv = -1;
+static atomic_bool s_forced; /* OTA_CHECK: install even with auto-install off */
 static atomic_bool s_health_ok; /* this boot's image passed or was already valid */
 static atomic_bool s_server_ok; /* a check reached the update server this boot */
 static uint8_t s_failed_sha[SHA_LEN]; /* image that failed to install this boot */
@@ -246,8 +257,10 @@ static void check_once(bool may_install)
         skip = "rolled back before";
     } else if (s_have_failed && memcmp(nd.app_elf_sha256, s_failed_sha, SHA_LEN) == 0) {
         skip = "failed before";
-    } else if (!may_install) {
+    } else if (ota_pending_verify()) {
         skip = "running image pending verify";
+    } else if (!may_install) {
+        skip = "update available (OTA_CHECK installs)";
     }
     if (skip != NULL) {
         ESP_LOGI(TAG, "check: remote %.32s (%s): %s", nd.version, sha, skip);
@@ -259,6 +272,7 @@ static void check_once(bool may_install)
     ESP_LOGW(TAG, "installing %.32s (%s) from %s", nd.version, sha, CONFIG_GW_OTA_URL);
     const int64_t t0 = esp_timer_get_time();
     do {
+        sv_beat(s_sv);
         err = esp_https_ota_perform(h);
     } while (err == ESP_ERR_HTTPS_OTA_IN_PROGRESS);
 
@@ -281,29 +295,47 @@ static void check_once(bool may_install)
     }
     ESP_LOGW(TAG, "installed %.32s in %" PRId64 " ms; restarting (pending verify)", nd.version,
              (esp_timer_get_time() - t0) / 1000);
-    vTaskDelay(pdMS_TO_TICKS(RESTART_DELAY_MS));
-    esp_restart();
+    char why[48];
+    snprintf(why, sizeof why, "OTA installed %.24s", nd.version);
+    fault_restart(why);
+}
+
+/* Wait up to `ms` for OTA_CHECK, beating the watchdog. True when notified. */
+static bool wait_notify(uint32_t ms)
+{
+    while (ms > 0U) {
+        const uint32_t step = ms > WAIT_SLICE_MS ? WAIT_SLICE_MS : ms;
+        if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(step)) != 0U) {
+            sv_beat(s_sv);
+            return true;
+        }
+        ms -= step;
+        sv_beat(s_sv);
+    }
+    return false;
 }
 
 static void ota_task(void *arg)
 {
     (void)arg;
+    s_sv = sv_register("ota", SV_BUDGET_MS);
     for (;;) {
         while (!(wifi_has_ip() || eth_has_ip())) {
-            (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000));
+            (void)wait_notify(1000);
         }
-        check_once(!ota_pending_verify());
+        const bool forced = atomic_exchange(&s_forced, false);
+        check_once(!ota_pending_verify() && (CONFIG_GW_OTA_AUTO_INSTALL || forced));
         /* While pending verify, retry until the server has been reached once:
          * the health check needs it. */
         const bool fast = ota_pending_verify() && !atomic_load(&s_server_ok);
-        (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(fast ? PENDING_RETRY_MS
-                                                           : CONFIG_GW_OTA_POLL_MIN * 60000U));
+        (void)wait_notify(fast ? PENDING_RETRY_MS : CONFIG_GW_OTA_POLL_MIN * 60000U);
     }
 }
 
 void ota_check_now(void)
 {
     if (s_ota_task != NULL) {
+        atomic_store(&s_forced, true);
         xTaskNotifyGive(s_ota_task);
     }
 }
@@ -340,6 +372,7 @@ static void health_task(void *arg)
         if (esp_timer_get_time() / 1000000 >= deadline_s) {
             ESP_LOGE(TAG, "health check failed (net %d, update server %d, radio %d): rolling back",
                      net, server, radio);
+            fault_note("OTA health check failed: rollback");
             vTaskDelay(pdMS_TO_TICKS(200)); /* let the log out */
             (void)esp_ota_mark_app_invalid_rollback_and_reboot();
             ESP_LOGE(TAG, "rollback not possible: restarting");
@@ -363,6 +396,7 @@ void ota_health_start(void)
     if (ok != pdPASS) {
         /* Nothing would watch this image: do not trust it. */
         ESP_LOGE(TAG, "health task not created: rolling back");
+        fault_note("OTA health task not created: rollback");
         (void)esp_ota_mark_app_invalid_rollback_and_reboot();
         esp_restart();
     }

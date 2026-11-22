@@ -24,6 +24,9 @@
 #include "lwc/frame.h"
 #include "nvs_flash.h"
 #include "ota.h"
+#include "fault.h"
+#include "logbuf.h"
+#include "sv.h"
 #include "sdkconfig.h"
 
 static const char *TAG = "main";
@@ -35,6 +38,7 @@ static const char *TAG = "main";
 static QueueHandle_t s_rx_queue;
 
 #define HEARTBEAT_PERIOD_MS 10000
+#define SV_BUDGET_MS 30000
 
 /* With NVS encryption (HMAC scheme, ADR-0006) the first nvs_flash_init burns
  * the HMAC key into eFuse BLOCK_KEY<CONFIG_NVS_SEC_HMAC_EFUSE_KEY_ID>. A
@@ -73,11 +77,22 @@ static void core_selftest(void)
 
 void app_main(void)
 {
+    logbuf_init(); /* first: every later log line goes to the PSRAM ring too */
     board_log_identity();
 
     ESP_ERROR_CHECK(init_nvs());
+    fault_boot();
+    if (fault_last_reset_abnormal()) {
+        logbuf_print_previous();
+    }
     ota_boot_report();
     ota_health_start();
+    {
+        const esp_err_t e = sv_start();
+        if (e != ESP_OK) {
+            ESP_LOGE(TAG, "supervisor: %s", esp_err_to_name(e));
+        }
+    }
 
     esp_err_t err = console_start();
     if (err != ESP_OK) {
@@ -167,7 +182,9 @@ void app_main(void)
         ESP_LOGE(TAG, "Ethernet start: %s", esp_err_to_name(err));
     }
 
+    const sv_id_t sv = sv_register("main", SV_BUDGET_MS);
     for (;;) {
+        sv_beat(sv);
         ESP_LOGI(TAG,
                  "heartbeat: wifi ip=%d, eth link=%d ip=%d, internal free %u (min %u), PSRAM free %u",
                  wifi_has_ip(), eth_link_up(), eth_has_ip(),
