@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  core-host:
+    name: Core library (host, ASan/UBSan, fuzz)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y clang cmake ninja-build cppcheck
+      - name: No ESP-IDF / FreeRTOS headers in core
+        run: tools/check_core_includes.sh
+      - name: Build and test
+        env:
+          CC: clang
+        run: |
+          cmake -S core -B build/host -G Ninja
+          cmake --build build/host
+          ctest --test-dir build/host --output-on-failure
+      - name: cppcheck
+        run: cppcheck --error-exitcode=1 --enable=warning,style,portability --std=c11 -I core/include core/src
+      - name: Fuzz frame parser (60 s)
+        run: |
+          cmake -S core -B build/fuzz -G Ninja -DCMAKE_C_COMPILER=clang -DLWC_FUZZ=ON -DLWC_SANITIZE=OFF
+          cmake --build build/fuzz --target fuzz_frame fuzz_console_cmd fuzz_gwmp fuzz_txpk
+          ./build/fuzz/fuzz_frame -max_total_time=60 -max_len=300
+          ./build/fuzz/fuzz_console_cmd -max_total_time=60 -max_len=400
+          ./build/fuzz/fuzz_gwmp -max_total_time=60 -max_len=2048
+          ./build/fuzz/fuzz_txpk -max_total_time=60 -max_len=2048
+
+  firmware:
+    name: Firmware (${{ matrix.rev }})
+    runs-on: ubuntu-24.04
+    container: espressif/idf:v6.1.1
+    strategy:
+      matrix:
+        rev: [rev3, rev1]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh"
+          tools/build.sh ${{ matrix.rev }} build
+
+  c6-firmware:
+    name: C6 co-processor firmware
+    runs-on: ubuntu-24.04
+    container: espressif/idf:v6.1.1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh"
+          idf.py -C c6-firmware -B "$PWD/build/c6" -DIDF_TARGET=esp32c6 \
+              -DSDKCONFIG="$PWD/build/c6/sdkconfig" build

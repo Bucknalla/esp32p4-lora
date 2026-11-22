@@ -1,0 +1,8 @@
+dependencies:
+  # Pinned ESP-IDF release (docs/adr/0001-esp-idf-version.md)
+  idf: "==6.1.1"
+  # IP101 PHY driver moved out of ESP-IDF in 6.0
+  espressif/ip101: "^1.1.0"
+  # Wi-Fi through the on-module ESP32-C6 (ESP-Hosted over SDIO)
+  espressif/esp_wifi_remote: "^1.6.5"
+  espressif/esp_hosted: "^3.1.0"

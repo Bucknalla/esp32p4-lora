@@ -1,0 +1,4 @@
+dependencies:
+  # Must match the host side (firmware/main/idf_component.yml, dependencies.lock)
+  espressif/esp_hosted: "==3.1.0"
+  idf: "==6.1.1"

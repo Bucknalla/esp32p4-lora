@@ -1,0 +1,154 @@
+menu "LoRaWAN gateway board"
+
+    choice GW_HAT
+        prompt "Concentrator HAT variant"
+        default GW_HAT_NEBRA_HELIUM_V1
+        help
+            Selects the pin map for the Nebra carrier on the 40-pin header.
+
+        config GW_HAT_NEBRA_HELIUM_V1
+            bool "Nebra Helium Hotspot HAT V1 (RAK833 backplane, SPI0 CE0)"
+            help
+                NebraLtd/nebra-lora-hardware Helium-Hotspot-HAT-V1. SPI on Pi pins
+                19/21/23/24, reset Pi 15, button Pi 16, LED Pi 18.
+        config GW_HAT_NEBRA_HOTSPOT
+            bool "Nebra Light Hotspot carrier (SPI1 CE2, hm-pyhelper nebra-light1)"
+        config GW_HAT_NEBRA_LIGHT_HOTSPOT_II
+            bool "Nebra Light Hotspot II HAT"
+        config GW_HAT_NONE
+            bool "No HAT (bare dev kit)"
+    endchoice
+
+    choice GW_CONC_CHIP
+        prompt "Concentrator chip"
+        default GW_CONC_SX1301
+        help
+            Selects the Semtech HAL. Both define the same lgw_* symbols, so
+            exactly one is built (ADR-0005).
+
+        config GW_CONC_SX1301
+            bool "SX1301 + SX1257 (lora_gateway v5.0.1), e.g. MaxIIoT GL5712"
+        config GW_CONC_SX1302
+            bool "SX1302/SX1303 + SX1250 (sx1302_hal V2.1.0)"
+    endchoice
+
+    config GW_CONC_CLKSRC
+        int "RF chain that clocks the concentrator (clksrc)"
+        range 0 1
+        default 1 if GW_CONC_SX1301
+        default 0
+        help
+            Nebra's SX1301 EU868 config uses 1; sx1302_hal reference designs use 0.
+
+    config GW_LGW_DEBUG
+        bool "HAL debug output (DEBUG_HAL/DEBUG_REG)"
+        default y
+        help
+            lora_gateway reports lgw_start errors only through its debug
+            macros. Keep on during bring-up.
+
+    menu "Packet forwarder (Semtech UDP)"
+        config GW_PKTFWD_SERVER
+            string "Server host"
+            default "eu1.cloud.thethings.network"
+        config GW_PKTFWD_PORT
+            int "Server UDP port (up and down)"
+            default 1700
+        config GW_PKTFWD_EUI
+            string "Gateway EUI (16 hex digits; empty = from the base MAC)"
+            default ""
+        config GW_PKTFWD_KEEPALIVE_S
+            int "PULL_DATA keepalive interval (s)"
+            default 10
+        config GW_PKTFWD_STAT_S
+            int "Status report interval (s)"
+            default 30
+        config GW_PKTFWD_NTP_SERVER
+            string "SNTP server (wall clock for packet timestamps)"
+            default "pool.ntp.org"
+    endmenu
+
+    menu "Transmit"
+        config GW_TX_ENABLE
+            bool "Enable downlinks (TX on RF chain 0)"
+            default y
+        config GW_TX_MAX_DBM
+            int "TX power cap at the connector (dBm)"
+            range -6 27
+            default 13
+            help
+                The gain LUT is cut at this value. EU868 allows 14 dBm ERP on most
+                sub-bands: with a ~3 dBi antenna that is ~13 dBm conducted. The
+                869.4-869.65 MHz sub-band allows 27 dBm ERP, but the board is powered
+                from USB and the HAT's LM1117 limits peak current, so the cap applies
+                there too until power is measured.
+        config GW_TX_TRACE
+            bool "Trace every TX (status transitions, counter check)"
+            default y
+    endmenu
+
+    menu "Concentrator SPI"
+        config GW_SPI_SCLK_GPIO
+            int "SCLK GPIO (Pi 23 on HAT V1, Pi 40 otherwise)"
+            default 0 if GW_HAT_NEBRA_HELIUM_V1
+            default 45
+        config GW_SPI_MOSI_GPIO
+            int "MOSI GPIO (Pi 19 on HAT V1, Pi 38 otherwise)"
+            default 3 if GW_HAT_NEBRA_HELIUM_V1
+            default 27
+        config GW_SPI_MISO_GPIO
+            int "MISO GPIO (Pi 21 on HAT V1, Pi 35 otherwise)"
+            default 2 if GW_HAT_NEBRA_HELIUM_V1
+            default 53
+        config GW_SPI_CS_GPIO
+            int "CS GPIO (Pi 24 CE0 on HAT V1, Pi 36 CE2 otherwise)"
+            default 36 if GW_HAT_NEBRA_HELIUM_V1
+            default 46
+        config GW_SPI_CLOCK_HZ
+            int "SPI clock (Hz)"
+            default 2000000
+    endmenu
+
+    config GW_CONC_RESET_GPIO
+        int "Concentrator reset GPIO"
+        default 23 if GW_HAT_NEBRA_LIGHT_HOTSPOT_II
+        default 6
+
+    config GW_LED_GPIO
+        int "Status LED GPIO"
+        default 47 if GW_HAT_NEBRA_LIGHT_HOTSPOT_II
+        default 4
+
+    config GW_BUTTON_GPIO
+        int "Button GPIO"
+        default 54 if GW_HAT_NEBRA_LIGHT_HOTSPOT_II
+        default 5
+
+    menu "I2C (secure element)"
+        config GW_I2C_SDA_GPIO
+            int "SDA GPIO (Pi pin 3)"
+            default 7
+        config GW_I2C_SCL_GPIO
+            int "SCL GPIO (Pi pin 5)"
+            default 8
+        config GW_ECC608_ADDR
+            hex "ECC608 7-bit address"
+            default 0x60
+    endmenu
+
+    menu "Ethernet (IP101 over RMII)"
+        config GW_ETH_PHY_ADDR
+            int "PHY address (-1 = auto-detect)"
+            default 1
+        config GW_ETH_PHY_RST_GPIO
+            int "PHY reset GPIO"
+            default 51
+        config GW_ETH_MDC_GPIO
+            int "MDC GPIO"
+            default 31
+        config GW_ETH_MDIO_GPIO
+            int "MDIO GPIO"
+            default 52
+    endmenu
+
+endmenu

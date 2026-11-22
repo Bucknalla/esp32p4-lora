@@ -1,0 +1,361 @@
+--- a/libloragw/src/loragw_hal.c
++++ b/libloragw/src/loragw_hal.c
+@@ -46,6 +46,8 @@
+ #include "loragw_sx1302_timestamp.h"
+ #include "loragw_stts751.h"
+ #include "loragw_ad5338r.h"
++/* ESP32-P4 port: see the component README.md */
++#include "lgw_port.h"
+ #include "loragw_debug.h"
+ 
+ /* -------------------------------------------------------------------------- */
+@@ -1081,8 +1083,8 @@
+         printf("INFO: %s file opened for debug log\n", CONTEXT_DEBUG.log_file_name);
+ 
+         /* Create "pktlog.csv" symlink to simplify user life */
+-        unlink("loragw_hal.log");
+-        i = symlink(CONTEXT_DEBUG.log_file_name, "loragw_hal.log");
++        /* ESP32-P4 port: see the component README.md */
++        i = 0; /* no symlink support */
+         if (i < 0) {
+             printf("ERROR: impossible to create symlink to log file %s\n", CONTEXT_DEBUG.log_file_name);
+         }
+@@ -1113,8 +1115,10 @@
+             }
+         }
+         if (i == sizeof I2C_PORT_TEMP_SENSOR) {
+-            printf("ERROR: no temperature sensor found.\n");
+-            return LGW_HAL_ERROR;
++            /* ESP32-P4 port: see the component README.md */
++            printf("WARNING: no temperature sensor found, using fixed %.1f C\n",
++                   (double)lgw_port_fixed_temperature());
++            ts_fd = -1;
+         }
+ 
+         /* Configure ADC AD338R for full duplex (CN490 reference design) */
+@@ -1223,7 +1227,8 @@
+ 
+     if (CONTEXT_COM_TYPE == LGW_COM_SPI) {
+         DEBUG_MSG("INFO: Closing I2C for temperature sensor\n");
+-        x = i2c_linuxdev_close(ts_fd);
++        /* ESP32-P4 port: see the component README.md */
++        x = (ts_fd < 0) ? LGW_I2C_SUCCESS : i2c_linuxdev_close(ts_fd);
+         if (x != 0) {
+             printf("ERROR: failed to close I2C temperature sensor device (err=%i)\n", x);
+             err = LGW_HAL_ERROR;
+@@ -1597,7 +1602,13 @@
+ 
+     switch (CONTEXT_COM_TYPE) {
+         case LGW_COM_SPI:
+-            err = stts751_get_temperature(ts_fd, ts_addr, temperature);
++            /* ESP32-P4 port: see the component README.md */
++            if (ts_fd < 0) {
++                *temperature = lgw_port_fixed_temperature();
++                err = LGW_I2C_SUCCESS;
++            } else {
++                err = stts751_get_temperature(ts_fd, ts_addr, temperature);
++            }
+             break;
+         case LGW_COM_USB:
+             err = lgw_com_get_temperature(temperature);
+--- a/libloragw/src/loragw_aux.c
++++ b/libloragw/src/loragw_aux.c
+@@ -24,7 +24,9 @@
+ #endif
+ 
+ #include <stdio.h>  /* printf fprintf */
+-#include <time.h>   /* clock_nanosleep */
++#include <time.h>
++/* ESP32-P4 port: see the component README.md */
++#include "lgw_port.h"
+ #include <math.h>   /* pow, ceil */
+ 
+ #include "loragw_aux.h"
+@@ -45,45 +47,13 @@
+ /* --- PUBLIC FUNCTIONS DEFINITION ------------------------------------------ */
+ 
+ void wait_us(unsigned long delay_us) {
+-    struct timespec dly;
+-    struct timespec rem;
+-
+-    dly.tv_sec = delay_us / 1000000;
+-    dly.tv_nsec = (delay_us % 1000000) * 1000;
+-
+-    DEBUG_PRINTF("NOTE dly: %ld sec %ld ns\n", dly.tv_sec, dly.tv_nsec);
+-
+-    while ((dly.tv_sec > 0) || (dly.tv_nsec > 1000)) {
+-        /*
+-        rem is set ONLY if clock_nanosleep is interrupted (eg. by a signal).
+-        Must be zeroed each time or will get into an infinite loop after an IT.
+-        */
+-        rem.tv_sec = 0;
+-        rem.tv_nsec = 0;
+-        clock_nanosleep(CLOCK_MONOTONIC, 0, &dly, &rem);
+-        DEBUG_PRINTF("NOTE remain: %ld sec %ld ns\n", rem.tv_sec, rem.tv_nsec);
+-        dly = rem;
+-    }
+-
+-    return;
++    lgw_port_wait_us(delay_us);
+ }
+ 
+ /* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
+ 
+ void wait_ms(unsigned long delay_ms) {
+-    struct timespec dly;
+-    struct timespec rem;
+-
+-    dly.tv_sec = delay_ms / 1000;
+-    dly.tv_nsec = ((long)delay_ms % 1000) * 1000000;
+-
+-    DEBUG_PRINTF("NOTE dly: %ld sec %ld ns\n", dly.tv_sec, dly.tv_nsec);
+-
+-    if((dly.tv_sec > 0) || ((dly.tv_sec == 0) && (dly.tv_nsec > 100000))) {
+-        clock_nanosleep(CLOCK_MONOTONIC, 0, &dly, &rem);
+-        DEBUG_PRINTF("NOTE remain: %ld sec %ld ns\n", rem.tv_sec, rem.tv_nsec);
+-    }
+-    return;
++    lgw_port_wait_ms(delay_ms);
+ }
+ 
+ /* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
+--- a/libloragw/src/loragw_spi.c
++++ b/libloragw/src/loragw_spi.c
+@@ -26,11 +26,13 @@
+ #include <fcntl.h>      /* open */
+ #include <string.h>     /* memset */
+ 
+-#include <sys/ioctl.h>
+-#include <linux/spi/spidev.h>
++
++
+ 
+ #include "loragw_spi.h"
+ #include "loragw_aux.h"
++/* ESP32-P4 port: see the component README.md */
++#include "lgw_port_spidev.h"
+ 
+ /* -------------------------------------------------------------------------- */
+ /* --- PRIVATE MACROS ------------------------------------------------------- */
+@@ -76,7 +78,7 @@
+     }
+ 
+     /* open SPI device */
+-    dev = open(com_path, O_RDWR);
++    dev = lgw_port_spi_open(com_path, O_RDWR);
+     if (dev < 0) {
+         DEBUG_PRINTF("ERROR: failed to open SPI device %s\n", com_path);
+         return LGW_SPI_ERROR;
+@@ -84,44 +86,44 @@
+ 
+     /* setting SPI mode to 'mode 0' */
+     i = SPI_MODE_0;
+-    a = ioctl(dev, SPI_IOC_WR_MODE, &i);
+-    b = ioctl(dev, SPI_IOC_RD_MODE, &i);
++    a = lgw_port_spi_ioctl(dev, SPI_IOC_WR_MODE, &i);
++    b = lgw_port_spi_ioctl(dev, SPI_IOC_RD_MODE, &i);
+     if ((a < 0) || (b < 0)) {
+         DEBUG_MSG("ERROR: SPI PORT FAIL TO SET IN MODE 0\n");
+-        close(dev);
++        lgw_port_spi_close(dev);
+         free(spi_device);
+         return LGW_SPI_ERROR;
+     }
+ 
+     /* setting SPI max clk (in Hz) */
+     i = SPI_SPEED;
+-    a = ioctl(dev, SPI_IOC_WR_MAX_SPEED_HZ, &i);
+-    b = ioctl(dev, SPI_IOC_RD_MAX_SPEED_HZ, &i);
++    a = lgw_port_spi_ioctl(dev, SPI_IOC_WR_MAX_SPEED_HZ, &i);
++    b = lgw_port_spi_ioctl(dev, SPI_IOC_RD_MAX_SPEED_HZ, &i);
+     if ((a < 0) || (b < 0)) {
+         DEBUG_MSG("ERROR: SPI PORT FAIL TO SET MAX SPEED\n");
+-        close(dev);
++        lgw_port_spi_close(dev);
+         free(spi_device);
+         return LGW_SPI_ERROR;
+     }
+ 
+     /* setting SPI to MSB first */
+     i = 0;
+-    a = ioctl(dev, SPI_IOC_WR_LSB_FIRST, &i);
+-    b = ioctl(dev, SPI_IOC_RD_LSB_FIRST, &i);
++    a = lgw_port_spi_ioctl(dev, SPI_IOC_WR_LSB_FIRST, &i);
++    b = lgw_port_spi_ioctl(dev, SPI_IOC_RD_LSB_FIRST, &i);
+     if ((a < 0) || (b < 0)) {
+         DEBUG_MSG("ERROR: SPI PORT FAIL TO SET MSB FIRST\n");
+-        close(dev);
++        lgw_port_spi_close(dev);
+         free(spi_device);
+         return LGW_SPI_ERROR;
+     }
+ 
+     /* setting SPI to 8 bits per word */
+     i = 0;
+-    a = ioctl(dev, SPI_IOC_WR_BITS_PER_WORD, &i);
+-    b = ioctl(dev, SPI_IOC_RD_BITS_PER_WORD, &i);
++    a = lgw_port_spi_ioctl(dev, SPI_IOC_WR_BITS_PER_WORD, &i);
++    b = lgw_port_spi_ioctl(dev, SPI_IOC_RD_BITS_PER_WORD, &i);
+     if ((a < 0) || (b < 0)) {
+         DEBUG_MSG("ERROR: SPI PORT FAIL TO SET 8 BITS-PER-WORD\n");
+-        close(dev);
++        lgw_port_spi_close(dev);
+         return LGW_SPI_ERROR;
+     }
+ 
+@@ -143,7 +145,7 @@
+ 
+     /* close file & deallocate file descriptor */
+     spi_device = *(int *)com_target; /* must check that spi_target is not null beforehand */
+-    a = close(spi_device);
++    a = lgw_port_spi_close(spi_device);
+     free(com_target);
+ 
+     /* determine return code */
+@@ -185,7 +187,7 @@
+     k.speed_hz = SPI_SPEED;
+     k.cs_change = 0;
+     k.bits_per_word = 8;
+-    a = ioctl(spi_device, SPI_IOC_MESSAGE(1), &k);
++    a = lgw_port_spi_ioctl(spi_device, SPI_IOC_MESSAGE(1), &k);
+ 
+     /* determine return code */
+     if (a != (int)k.len) {
+@@ -228,7 +230,7 @@
+     k.rx_buf = (unsigned long) in_buf;
+     k.len = command_size;
+     k.cs_change = 0;
+-    a = ioctl(spi_device, SPI_IOC_MESSAGE(1), &k);
++    a = lgw_port_spi_ioctl(spi_device, SPI_IOC_MESSAGE(1), &k);
+ 
+     /* determine return code */
+     if (a != (int)k.len) {
+@@ -302,7 +304,7 @@
+         offset = i * LGW_BURST_CHUNK;
+         k[1].tx_buf = (unsigned long)(data + offset);
+         k[1].len = chunk_size;
+-        byte_transfered += (ioctl(spi_device, SPI_IOC_MESSAGE(2), &k) - k[0].len );
++        byte_transfered += (lgw_port_spi_ioctl(spi_device, SPI_IOC_MESSAGE(2), &k) - k[0].len );
+         DEBUG_PRINTF("BURST WRITE: to trans %d # chunk %d # transferred %d \n", size_to_do, chunk_size, byte_transfered);
+         size_to_do -= chunk_size; /* subtract the quantity of data already transferred */
+     }
+@@ -358,7 +360,7 @@
+         offset = i * LGW_BURST_CHUNK;
+         k[1].rx_buf = (unsigned long)(data + offset);
+         k[1].len = chunk_size;
+-        byte_transfered += (ioctl(spi_device, SPI_IOC_MESSAGE(2), &k) - k[0].len );
++        byte_transfered += (lgw_port_spi_ioctl(spi_device, SPI_IOC_MESSAGE(2), &k) - k[0].len );
+         DEBUG_PRINTF("BURST READ: to trans %d # chunk %d # transferred %d \n", size_to_do, chunk_size, byte_transfered);
+         size_to_do -= chunk_size;  /* subtract the quantity of data already transferred */
+     }
+--- a/libloragw/src/sx1250_spi.c
++++ b/libloragw/src/sx1250_spi.c
+@@ -22,11 +22,13 @@
+ #include <fcntl.h>      /* open */
+ #include <string.h>     /* memset */
+ 
+-#include <sys/ioctl.h>
+-#include <linux/spi/spidev.h>
++
++
+ 
+ #include "loragw_spi.h"
+ #include "loragw_aux.h"
++/* ESP32-P4 port: see the component README.md */
++#include "lgw_port_spidev.h"
+ #include "sx1250_spi.h"
+ 
+ /* -------------------------------------------------------------------------- */
+@@ -83,7 +85,7 @@
+     k.speed_hz = SPI_SPEED;
+     k.cs_change = 0;
+     k.bits_per_word = 8;
+-    a = ioctl(com_device, SPI_IOC_MESSAGE(1), &k);
++    a = lgw_port_spi_ioctl(com_device, SPI_IOC_MESSAGE(1), &k);
+ 
+     /* determine return code */
+     if (a != (int)k.len) {
+@@ -129,7 +131,7 @@
+     k.rx_buf = (unsigned long) in_buf;
+     k.len = command_size;
+     k.cs_change = 0;
+-    a = ioctl(com_device, SPI_IOC_MESSAGE(1), &k);
++    a = lgw_port_spi_ioctl(com_device, SPI_IOC_MESSAGE(1), &k);
+ 
+     /* determine return code */
+     if (a != (int)k.len) {
+--- a/libloragw/src/sx125x_spi.c
++++ b/libloragw/src/sx125x_spi.c
+@@ -20,13 +20,16 @@
+ #include <stdio.h>      /* printf fprintf */
+ #include <string.h>     /* memset */
+ 
+-#include <sys/ioctl.h>
+-#include <linux/spi/spidev.h>
++
++
+ 
+ #include "sx125x_spi.h"
+ #include "loragw_spi.h"
+ 
+ /* -------------------------------------------------------------------------- */
++/* ESP32-P4 port: see the component README.md */
++#include "lgw_port_spidev.h"
++
+ /* --- PRIVATE MACROS ------------------------------------------------------- */
+ 
+ #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
+@@ -85,7 +88,7 @@
+     k.rx_buf = (unsigned long) in_buf;
+     k.len = command_size;
+     k.cs_change = 0;
+-    a = ioctl(com_device, SPI_IOC_MESSAGE(1), &k);
++    a = lgw_port_spi_ioctl(com_device, SPI_IOC_MESSAGE(1), &k);
+ 
+     /* determine return code */
+     if (a != (int)k.len) {
+@@ -125,7 +128,7 @@
+     k.speed_hz = SPI_SPEED;
+     k.cs_change = 0;
+     k.bits_per_word = 8;
+-    a = ioctl(spi_device, SPI_IOC_MESSAGE(1), &k);
++    a = lgw_port_spi_ioctl(spi_device, SPI_IOC_MESSAGE(1), &k);
+ 
+     /* determine return code */
+     if (a != (int)k.len) {
+--- a/libloragw/src/sx1261_spi.c
++++ b/libloragw/src/sx1261_spi.c
+@@ -22,11 +22,13 @@
+ #include <fcntl.h>      /* open */
+ #include <string.h>     /* memset */
+ 
+-#include <sys/ioctl.h>
+-#include <linux/spi/spidev.h>
++
++
+ 
+ #include "loragw_spi.h"
+ #include "loragw_aux.h"
++/* ESP32-P4 port: see the component README.md */
++#include "lgw_port_spidev.h"
+ #include "sx1261_spi.h"
+ 
+ /* -------------------------------------------------------------------------- */
+@@ -82,7 +84,7 @@
+     k.speed_hz = SPI_SPEED;
+     k.cs_change = 0;
+     k.bits_per_word = 8;
+-    a = ioctl(com_device, SPI_IOC_MESSAGE(1), &k);
++    a = lgw_port_spi_ioctl(com_device, SPI_IOC_MESSAGE(1), &k);
+ 
+     /* determine return code */
+     if (a != (int)k.len) {
+@@ -127,7 +129,7 @@
+     k.rx_buf = (unsigned long) in_buf;
+     k.len = command_size;
+     k.cs_change = 0;
+-    a = ioctl(com_device, SPI_IOC_MESSAGE(1), &k);
++    a = lgw_port_spi_ioctl(com_device, SPI_IOC_MESSAGE(1), &k);
+ 
+     /* determine return code */
+     if (a != (int)k.len) {

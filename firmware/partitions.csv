@@ -1,0 +1,13 @@
+# 16 MB flash. Bootloader at 0x2000, partition table at 0x10000
+# (CONFIG_PARTITION_TABLE_OFFSET). The offset leaves room for a bigger
+# secure-boot bootloader; it cannot change by OTA after units ship.
+# Name,   Type, SubType,  Offset,   Size,     Flags
+nvs,      data, nvs,      0x11000,  0x10000,
+nvs_keys, data, nvs_keys, 0x21000,  0x1000,   encrypted
+otadata,  data, ota,      0x22000,  0x2000,
+ota_0,    app,  ota_0,    0x30000,  0x400000,
+ota_1,    app,  ota_1,    0x430000, 0x400000,
+coredump, data, coredump, 0x830000, 0x10000,
+storage,  data, littlefs, 0x840000, 0x5C0000,
+# ESP32-C6 (ESP-Hosted co-processor) image, pushed to the C6 by c6_update.c
+cp_fw,    data, 0x40,     0xE00000, 0x200000,

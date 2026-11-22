@@ -1,0 +1,158 @@
+/*
+ * Phase 1 bring-up: identity, header I2C probe, Ethernet with DHCP.
+ * No concentrator access yet; the SX1302 HAL port comes next.
+ */
+#include <inttypes.h>
+
+#include "board.h"
+#include "conc.h"
+#include "conc_hal.h"
+#include "pktfwd.h"
+#include "radio_pkt.h"
+#include "radio_tx.h"
+#include "esp_event.h"
+#include "esp_heap_caps.h"
+#include "esp_log.h"
+#include "esp_netif.h"
+#include "eth.h"
+#include "c6_update.h"
+#include "console.h"
+#include "wifi.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "lwc/frame.h"
+#include "nvs_flash.h"
+#include "sdkconfig.h"
+
+static const char *TAG = "main";
+
+static QueueHandle_t s_rx_queue;
+
+#define HEARTBEAT_PERIOD_MS 10000
+
+/* With NVS encryption (HMAC scheme, ADR-0006) the first nvs_flash_init burns
+ * the HMAC key into eFuse BLOCK_KEY<CONFIG_NVS_SEC_HMAC_EFUSE_KEY_ID>. A
+ * partition written before encryption was on reads as unusable: erase it. */
+static esp_err_t init_nvs(void)
+{
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND ||
+        err == ESP_ERR_NVS_CORRUPT_KEY_PART) {
+        ESP_LOGW(TAG, "NVS needs erase (%s)", esp_err_to_name(err));
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        err = nvs_flash_init();
+    }
+#if CONFIG_NVS_ENCRYPTION
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "NVS encrypted (HMAC key in eFuse key block %d)",
+                 CONFIG_NVS_SEC_HMAC_EFUSE_KEY_ID);
+    }
+#endif
+    return err;
+}
+
+/* Proves the core library links and runs on target. */
+static void core_selftest(void)
+{
+    static const uint8_t frame[] = {0x40, 0x04, 0x03, 0x02, 0x01, 0x80, 0x2A, 0x00,
+                                    0x0A, 0xDE, 0xAD, 0x11, 0x22, 0x33, 0x44};
+    lwc_frame_t fr;
+    lwc_frame_err_t r = lwc_frame_parse(frame, sizeof frame, &fr);
+    if (r == LWC_FRAME_OK && fr.u.data.dev_addr == 0x01020304U && fr.u.data.fcnt16 == 42U) {
+        ESP_LOGI(TAG, "core self-test: OK");
+    } else {
+        ESP_LOGE(TAG, "core self-test: FAILED (err %d)", (int)r);
+    }
+}
+
+void app_main(void)
+{
+    board_log_identity();
+
+    ESP_ERROR_CHECK(init_nvs());
+
+    esp_err_t err = console_start();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "console: %s", esp_err_to_name(err));
+    }
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+    core_selftest();
+
+    board_probe_t probe;
+    err = board_probe_i2c(&probe);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "I2C probe: %s", esp_err_to_name(err));
+    }
+
+    /* Concentrator identification: read-only first, then one guarded reset. */
+    conc_pin_survey();
+    conc_id_t id = {0};
+    err = conc_spi_init();
+    if (err == ESP_OK) {
+        err = conc_identify(&id);
+        if (err == ESP_ERR_NOT_FOUND) {
+            ESP_LOGI(TAG, "no answer before reset; pulsing concentrator reset");
+            err = conc_reset();
+            if (err == ESP_OK) {
+                err = conc_identify(&id);
+            }
+        }
+    }
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "concentrator probe: %s", esp_err_to_name(err));
+    } else {
+#if CONFIG_GW_CONC_SX1301
+        const conc_chip_t built_for = CONC_CHIP_SX1301;
+#else
+        const conc_chip_t built_for = CONC_CHIP_SX1302;
+#endif
+        if (id.chip == built_for) {
+            s_rx_queue = xQueueCreate(RADIO_QUEUE_LEN, sizeof(radio_pkt_t));
+            g_radio_tx_req = xQueueCreate(RADIO_TX_QUEUE_LEN, sizeof(radio_tx_req_t));
+            g_radio_tx_res = xQueueCreate(RADIO_TX_QUEUE_LEN, sizeof(radio_tx_res_t));
+            err = (s_rx_queue && g_radio_tx_req && g_radio_tx_res) ? conc_hal_start(s_rx_queue)
+                                                                    : ESP_ERR_NO_MEM;
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "radio task: %s", esp_err_to_name(err));
+            }
+        } else {
+            ESP_LOGE(TAG, "card chip (%d) does not match the build's HAL (%d): not starting it",
+                     (int)id.chip, (int)built_for);
+        }
+    }
+
+    /* May push a new image to the C6 and restart (bounded by an NVS counter). */
+    err = c6_update_check();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "C6 update check: %s", esp_err_to_name(err));
+    }
+
+    err = wifi_start();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Wi-Fi start: %s", esp_err_to_name(err));
+    }
+
+    if (s_rx_queue != NULL) {
+        err = pktfwd_start(s_rx_queue);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "packet forwarder: %s", esp_err_to_name(err));
+        }
+    }
+
+    err = eth_start();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Ethernet start: %s", esp_err_to_name(err));
+    }
+
+    for (;;) {
+        ESP_LOGI(TAG,
+                 "heartbeat: wifi ip=%d, eth link=%d ip=%d, internal free %u (min %u), PSRAM free %u",
+                 wifi_has_ip(), eth_link_up(), eth_has_ip(),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+        vTaskDelay(pdMS_TO_TICKS(HEARTBEAT_PERIOD_MS));
+    }
+}
