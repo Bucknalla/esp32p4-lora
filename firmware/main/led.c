@@ -8,6 +8,7 @@
 #include "esp_check.h"
 #include "esp_log.h"
 #include "eth.h"
+#include "gwmode.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lwc/led.h"
@@ -26,7 +27,7 @@ static const char *TAG = "led";
 #define FAULT_HOLD_MS 60000U /* a radio restart shows this long */
 #define BUTTON_HOLD_MS 5000U /* hold the HAT button this long: BLE setup */
 
-static bool s_ttn; /* read once: the setting applies after a restart anyway */
+static bool s_fwd; /* read once: the mode applies after a restart anyway */
 static _Atomic lwc_led_state_t s_state = LWC_LED_BOOT;
 
 static lwc_led_state_t pick(uint32_t now)
@@ -46,7 +47,7 @@ static lwc_led_state_t pick(uint32_t now)
     }
     const bool settled = now > GRACE_MS;
     const bool radio_missing = settled && atomic_load(&g_radio_stats.starts) == 0U;
-    const bool upstream_down = settled && s_ttn && !pktfwd_link_up();
+    const bool upstream_down = settled && s_fwd && !pktfwd_link_up();
     if (ota_pending_verify() || radio_missing || upstream_down ||
         (int32_t)(fault_until - now) > 0) {
         return LWC_LED_FAULT;
@@ -100,7 +101,7 @@ esp_err_t led_start(void)
                                .mode = GPIO_MODE_INPUT,
                                .pull_up_en = GPIO_PULLUP_ENABLE};
     ESP_RETURN_ON_ERROR(gpio_config(&btn), TAG, "button gpio");
-    s_ttn = pktfwd_ttn_enabled();
+    s_fwd = gwmode_forwards();
     const BaseType_t ok = xTaskCreatePinnedToCore(led_task, "led", 3072, NULL, 1, NULL, 0);
     return ok == pdPASS ? ESP_OK : ESP_ERR_NO_MEM;
 }

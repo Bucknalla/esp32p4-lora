@@ -15,6 +15,7 @@
 #include "nvs.h"
 #include "ota.h"
 #include "fault.h"
+#include "lns.h"
 #include "sv.h"
 #include "web.h"
 #include "webauth.h"
@@ -122,6 +123,8 @@ static void handle_line(char *line, size_t len)
         REPLY("STACK_FREE %s", line_out);
         web_status_line(line_out, sizeof line_out);
         REPLY("WEB %s", line_out);
+        lns_status_line(line_out, sizeof line_out);
+        REPLY("LNS %s", line_out);
         return;
     }
     case LWC_CMD_WEB_PASS: {

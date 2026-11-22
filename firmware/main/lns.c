@@ -1,0 +1,506 @@
+/*
+ * Local network server task (ADR-0015). Reads the radio queue in standalone
+ * and hybrid modes, runs joins and uplinks through the core server
+ * (core/src/ns.c), stores devices and counters in NVS, and in hybrid mode
+ * hands every frame it does not handle to the Semtech UDP forwarder.
+ *
+ * Transmit: join-accepts go through the radio task's JIT queue, duty-cycle
+ * budget and power cap, tagged RADIO_SRC_LNS. Until CONFIG_GW_LNS_TX is on
+ * (approval to transmit), they are only logged: dry run.
+ *
+ * Keys: AppKeys and session keys are in plain NVS (ADR-0002); they are never
+ * logged or returned by the API.
+ */
+#include "lns.h"
+
+#include <inttypes.h>
+#include <stdarg.h>
+#include <stdatomic.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "esp_check.h"
+#include "esp_log.h"
+#include "esp_timer.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
+#include "gwmode.h"
+#include "lwc/hex.h"
+#include "lwc/lorawan.h"
+#include "nvs.h"
+#include "radio_pkt.h"
+#include "radio_tx.h"
+#include "sdkconfig.h"
+#include "sv.h"
+
+#ifndef CONFIG_GW_LNS_TX
+#define CONFIG_GW_LNS_TX 0 /* Kconfig leaves a bool that is off undefined */
+#endif
+
+static const char *TAG = "lns";
+
+#define TASK_STACK 6144
+#define TASK_PRIO 4
+#define TASK_CORE 1
+#define NVS_NS "lns"
+#define REC_VER 1U
+#define FCNT_DOWN_SKIP 16U /* downlink counter skip at boot: never reuse one */
+#define JOIN_POWER_DBM 14  /* EU868 RX1 default; the radio caps it (ADR-0007) */
+#define PAYLOAD_SHOW 32U
+
+typedef struct {
+    uint8_t ver;
+    uint32_t join_nonce;
+    uint32_t next_addr;
+} meta_rec_t;
+
+typedef struct {
+    uint8_t ver;
+    lwc_ns_dev_t d;
+} dev_rec_t;
+
+typedef struct {
+    uint32_t fcnt_up;
+    uint32_t fcnt_down;
+    uint8_t has_up;
+} cnt_rec_t;
+
+/* What the UI shows per device; RAM only, lost at restart. */
+typedef struct {
+    int64_t seen_us; /* 0: never since boot */
+    uint32_t uplinks;
+    int16_t rssi;
+    float snr;
+    uint8_t sf;
+    bool has_port;
+    uint8_t port;
+    uint8_t len;
+    uint8_t payload[PAYLOAD_SHOW];
+    bool join_unanswered; /* dry run: a join-request was accepted but not answered */
+} dev_stat_t;
+
+static lwc_ns_t s_ns;
+static dev_stat_t s_stat[LWC_NS_MAX_DEVICES];
+static SemaphoreHandle_t s_lock;
+static QueueHandle_t s_radio_q;
+static QueueHandle_t s_fwd_q;
+static atomic_bool s_running;
+static atomic_uint s_joins, s_uplinks, s_fwd, s_fwd_drop;
+static uint16_t s_tx_token;
+
+bool lns_running(void)
+{
+    return atomic_load(&s_running);
+}
+
+/* ---- storage ------------------------------------------------------------------ */
+
+static void key_of(char out[4], char kind, size_t i)
+{
+    (void)snprintf(out, 4, "%c%02u", kind, (unsigned)i);
+}
+
+static esp_err_t save_blob(const char *key, const void *v, size_t len)
+{
+    nvs_handle_t h;
+    ESP_RETURN_ON_ERROR(nvs_open(NVS_NS, NVS_READWRITE, &h), TAG, "nvs_open");
+    esp_err_t err = nvs_set_blob(h, key, v, len);
+    if (err == ESP_OK) {
+        err = nvs_commit(h);
+    }
+    nvs_close(h);
+    return err;
+}
+
+static void erase_key(nvs_handle_t h, const char *key)
+{
+    const esp_err_t err = nvs_erase_key(h, key);
+    if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGW(TAG, "erase %s: %s", key, esp_err_to_name(err));
+    }
+}
+
+static esp_err_t save_meta(void)
+{
+    const meta_rec_t m = {REC_VER, s_ns.join_nonce, s_ns.next_addr};
+    return save_blob("meta", &m, sizeof m);
+}
+
+static esp_err_t save_dev(size_t i)
+{
+    char k[4];
+    key_of(k, 'd', i);
+    dev_rec_t *r = calloc(1, sizeof *r);
+    ESP_RETURN_ON_FALSE(r != NULL, ESP_ERR_NO_MEM, TAG, "rec");
+    r->ver = REC_VER;
+    r->d = s_ns.dev[i];
+    const esp_err_t err = save_blob(k, r, sizeof *r);
+    memset(r, 0, sizeof *r); /* keys */
+    free(r);
+    return err;
+}
+
+static esp_err_t save_cnt(size_t i)
+{
+    char k[4];
+    key_of(k, 'c', i);
+    const cnt_rec_t c = {s_ns.dev[i].fcnt_up, s_ns.dev[i].fcnt_down, s_ns.dev[i].has_up ? 1U : 0U};
+    return save_blob(k, &c, sizeof c);
+}
+
+static void load(void)
+{
+    lwc_ns_init(&s_ns);
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) {
+        ESP_LOGI(TAG, "no devices yet");
+        return;
+    }
+    meta_rec_t m;
+    size_t len = sizeof m;
+    if (nvs_get_blob(h, "meta", &m, &len) == ESP_OK && len == sizeof m && m.ver == REC_VER) {
+        s_ns.join_nonce = m.join_nonce;
+        s_ns.next_addr = m.next_addr;
+    }
+    dev_rec_t *r = calloc(1, sizeof *r);
+    unsigned n = 0;
+    for (size_t i = 0; r != NULL && i < LWC_NS_MAX_DEVICES; i++) {
+        char k[4];
+        key_of(k, 'd', i);
+        len = sizeof *r;
+        if (nvs_get_blob(h, k, r, &len) != ESP_OK) {
+            continue;
+        }
+        if (len != sizeof *r || r->ver != REC_VER || !r->d.used) {
+            ESP_LOGW(TAG, "device record %s has another format: skipped", k);
+            continue;
+        }
+        s_ns.dev[i] = r->d;
+        cnt_rec_t c;
+        key_of(k, 'c', i);
+        len = sizeof c;
+        if (nvs_get_blob(h, k, &c, &len) == ESP_OK && len == sizeof c) {
+            s_ns.dev[i].fcnt_up = c.fcnt_up;
+            s_ns.dev[i].fcnt_down = c.fcnt_down;
+            s_ns.dev[i].has_up = c.has_up != 0U;
+        }
+        s_ns.dev[i].fcnt_down += FCNT_DOWN_SKIP;
+        n++;
+    }
+    if (r != NULL) {
+        memset(r, 0, sizeof *r);
+        free(r);
+    }
+    nvs_close(h);
+    for (size_t i = 0; i < LWC_NS_MAX_DEVICES; i++) {
+        if (s_ns.dev[i].used) {
+            (void)save_cnt(i); /* the skipped downlink counter */
+        }
+    }
+    ESP_LOGI(TAG, "%u device(s) loaded", n);
+}
+
+/* ---- frames ------------------------------------------------------------------- */
+
+static const char *eui_str(uint64_t e, char out[17])
+{
+    uint8_t b[8];
+    for (size_t i = 0; i < 8U; i++) {
+        b[i] = (uint8_t)(e >> (56U - 8U * i));
+    }
+    lwc_hex_encode(b, 8, out);
+    return out;
+}
+
+static void send_join_accept(const radio_pkt_t *p, const uint8_t *acc, size_t len, uint64_t dev_eui)
+{
+    static radio_tx_req_t req;
+    memset(&req, 0, sizeof req);
+    req.source = RADIO_SRC_LNS;
+    req.token = ++s_tx_token;
+    lwc_ns_downlink(false, p->tmst, p->freq_hz, p->sf, p->bw_khz, LWC_NS_JOIN_DELAY_US, JOIN_POWER_DBM,
+                    acc, len, &req.pk);
+    char e[17];
+#if CONFIG_GW_LNS_TX
+    if (g_radio_tx_req == NULL || xQueueSend(g_radio_tx_req, &req, pdMS_TO_TICKS(10)) != pdTRUE) {
+        ESP_LOGW(TAG, "join-accept for %s: radio queue full", eui_str(dev_eui, e));
+        return;
+    }
+    ESP_LOGI(TAG, "join-accept %u for %s: RX1 %" PRIu32 " Hz SF%u", (unsigned)req.token,
+             eui_str(dev_eui, e), req.pk.freq_hz, req.pk.sf);
+#else
+    ESP_LOGW(TAG, "DRY RUN: join-accept for %s (%u B) at RX1 %" PRIu32 " Hz SF%u tmst %" PRIu32
+                  " not sent (transmit not approved: CONFIG_GW_LNS_TX off)",
+             eui_str(dev_eui, e), (unsigned)len, req.pk.freq_hz, req.pk.sf, req.pk.tmst);
+#endif
+}
+
+/* Returns true when the frame was handled here (not to be forwarded). */
+static bool handle(const radio_pkt_t *p)
+{
+    if (p->stat != 1) {
+        return false;
+    }
+    static uint8_t acc[40];
+    static lwc_ns_uplink_t up;
+    char e[17];
+    const int mt = lwc_lw_mtype(p->payload, p->size);
+    bool handled = false;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (mt == LWC_LW_JOIN_REQUEST) {
+        size_t alen = 0, idx = 0;
+        const lwc_ns_join_res_t r = lwc_ns_join(&s_ns, p->payload, p->size, acc, sizeof acc, &alen, &idx);
+        if (r == LWC_NS_JOIN_ACCEPT) {
+            const uint64_t eui = s_ns.dev[idx].dev_eui;
+            esp_err_t err = ESP_OK;
+            memset(&s_stat[idx], 0, sizeof s_stat[idx]);
+#if CONFIG_GW_LNS_TX
+            handled = true;
+            /* Store the DevNonce and JoinNonce before anything goes out. */
+            err = save_dev(idx);
+            if (err == ESP_OK) {
+                err = save_meta();
+            }
+            if (err == ESP_OK) {
+                err = save_cnt(idx);
+            }
+#else
+            /* Dry run: nothing is sent, so nothing is stored, and in hybrid
+             * mode the join still goes to TTN, where the device may also be
+             * registered. The session exists in RAM only. */
+            s_stat[idx].join_unanswered = true;
+#endif
+            atomic_fetch_add(&s_joins, 1U);
+            ESP_LOGI(TAG, "join: %s (%s) DevAddr %08" PRIX32 ", RSSI %d SNR %.1f", eui_str(eui, e),
+                     s_ns.dev[idx].name, s_ns.dev[idx].dev_addr, p->rssi, (double)p->lsnr);
+            xSemaphoreGive(s_lock);
+            if (err == ESP_OK) {
+                send_join_accept(p, acc, alen, eui);
+            } else {
+                ESP_LOGE(TAG, "join not answered: storing the device failed (%s)", esp_err_to_name(err));
+            }
+            memset(acc, 0, sizeof acc);
+            return handled;
+        }
+        handled = r == LWC_NS_JOIN_REPLAY;
+        if (r == LWC_NS_JOIN_REPLAY || r == LWC_NS_JOIN_BAD_MIC) {
+            lwc_lw_join_req_t jr;
+            (void)lwc_lw_join_req_parse(p->payload, p->size, &jr);
+            ESP_LOGW(TAG, "join from %s refused: %s", eui_str(jr.dev_eui, e),
+                     r == LWC_NS_JOIN_REPLAY ? "DevNonce already used" : "MIC (wrong AppKey?)");
+        }
+    } else if (mt == LWC_LW_UNCONFIRMED_UP || mt == LWC_LW_CONFIRMED_UP) {
+        const lwc_ns_up_res_t r = lwc_ns_uplink(&s_ns, p->payload, p->size, &up);
+        if (r == LWC_NS_UP_OK) {
+            handled = true;
+            dev_stat_t *st = &s_stat[up.idx];
+            st->seen_us = esp_timer_get_time();
+            st->uplinks++;
+            st->rssi = p->rssi;
+            st->snr = p->lsnr;
+            st->sf = p->sf;
+            st->has_port = up.has_port;
+            st->port = up.port;
+            st->len = (uint8_t)(up.len < PAYLOAD_SHOW ? up.len : PAYLOAD_SHOW);
+            memcpy(st->payload, up.payload, st->len);
+            const esp_err_t err = save_cnt(up.idx);
+            atomic_fetch_add(&s_uplinks, 1U);
+            ESP_LOGI(TAG, "uplink %s FCnt %" PRIu32 " port %u, %u B, RSSI %d SNR %.1f%s%s",
+                     s_ns.dev[up.idx].name[0] ? s_ns.dev[up.idx].name : eui_str(s_ns.dev[up.idx].dev_eui, e),
+                     up.fcnt, up.port, (unsigned)up.len, p->rssi, (double)p->lsnr,
+                     up.confirmed ? " (confirmed: ACK not sent yet)" : "",
+                     err != ESP_OK ? " (counter not stored)" : "");
+            memset(&up, 0, sizeof up);
+        } else if (r == LWC_NS_UP_REPLAY) {
+            handled = true;
+            ESP_LOGW(TAG, "uplink replay dropped (old frame counter)");
+        } else if (r == LWC_NS_UP_BAD_MIC) {
+            ESP_LOGW(TAG, "uplink with a local DevAddr failed the MIC%s",
+                     gwmode() == LWC_MODE_HYBRID ? ": forwarded" : "");
+        }
+    }
+    xSemaphoreGive(s_lock);
+    return handled;
+}
+
+static void lns_task(void *arg)
+{
+    (void)arg;
+    const sv_id_t sv = sv_register("lns", 30000);
+    static radio_pkt_t p;
+    const lwc_mode_t mode = gwmode();
+    for (;;) {
+        sv_beat(sv);
+        if (xQueueReceive(s_radio_q, &p, pdMS_TO_TICKS(1000)) != pdTRUE) {
+            continue;
+        }
+        const bool handled = handle(&p);
+        if (s_fwd_q != NULL && lwc_ns_forward(mode, handled)) {
+            if (xQueueSend(s_fwd_q, &p, 0) == pdTRUE) {
+                atomic_fetch_add(&s_fwd, 1U);
+            } else {
+                atomic_fetch_add(&s_fwd_drop, 1U);
+            }
+        }
+    }
+}
+
+esp_err_t lns_start(QueueHandle_t radio_q, QueueHandle_t *fwd_q)
+{
+    ESP_RETURN_ON_FALSE(fwd_q != NULL, ESP_ERR_INVALID_ARG, TAG, "fwd_q");
+    *fwd_q = NULL;
+    s_lock = xSemaphoreCreateMutex();
+    ESP_RETURN_ON_FALSE(s_lock != NULL, ESP_ERR_NO_MEM, TAG, "lock");
+    load(); /* devices can be managed in every mode */
+    if (!gwmode_local()) {
+        return ESP_OK;
+    }
+    ESP_RETURN_ON_FALSE(radio_q != NULL, ESP_ERR_INVALID_STATE, TAG, "no radio: local server not started");
+    s_radio_q = radio_q;
+    if (gwmode() == LWC_MODE_HYBRID) {
+        s_fwd_q = xQueueCreate(RADIO_QUEUE_LEN, sizeof(radio_pkt_t));
+        ESP_RETURN_ON_FALSE(s_fwd_q != NULL, ESP_ERR_NO_MEM, TAG, "forward queue");
+        *fwd_q = s_fwd_q;
+    }
+    ESP_LOGI(TAG, "local network server: %s mode, NetID %06X%s", gwmode_name(gwmode()),
+             (unsigned)LWC_NS_NET_ID, CONFIG_GW_LNS_TX ? "" : ", DRY RUN (no transmit)");
+    const BaseType_t ok = xTaskCreatePinnedToCore(lns_task, "lns", TASK_STACK, NULL, TASK_PRIO, NULL, TASK_CORE);
+    ESP_RETURN_ON_FALSE(ok == pdPASS, ESP_ERR_NO_MEM, TAG, "task");
+    atomic_store(&s_running, true);
+    return ESP_OK;
+}
+
+/* ---- device management (web API) ---------------------------------------------- */
+
+lwc_ns_err_t lns_add(uint64_t dev_eui, uint64_t join_eui, const uint8_t app_key[16], lwc_ns_mac_t mac,
+                     const char *name)
+{
+    if (s_lock == NULL) {
+        return LWC_NS_ERR_ARG;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    size_t idx = 0;
+    lwc_ns_err_t r = lwc_ns_add(&s_ns, dev_eui, join_eui, app_key, mac, name, &idx);
+    if (r == LWC_NS_OK) {
+        if (save_dev(idx) != ESP_OK || save_cnt(idx) != ESP_OK) {
+            (void)lwc_ns_remove(&s_ns, dev_eui);
+            r = LWC_NS_ERR_FULL; /* storage full or failing */
+        } else {
+            memset(&s_stat[idx], 0, sizeof s_stat[idx]);
+        }
+    }
+    xSemaphoreGive(s_lock);
+    char e[17];
+    if (r == LWC_NS_OK) {
+        ESP_LOGI(TAG, "device %s added", eui_str(dev_eui, e)); /* never the key */
+    }
+    return r;
+}
+
+lwc_ns_err_t lns_remove(uint64_t dev_eui)
+{
+    if (s_lock == NULL) {
+        return LWC_NS_ERR_NOT_FOUND;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    const int i = lwc_ns_find(&s_ns, dev_eui);
+    lwc_ns_err_t r = LWC_NS_ERR_NOT_FOUND;
+    if (i >= 0) {
+        r = lwc_ns_remove(&s_ns, dev_eui);
+        memset(&s_stat[i], 0, sizeof s_stat[i]);
+        nvs_handle_t h;
+        if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+            char k[4];
+            key_of(k, 'd', (size_t)i);
+            erase_key(h, k);
+            key_of(k, 'c', (size_t)i);
+            erase_key(h, k);
+            (void)nvs_commit(h);
+            nvs_close(h);
+        }
+    }
+    xSemaphoreGive(s_lock);
+    char e[17];
+    if (r == LWC_NS_OK) {
+        ESP_LOGI(TAG, "device %s removed", eui_str(dev_eui, e));
+    }
+    return r;
+}
+
+static size_t put(char *out, size_t cap, size_t o, const char *fmt, ...) __attribute__((format(printf, 4, 5)));
+
+static size_t put(char *out, size_t cap, size_t o, const char *fmt, ...)
+{
+    if (o >= cap) {
+        return o;
+    }
+    va_list ap;
+    va_start(ap, fmt);
+    const int n = vsnprintf(out + o, cap - o, fmt, ap);
+    va_end(ap);
+    return n < 0 ? o : (o + (size_t)n < cap ? o + (size_t)n : cap);
+}
+
+size_t lns_devices_json(char *out, size_t cap)
+{
+    if (cap == 0U) {
+        return 0;
+    }
+    size_t o = put(out, cap, 0, "[");
+    bool first = true;
+    const int64_t now = esp_timer_get_time();
+    if (s_lock != NULL) {
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        for (size_t i = 0; i < LWC_NS_MAX_DEVICES; i++) {
+            const lwc_ns_dev_t *d = &s_ns.dev[i];
+            const dev_stat_t *st = &s_stat[i];
+            if (!d->used) {
+                continue;
+            }
+            char dev[17], join[17], pl[2U * PAYLOAD_SHOW + 1U];
+            lwc_hex_encode(st->payload, st->len, pl);
+            /* names are printable ASCII (core); escape what JSON needs */
+            char name[2U * LWC_NS_NAME_MAX + 1U];
+            size_t k = 0;
+            for (const char *c = d->name; *c != '\0' && k + 2U < sizeof name; c++) {
+                if (*c == '"' || *c == '\\') {
+                    name[k++] = '\\';
+                }
+                name[k++] = *c;
+            }
+            name[k] = '\0';
+            o = put(out, cap, o,
+                    "%s{\"dev_eui\":\"%s\",\"join_eui\":\"%s\",\"name\":\"%s\",\"mac\":\"%s\","
+                    "\"joined\":%s,\"answered\":%s,\"dev_addr\":\"%08" PRIX32 "\",\"fcnt_up\":%" PRIu32 ",\"uplinks\":%" PRIu32
+                    ",\"seen_s\":%" PRId64 ",\"rssi\":%d,\"snr\":%.1f,\"sf\":%u,\"port\":%d,\"payload\":\"%s\"}",
+                    first ? "" : ",", eui_str(d->dev_eui, dev), eui_str(d->join_eui, join), name,
+                    d->mac == LWC_NS_MAC_1_0_4 ? "1.0.4" : "1.0.2", d->joined ? "true" : "false",
+                    st->join_unanswered ? "false" : "true",
+                    d->joined ? d->dev_addr : 0U, d->has_up ? d->fcnt_up : 0U, st->uplinks,
+                    st->seen_us != 0 ? (now - st->seen_us) / 1000000LL : (int64_t)-1, st->rssi,
+                    (double)st->snr, st->sf, st->has_port ? st->port : -1, pl);
+            first = false;
+        }
+        xSemaphoreGive(s_lock);
+    }
+    o = put(out, cap, o, "]");
+    return o;
+}
+
+void lns_status_line(char *buf, size_t len)
+{
+    unsigned devs = 0, joined = 0;
+    if (s_lock != NULL) {
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        for (size_t i = 0; i < LWC_NS_MAX_DEVICES; i++) {
+            devs += s_ns.dev[i].used ? 1U : 0U;
+            joined += (s_ns.dev[i].used && s_ns.dev[i].joined) ? 1U : 0U;
+        }
+        xSemaphoreGive(s_lock);
+    }
+    snprintf(buf, len, "mode=%s local=%s devices=%u joined=%u joins=%u uplinks=%u forwarded=%u fwd_dropped=%u tx=%s",
+             gwmode_name(gwmode()), lns_running() ? "on" : "off", devs, joined, atomic_load(&s_joins),
+             atomic_load(&s_uplinks), atomic_load(&s_fwd), atomic_load(&s_fwd_drop),
+             CONFIG_GW_LNS_TX ? "on" : "dry-run");
+}

@@ -1,6 +1,6 @@
 # ADR-0015: Local network server and gateway modes (phase 3)
 
-- Status: accepted (slices 1 and 2 done: crypto, frame codec, join and uplink logic)
+- Status: accepted (slices 1–4 built; transmit off until approved; see Verification)
 - Date: 2026-11-22
 
 ## Context
@@ -52,8 +52,8 @@ mode was the Semtech UDP forwarder (ADR-0012), switched on or off.
 1. Core crypto and LoRaWAN 1.0.x codec (`lwc/aes.h`, `lwc/lorawan.h`). Done.
 2. Core join and uplink decisions over a fixed-size device table (`lwc/ns.h`). Done.
 3. Firmware: router between radio, local server and forwarder; mode setting;
-   persistence; TX path (dry run).
-4. API and UI: mode selector and devices on the Config tab.
+   persistence; TX path (dry run). Done (`lns.c`, `gwmode.c`).
+4. API and UI: mode selector and devices on the Config tab. Done.
 Then downlinks (ACK, MAC commands), ADR, and integrations (phase 4).
 
 ## Consequences
@@ -76,3 +76,29 @@ Then downlinks (ACK, MAC commands), ADR, and integrations (phase 4).
   FRMPayload on port 0 is decrypted with the network key.
 - **Hybrid**: "handled locally" means an accepted join or uplink, or a replay
   of one; a bad MIC is not, so it is forwarded.
+
+## Notes from slices 3 and 4
+
+- **Mode setting**: NVS `pktfwd/mode` (0 TTN, 1 standalone, 2 hybrid), read
+  once at boot. The old `pktfwd/ttn` value is migrated on first read: on →
+  TTN, off → standalone. `POST /api/settings mode=...` replaces `ttn=on|off`.
+- **Routing**: TTN mode keeps the radio queue → forwarder path unchanged.
+  Standalone and hybrid start the `lns` task (core 1, priority 4, below the
+  radio); hybrid gives the forwarder a second queue with every frame the
+  local server did not handle.
+- **Storage** (NVS namespace `lns`): `meta` (JoinNonce, DevAddr allocator),
+  `dNN` (device record with keys, versioned), `cNN` (counters, 12 bytes,
+  written on every accepted uplink: one small entry, so flash wear stays low).
+  On a join the device record and `meta` are written before the join-accept
+  is queued; if that fails, the join is not answered. The downlink counter
+  skips 16 at boot.
+- **Transmit**: requests carry a source tag; the radio task logs the result of
+  local-server frames instead of putting it on the forwarder's result queue.
+  `CONFIG_GW_LNS_TX` is off by default: the join-accept is logged as a dry run.
+  In dry run a join is not stored, the device list says "join request seen,
+  not answered", and in hybrid mode the join-request still goes to TTN, so a
+  device registered on both can keep joining TTN.
+- **API**: `GET /api/devices` (viewer, no keys), `POST /api/devices` and
+  `POST /api/devices/delete` (admin). Devices can be added in every mode.
+- **Not yet**: ACK for confirmed uplinks, MAC commands, ADR, RX2 fallback,
+  application integrations; RSSI and payloads shown in the UI are RAM only.

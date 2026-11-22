@@ -170,6 +170,11 @@ static void reply(const radio_tx_req_t *r, radio_tx_result_t res, int8_t pw, boo
         ESP_LOGI(TAG, "test frame: %s", radio_tx_result_str(res));
         return;
     }
+    if (r->source == RADIO_SRC_LNS) {
+        ESP_LOGI(TAG, "local server downlink %u: %s%s", (unsigned)r->token, radio_tx_result_str(res),
+                 capped ? " (power capped)" : "");
+        return;
+    }
     const radio_tx_res_t out = {r->token, res, pw, capped};
     (void)xQueueSend(g_radio_tx_res, &out, 0);
 }
