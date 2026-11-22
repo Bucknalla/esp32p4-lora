@@ -1,6 +1,6 @@
 # ADR-0013: Captive portal for setup, and an mDNS name
 
-- Status: accepted
+- Status: superseded by ADR-0014 (the captive portal (DNS and port 80); the mDNS name stays)
 - Date: 2026-11-22
 
 ## Context

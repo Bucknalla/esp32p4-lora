@@ -1,6 +1,6 @@
 # ADR-0011: First-time setup over an open access point
 
-- Status: accepted
+- Status: superseded by ADR-0014 (the access point, its DNS and the setup form)
 - Date: 2026-11-22
 
 ## Context

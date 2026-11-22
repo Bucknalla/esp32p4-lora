@@ -5,11 +5,6 @@
 #include <string.h>
 
 #include "esp_check.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "lwip/sockets.h"
-#include "lwc/dns.h"
-#include "esp_mac.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -21,14 +16,11 @@ static const char *TAG = "wifi";
 
 #define BACKOFF_MIN_MS 1000U
 #define BACKOFF_MAX_MS 60000U
-#define SCAN_MAX_APS 10
 
 static atomic_bool s_has_ip;
+static atomic_bool s_configured;
+static _Atomic uint8_t s_last_reason; /* of the last failed attempt, 0 after an IP */
 static esp_timer_handle_t s_retry_timer;
-static esp_timer_handle_t s_setup_timer;
-static atomic_bool s_setup;
-static char s_nets[WIFI_SETUP_MAX_NETS][33];
-static size_t s_net_count;
 static uint32_t s_backoff_ms = BACKOFF_MIN_MS;
 static uint32_t s_disconnects;
 
@@ -42,6 +34,9 @@ static void schedule_retry(void);
 static void retry_cb(void *arg)
 {
     (void)arg;
+    if (!atomic_load(&s_configured)) {
+        return; /* idle station: nothing to join until provisioning */
+    }
     esp_err_t err = esp_wifi_connect();
     if (err != ESP_OK) {
         /* No connect attempt, so no DISCONNECTED event will retry for us. */
@@ -53,6 +48,7 @@ static void retry_cb(void *arg)
 static void schedule_retry(void)
 {
     ESP_LOGI(TAG, "reconnect in %u ms", (unsigned)s_backoff_ms);
+    (void)esp_timer_stop(s_retry_timer); /* a new network may be applied while one is pending */
     esp_err_t err = esp_timer_start_once(s_retry_timer, (uint64_t)s_backoff_ms * 1000U);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "retry timer: %s", esp_err_to_name(err));
@@ -74,6 +70,10 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
     case WIFI_EVENT_STA_DISCONNECTED: {
         const wifi_event_sta_disconnected_t *ev = (const wifi_event_sta_disconnected_t *)data;
         atomic_store(&s_has_ip, false);
+        if (!atomic_load(&s_configured)) {
+            break; /* scans on an idle station end here too */
+        }
+        atomic_store(&s_last_reason, ev->reason);
         s_disconnects++;
         ESP_LOGW(TAG, "disconnected (reason %d, count %u)", ev->reason, (unsigned)s_disconnects);
         schedule_retry();
@@ -91,6 +91,7 @@ static void on_got_ip(void *arg, esp_event_base_t base, int32_t id, void *data)
     (void)id;
     const ip_event_got_ip_t *ev = (const ip_event_got_ip_t *)data;
     atomic_store(&s_has_ip, true);
+    atomic_store(&s_last_reason, 0);
     s_backoff_ms = BACKOFF_MIN_MS;
     ESP_LOGI(TAG, "IP " IPSTR " gw " IPSTR, IP2STR(&ev->ip_info.ip), IP2STR(&ev->ip_info.gw));
 }
@@ -116,123 +117,6 @@ static esp_err_t load_credentials(wifi_config_t *cfg)
     return err;
 }
 
-/* Scan once (proves the C6 link) and keep the names for the setup page. */
-static void scan_networks(void)
-{
-    const wifi_scan_config_t scan = {0};
-    esp_err_t err = esp_wifi_scan_start(&scan, true);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "scan: %s", esp_err_to_name(err));
-        return;
-    }
-    uint16_t n = SCAN_MAX_APS;
-    wifi_ap_record_t aps[SCAN_MAX_APS];
-    err = esp_wifi_scan_get_ap_records(&n, aps);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "scan records: %s", esp_err_to_name(err));
-        return;
-    }
-    ESP_LOGI(TAG, "scan: %u network(s) (C6 link OK)", n);
-    for (uint16_t i = 0; i < n && s_net_count < WIFI_SETUP_MAX_NETS; i++) {
-        bool seen = aps[i].ssid[0] == 0; /* hidden network */
-        for (size_t k = 0; k < s_net_count && !seen; k++) {
-            seen = strncmp(s_nets[k], (const char *)aps[i].ssid, 32) == 0; /* one name, several APs */
-        }
-        if (!seen) { /* records come strongest first */
-            memcpy(s_nets[s_net_count], aps[i].ssid, 32);
-            s_nets[s_net_count++][32] = '\0';
-        }
-    }
-}
-
-static void setup_end_cb(void *arg)
-{
-    (void)arg;
-    atomic_store(&s_setup, false);
-    ESP_LOGW(TAG, "setup access point closed after %d min: power-cycle to open it again",
-             WIFI_SETUP_MINUTES);
-    (void)esp_wifi_set_mode(WIFI_MODE_STA);
-}
-
-static void on_ap_event(void *arg, esp_event_base_t base, int32_t id, void *data)
-{
-    (void)arg;
-    if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STACONNECTED) {
-        ESP_LOGI(TAG, "setup AP: a device joined");
-    } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STADISCONNECTED) {
-        ESP_LOGI(TAG, "setup AP: a device left");
-    } else if (base == IP_EVENT && id == IP_EVENT_ASSIGNED_IP_TO_CLIENT) {
-        const ip_event_assigned_ip_to_client_t *e = data;
-        ESP_LOGI(TAG, "setup AP: gave " IPSTR " to a device", IP2STR(&e->ip));
-    }
-}
-
-/* Captive-portal DNS (ADR-0013): every A query on the setup network is
- * answered with the gateway's address, so phones open their sign-in sheet. */
-static void dns_task(void *arg)
-{
-    (void)arg;
-    static const uint8_t ip[4] = {192, 168, 4, 1};
-    static uint8_t q[512], r[600];
-    const int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    struct sockaddr_in me = {.sin_family = AF_INET, .sin_port = htons(53)};
-    const struct timeval tv = {.tv_sec = 1};
-    if (sock < 0 || bind(sock, (struct sockaddr *)&me, sizeof me) != 0 ||
-        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv) != 0) {
-        ESP_LOGE(TAG, "captive DNS: socket");
-    } else {
-        while (atomic_load(&s_setup)) {
-            struct sockaddr_in from;
-            socklen_t fl = sizeof from;
-            const int n = recvfrom(sock, q, sizeof q, 0, (struct sockaddr *)&from, &fl);
-            if (n > 0) {
-                const size_t m = lwc_dns_captive_reply(q, (size_t)n, ip, r, sizeof r);
-                if (m > 0) {
-                    (void)sendto(sock, r, m, 0, (struct sockaddr *)&from, fl);
-                }
-            }
-        }
-    }
-    if (sock >= 0) {
-        close(sock);
-    }
-    vTaskDelete(NULL);
-}
-
-/* No credentials: an open access point for a few minutes, so a phone can
- * reach the setup page (ADR-0011, ADR-0013). */
-static esp_err_t start_setup_ap(void)
-{
-    ESP_RETURN_ON_FALSE(esp_netif_create_default_wifi_ap() != NULL, ESP_FAIL, TAG, "ap netif");
-    ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_APSTA), TAG, "mode");
-    uint8_t mac[6] = {0};
-    (void)esp_read_mac(mac, ESP_MAC_BASE);
-    wifi_config_t ap = {0};
-    ap.ap.ssid_len = (uint8_t)snprintf((char *)ap.ap.ssid, sizeof ap.ap.ssid,
-                                       "lorawan-gateway-%02X%02X%02X", mac[3], mac[4], mac[5]);
-    ap.ap.channel = 6;
-    ap.ap.authmode = WIFI_AUTH_OPEN;
-    ap.ap.max_connection = 2;
-    ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_AP, &ap), TAG, "ap config");
-    (void)esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_AP_STACONNECTED, on_ap_event, NULL);
-    (void)esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_AP_STADISCONNECTED, on_ap_event, NULL);
-    (void)esp_event_handler_register(IP_EVENT, IP_EVENT_ASSIGNED_IP_TO_CLIENT, on_ap_event, NULL);
-    ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "start");
-    scan_networks();
-    const esp_timer_create_args_t targs = {.callback = setup_end_cb, .name = "wifi_setup"};
-    ESP_RETURN_ON_ERROR(esp_timer_create(&targs, &s_setup_timer), TAG, "setup timer");
-    ESP_RETURN_ON_ERROR(esp_timer_start_once(s_setup_timer, WIFI_SETUP_MINUTES * 60ULL * 1000000ULL),
-                        TAG, "setup timer");
-    atomic_store(&s_setup, true);
-    if (xTaskCreatePinnedToCore(dns_task, "dns", 4096, NULL, 3, NULL, 0) != pdPASS) {
-        ESP_LOGE(TAG, "captive DNS: task");
-    }
-    ESP_LOGW(TAG, "no Wi-Fi credentials: setup access point \"%s\" open for %d min; "
-                  "join it and open https://192.168.4.1/",
-             (const char *)ap.ap.ssid, WIFI_SETUP_MINUTES);
-    return ESP_OK;
-}
-
 esp_err_t wifi_store_credentials(const char *ssid, const char *pass)
 {
     const size_t sl = strlen(ssid), pl = strlen(pass);
@@ -251,16 +135,75 @@ esp_err_t wifi_store_credentials(const char *ssid, const char *pass)
     return err;
 }
 
-bool wifi_setup_active(void)
+static bool is_auth_reason(uint8_t r)
 {
-    return atomic_load(&s_setup);
+    return r == WIFI_REASON_AUTH_FAIL || r == WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT ||
+           r == WIFI_REASON_HANDSHAKE_TIMEOUT || r == WIFI_REASON_AUTH_EXPIRE ||
+           r == WIFI_REASON_MIC_FAILURE || r == WIFI_REASON_CONNECTION_FAIL;
 }
 
-size_t wifi_setup_networks(char names[][33], size_t max)
+static bool is_not_found_reason(uint8_t r)
 {
-    const size_t n = s_net_count < max ? s_net_count : max;
-    memcpy(names, s_nets, n * sizeof s_nets[0]);
-    return n;
+    return r == WIFI_REASON_NO_AP_FOUND || r == WIFI_REASON_NO_AP_FOUND_W_COMPATIBLE_SECURITY ||
+           r == WIFI_REASON_NO_AP_FOUND_IN_AUTHMODE_THRESHOLD ||
+           r == WIFI_REASON_NO_AP_FOUND_IN_RSSI_THRESHOLD;
+}
+
+wifi_link_t wifi_link(void)
+{
+    if (atomic_load(&s_has_ip)) {
+        return WIFI_LINK_UP;
+    }
+    if (!atomic_load(&s_configured)) {
+        return WIFI_LINK_UNCONFIGURED;
+    }
+    const uint8_t r = atomic_load(&s_last_reason);
+    if (is_auth_reason(r)) {
+        return WIFI_LINK_AUTH_FAILED;
+    }
+    if (is_not_found_reason(r)) {
+        return WIFI_LINK_NOT_FOUND;
+    }
+    return WIFI_LINK_CONNECTING;
+}
+
+bool wifi_configured(void)
+{
+    return atomic_load(&s_configured);
+}
+
+esp_err_t wifi_apply_credentials(const char *ssid, const char *pass)
+{
+    ESP_RETURN_ON_ERROR(wifi_store_credentials(ssid, pass), TAG, "store");
+    wifi_config_t cfg = {0};
+    memcpy(cfg.sta.ssid, ssid, strlen(ssid));
+    memcpy(cfg.sta.password, pass, strlen(pass));
+    cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+    cfg.sta.pmf_cfg.capable = true;
+    (void)esp_wifi_disconnect();
+    esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &cfg);
+    memset(&cfg, 0, sizeof cfg); /* do not keep a copy */
+    ESP_RETURN_ON_ERROR(err, TAG, "set config");
+    atomic_store(&s_last_reason, 0);
+    atomic_store(&s_configured, true);
+    s_backoff_ms = BACKOFF_MIN_MS;
+    ESP_LOGI(TAG, "new network \"%s\": connecting", ssid);
+    schedule_retry();
+    return ESP_OK;
+}
+
+esp_err_t wifi_scan(wifi_ap_record_t *aps, uint16_t *n)
+{
+    const wifi_scan_config_t scan = {0};
+    esp_err_t err = esp_wifi_scan_start(&scan, true);
+    if (err == ESP_OK) {
+        err = esp_wifi_scan_get_ap_records(n, aps);
+    }
+    if (err != ESP_OK) {
+        *n = 0;
+        ESP_LOGW(TAG, "scan: %s", esp_err_to_name(err));
+    }
+    return err;
 }
 
 esp_err_t wifi_start(void)
@@ -272,17 +215,6 @@ esp_err_t wifi_start(void)
     ESP_RETURN_ON_ERROR(esp_wifi_set_storage(WIFI_STORAGE_RAM), TAG, "storage");
     ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "mode");
 
-    wifi_config_t cfg = {0};
-    const esp_err_t cred = load_credentials(&cfg);
-    if (cred != ESP_OK) {
-        ESP_LOGW(TAG, "no credentials in NVS (%s)", esp_err_to_name(cred));
-        return start_setup_ap();
-    }
-
-    cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
-    cfg.sta.pmf_cfg.capable = true;
-    ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &cfg), TAG, "set config");
-
     const esp_timer_create_args_t targs = {.callback = retry_cb, .name = "wifi_retry"};
     ESP_RETURN_ON_ERROR(esp_timer_create(&targs, &s_retry_timer), TAG, "retry timer");
     ESP_RETURN_ON_ERROR(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, on_wifi_event,
@@ -290,6 +222,20 @@ esp_err_t wifi_start(void)
                         TAG, "register WIFI_EVENT");
     ESP_RETURN_ON_ERROR(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_got_ip, NULL),
                         TAG, "register IP_EVENT");
+
+    wifi_config_t cfg = {0};
+    const esp_err_t cred = load_credentials(&cfg);
+    if (cred != ESP_OK) {
+        /* Station started but idle: BLE provisioning (ble_prov.c) scans with
+         * it and calls wifi_apply_credentials(). */
+        ESP_LOGW(TAG, "no credentials in NVS (%s)", esp_err_to_name(cred));
+        return esp_wifi_start();
+    }
+
+    cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+    cfg.sta.pmf_cfg.capable = true;
+    ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &cfg), TAG, "set config");
+    atomic_store(&s_configured, true);
 
     ESP_LOGI(TAG, "connecting to \"%s\"", (const char *)cfg.sta.ssid);
     memset(cfg.sta.password, 0, sizeof cfg.sta.password); /* do not keep a copy */

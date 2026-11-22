@@ -109,6 +109,13 @@ dependencies:
     - esp32p4
     - esp32s31
     version: 1.1.0
+  espressif/json_generator:
+    component_hash: 7433f3e206d8ed81dc8335b77710a5186f36c9e8c8b5375b277d6f2b9b430496
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 2.1.0
   espressif/mdns:
     component_hash: 2fa43caa78cc170842255bc7bf71f306bc815cae12e9496bfb12372423019ac7
     dependencies:
@@ -119,6 +126,20 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 1.15.1
+  espressif/network_provisioning:
+    component_hash: ac8dc8e10dd26b0307697049f6358caa1d17696db2e23903512098b7ad86f848
+    dependencies:
+    - name: espressif/json_generator
+      registry_url: https://components.espressif.com
+      require: private
+      version: ^2.0.0
+    - name: idf
+      require: private
+      version: '>=5.1'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.4.0
   espressif/qrcode:
     component_hash: 31e70991ce22f28d73a4386417fc9c0993f61e1aab1832474fd9e3db8da9dcbd
     dependencies: []
@@ -149,8 +170,9 @@ direct_dependencies:
 - espressif/esp_wifi_remote
 - espressif/ip101
 - espressif/mdns
+- espressif/network_provisioning
 - espressif/qrcode
 - idf
-manifest_hash: 4fa53e197236294ed0235a656f630075e6ce506c4c5c9a24108224ed6442a267
+manifest_hash: de16abb868ea7274118b36f19da57ed64491bceb66b6aaccc5fe6b7b5a536b70
 target: esp32p4
 version: 3.0.0

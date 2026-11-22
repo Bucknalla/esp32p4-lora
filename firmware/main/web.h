@@ -8,7 +8,7 @@
  *   GET  /api/logs[?prev=1]                    viewer
  *   GET  /api/coredump, DELETE /api/coredump   admin
  *   POST /api/ota/check, POST /api/reboot      admin
- *   GET|POST /api/setup    only while the setup AP is open (ADR-0011)
+ *   GET|POST /api/claim    set the first admin password from the LAN (ADR-0014)
  *   GET  /api/ttn/qr.svg (viewer), POST /api/settings ttn=on|off (admin)
  * POST/DELETE need the header "X-Requested-With: gw" (CSRF guard).
  */
@@ -20,6 +20,9 @@
 
 /** Start the HTTPS server (needs NVS, esp_netif). */
 esp_err_t web_start(void);
+
+/** Open the claim window again (BLE setup joined a network). */
+void web_claim_restart(void);
 
 /** Log everyone out (after a password change). */
 void web_sessions_end_all(void);

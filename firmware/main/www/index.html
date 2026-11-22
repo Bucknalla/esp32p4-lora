@@ -15,17 +15,13 @@
 </header>
 <main>
   <section id="setup" hidden>
-    <h2>Set up this gateway</h2>
+    <h2>Claim this gateway</h2>
+    <p class="hint">No admin yet. Set the admin password now; the first person on this network to do it owns the gateway.</p>
     <form id="setup-form">
-      <label>Wi-Fi network <select name="ssid" id="ssid"></select></label>
-      <label id="ssid-other-row" hidden>Network name <input name="ssid_other" maxlength="32" autocomplete="off"></label>
-      <label>Wi-Fi password <input type="password" name="password" minlength="8" maxlength="63" required autocomplete="off"></label>
-      <div id="claim" hidden>
-        <label>New admin password <input type="password" name="admin" minlength="8" maxlength="63" autocomplete="new-password"></label>
-        <label>Repeat admin password <input type="password" id="admin2" minlength="8" maxlength="63" autocomplete="new-password"></label>
-      </div>
+      <label>New admin password <input type="password" name="admin" minlength="8" maxlength="63" required autocomplete="new-password"></label>
+      <label>Repeat admin password <input type="password" id="admin2" minlength="8" maxlength="63" required autocomplete="new-password"></label>
       <label class="check"><input type="checkbox" name="ttn" checked> Report to The Things Network (eu1)</label>
-      <button type="submit">Save and connect</button>
+      <button type="submit">Set admin password</button>
       <p id="setup-msg" class="msg"></p>
     </form>
   </section>
