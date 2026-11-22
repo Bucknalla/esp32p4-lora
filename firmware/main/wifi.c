@@ -5,6 +5,10 @@
 #include <string.h>
 
 #include "esp_check.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "lwip/sockets.h"
+#include "lwc/dns.h"
 #include "esp_mac.h"
 #include "esp_event.h"
 #include "esp_log.h"
@@ -130,7 +134,11 @@ static void scan_networks(void)
     }
     ESP_LOGI(TAG, "scan: %u network(s) (C6 link OK)", n);
     for (uint16_t i = 0; i < n && s_net_count < WIFI_SETUP_MAX_NETS; i++) {
-        if (aps[i].ssid[0] != 0) {
+        bool seen = aps[i].ssid[0] == 0; /* hidden network */
+        for (size_t k = 0; k < s_net_count && !seen; k++) {
+            seen = strncmp(s_nets[k], (const char *)aps[i].ssid, 32) == 0; /* one name, several APs */
+        }
+        if (!seen) { /* records come strongest first */
             memcpy(s_nets[s_net_count], aps[i].ssid, 32);
             s_nets[s_net_count++][32] = '\0';
         }
@@ -146,8 +154,53 @@ static void setup_end_cb(void *arg)
     (void)esp_wifi_set_mode(WIFI_MODE_STA);
 }
 
+static void on_ap_event(void *arg, esp_event_base_t base, int32_t id, void *data)
+{
+    (void)arg;
+    if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STACONNECTED) {
+        ESP_LOGI(TAG, "setup AP: a device joined");
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STADISCONNECTED) {
+        ESP_LOGI(TAG, "setup AP: a device left");
+    } else if (base == IP_EVENT && id == IP_EVENT_ASSIGNED_IP_TO_CLIENT) {
+        const ip_event_assigned_ip_to_client_t *e = data;
+        ESP_LOGI(TAG, "setup AP: gave " IPSTR " to a device", IP2STR(&e->ip));
+    }
+}
+
+/* Captive-portal DNS (ADR-0013): every A query on the setup network is
+ * answered with the gateway's address, so phones open their sign-in sheet. */
+static void dns_task(void *arg)
+{
+    (void)arg;
+    static const uint8_t ip[4] = {192, 168, 4, 1};
+    static uint8_t q[512], r[600];
+    const int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    struct sockaddr_in me = {.sin_family = AF_INET, .sin_port = htons(53)};
+    const struct timeval tv = {.tv_sec = 1};
+    if (sock < 0 || bind(sock, (struct sockaddr *)&me, sizeof me) != 0 ||
+        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv) != 0) {
+        ESP_LOGE(TAG, "captive DNS: socket");
+    } else {
+        while (atomic_load(&s_setup)) {
+            struct sockaddr_in from;
+            socklen_t fl = sizeof from;
+            const int n = recvfrom(sock, q, sizeof q, 0, (struct sockaddr *)&from, &fl);
+            if (n > 0) {
+                const size_t m = lwc_dns_captive_reply(q, (size_t)n, ip, r, sizeof r);
+                if (m > 0) {
+                    (void)sendto(sock, r, m, 0, (struct sockaddr *)&from, fl);
+                }
+            }
+        }
+    }
+    if (sock >= 0) {
+        close(sock);
+    }
+    vTaskDelete(NULL);
+}
+
 /* No credentials: an open access point for a few minutes, so a phone can
- * reach the setup page (ADR-0011). */
+ * reach the setup page (ADR-0011, ADR-0013). */
 static esp_err_t start_setup_ap(void)
 {
     ESP_RETURN_ON_FALSE(esp_netif_create_default_wifi_ap() != NULL, ESP_FAIL, TAG, "ap netif");
@@ -161,6 +214,9 @@ static esp_err_t start_setup_ap(void)
     ap.ap.authmode = WIFI_AUTH_OPEN;
     ap.ap.max_connection = 2;
     ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_AP, &ap), TAG, "ap config");
+    (void)esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_AP_STACONNECTED, on_ap_event, NULL);
+    (void)esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_AP_STADISCONNECTED, on_ap_event, NULL);
+    (void)esp_event_handler_register(IP_EVENT, IP_EVENT_ASSIGNED_IP_TO_CLIENT, on_ap_event, NULL);
     ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "start");
     scan_networks();
     const esp_timer_create_args_t targs = {.callback = setup_end_cb, .name = "wifi_setup"};
@@ -168,6 +224,9 @@ static esp_err_t start_setup_ap(void)
     ESP_RETURN_ON_ERROR(esp_timer_start_once(s_setup_timer, WIFI_SETUP_MINUTES * 60ULL * 1000000ULL),
                         TAG, "setup timer");
     atomic_store(&s_setup, true);
+    if (xTaskCreatePinnedToCore(dns_task, "dns", 4096, NULL, 3, NULL, 0) != pdPASS) {
+        ESP_LOGE(TAG, "captive DNS: task");
+    }
     ESP_LOGW(TAG, "no Wi-Fi credentials: setup access point \"%s\" open for %d min; "
                   "join it and open https://192.168.4.1/",
              (const char *)ap.ap.ssid, WIFI_SETUP_MINUTES);
