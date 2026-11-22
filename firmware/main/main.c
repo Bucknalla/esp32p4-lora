@@ -5,6 +5,7 @@
  */
 #include <inttypes.h>
 
+#include "ble_prov.h"
 #include "board.h"
 #include "conc.h"
 #include "conc_hal.h"
@@ -175,6 +176,12 @@ void app_main(void)
     err = web_start();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "web UI: %s", esp_err_to_name(err));
+    }
+
+    /* Opens BLE setup at once when there are no Wi-Fi credentials. */
+    err = ble_prov_start();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "BLE setup: %s", esp_err_to_name(err));
     }
 
     err = led_start();

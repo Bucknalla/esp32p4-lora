@@ -1,7 +1,8 @@
 /* Status LED on the HAT (Nebra V1: the LED1 anode on net STATUS, P4 GPIO4).
- * Fast blink: no network yet. Slow blink: setup access point open. Steady:
+ * Fast blink: no network yet. Slow blink: BLE setup open. Steady:
  * online. Double blink: needs attention (upstream down, radio restarting or
- * missing, image pending verify). A downlink inverts it for 150 ms. */
+ * missing, image pending verify). A downlink inverts it for 150 ms.
+ * The task also reads the HAT button: a 5 s hold opens BLE setup. */
 #pragma once
 
 #include "esp_err.h"

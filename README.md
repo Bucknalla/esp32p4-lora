@@ -45,12 +45,18 @@ RTS-on/DTR-off state for a moment, which resets the board.
 
 ## Wi-Fi
 
-A gateway with no Wi-Fi credentials opens the open access point
-`lorawan-gateway-XXXXXX` for 15 minutes after power-on (ADR-0011). Join it
-with a phone: the sign-in sheet opens the secure setup page (captive portal,
-ADR-0013); otherwise open `https://192.168.4.1/`. Pick the network, enter its
-password and a new admin password. Afterwards the gateway answers at
-`https://lorawan-gateway-xxxxxx.local/` (mDNS). Over USB instead:
+Setup is over Bluetooth LE (ADR-0014) with Espressif's **ESP BLE
+Provisioning** app (iOS, Android). BLE setup opens for 15 minutes when the
+gateway has no Wi-Fi credentials, or when the HAT button is held 5 s (the LED
+blinks slowly). In the app: *Provision Device*, *I don't have a QR code*, pick
+`PROV_XXXXXX`, then the network and its password. The gateway joins it and
+closes BLE 30 s later.
+
+Then open `https://lorawan-gateway-xxxxxx.local/` (mDNS) from the same
+network. With no admin password yet, the first visit within 15 minutes of
+start (or of BLE setup) sets it. BLE setup needs the C6 image with Bluetooth
+(`tools/flash_c6_image.sh`); without it the gateway logs an error and runs on.
+Over USB instead:
 
 ```sh
 python tools/provision_wifi.py <PORT> "<SSID>"   # asks for the password, writes NVS
@@ -91,7 +97,7 @@ the `STATUS` net (P4 GPIO4 on the Nebra V1 HAT), which the firmware drives:
 | Pattern | Meaning |
 | --- | --- |
 | fast blink (5 Hz) | starting, no network yet |
-| slow blink (0.5 Hz) | setup access point open |
+| slow blink (0.5 Hz) | BLE setup open |
 | steady on | online (TTN link up, or TTN reporting off) |
 | double blink | needs attention: upstream down, concentrator restarting or not started, new image pending verify |
 | short blip | a downlink was sent |

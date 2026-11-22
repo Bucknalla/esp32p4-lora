@@ -10,7 +10,7 @@ set(CMAKE_C_EXTENSIONS OFF)
 option(LWC_SANITIZE "Build with ASan + UBSan" ON)
 option(LWC_FUZZ "Build libFuzzer targets (clang only)" OFF)
 
-set(LWC_SOURCES src/frame.c src/console_cmd.c src/gwmp.c src/txpk.c src/logring.c src/supervisor.c src/session.c src/form.c src/netaddr.c src/led.c src/dns.c)
+set(LWC_SOURCES src/frame.c src/console_cmd.c src/gwmp.c src/txpk.c src/logring.c src/supervisor.c src/session.c src/form.c src/netaddr.c src/led.c)
 set(LWC_WARNINGS -Wall -Wextra -Werror -Wshadow -Wconversion -Wstrict-prototypes)
 
 add_library(lwc_core STATIC ${LWC_SOURCES})
@@ -44,7 +44,7 @@ target_link_libraries(test_txpk PRIVATE lwc_core)
 target_compile_options(test_txpk PRIVATE ${LWC_WARNINGS})
 add_test(NAME txpk COMMAND test_txpk)
 
-foreach(t logring supervisor session form netaddr led dns)
+foreach(t logring supervisor session form netaddr led)
     add_executable(test_${t} test/test_${t}.c)
     target_link_libraries(test_${t} PRIVATE lwc_core)
     target_compile_options(test_${t} PRIVATE ${LWC_WARNINGS})
@@ -72,10 +72,6 @@ if(LWC_FUZZ)
     target_compile_options(fuzz_txpk PRIVATE -fsanitize=fuzzer,address,undefined)
     target_link_options(fuzz_txpk PRIVATE -fsanitize=fuzzer,address,undefined)
 
-    add_executable(fuzz_dns fuzz/fuzz_dns.c ${LWC_SOURCES})
-    target_include_directories(fuzz_dns PRIVATE include)
-    target_compile_options(fuzz_dns PRIVATE -fsanitize=fuzzer,address,undefined)
-    target_link_options(fuzz_dns PRIVATE -fsanitize=fuzzer,address,undefined)
 
     add_executable(fuzz_form fuzz/fuzz_form.c ${LWC_SOURCES})
     target_include_directories(fuzz_form PRIVATE include)

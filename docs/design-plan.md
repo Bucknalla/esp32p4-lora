@@ -290,7 +290,7 @@ Ethernet is primary, Wi-Fi is automatic fallback, LTE is an optional add-on; the
 | Link | Hardware | Role | Phase |
 | --- | --- | --- | --- |
 | Ethernet 100 Mbps | Internal EMAC + IP101 PHY (RMII on GPIO28–35, 49–52) | Primary; PoE power | 1 |
-| Wi-Fi 6 | ESP32-C6 over SDIO via ESP-Hosted | Fallback when Ethernet link drops; first-time setup AP | 2 |
+| Wi-Fi 6 | ESP32-C6 over SDIO via ESP-Hosted | Fallback when Ethernet link drops; BLE setup through the C6 (ADR-0014) | 2 |
 | LTE | USB modem on the USB host port, PPP via `esp-modem` | Optional for sites with no wired network | 6 |
 
 **Failover:** the default route follows link state, Ethernet > Wi-Fi > LTE. MQTT and upstream UDP reconnect on route change; uplinks queue in PSRAM while all links are down.

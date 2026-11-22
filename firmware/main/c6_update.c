@@ -35,6 +35,8 @@ static const char *TAG = "c6_update";
 #define C6_UPDATE_MAX_TRIES 3
 #define NVS_NS "c6upd"
 #define NVS_KEY_TRIES "tries"
+#define NVS_KEY_SENT "sent" /* ELF SHA-256 prefix of the last image pushed */
+#define SHA_PREFIX 8U
 #define VERSION_WAIT_MS 15000
 /* Below EH_HOST_CP_OTA_CHUNK_MAX (SDIO buffer minus headers), and small
  * enough for older C6 firmware's RPC buffers. */
@@ -90,6 +92,38 @@ static esp_err_t get_cp_version(eh_host_coprocessor_fwver_t *v)
     return ESP_OK;
 }
 
+/* The image last pushed, so a new C6 build with the same ESP-Hosted version
+ * (for example Bluetooth turned on) is still sent once. */
+static bool sent_matches(const uint8_t sha[SHA_PREFIX])
+{
+    nvs_handle_t h;
+    uint8_t got[SHA_PREFIX];
+    size_t len = sizeof got;
+    bool same = false;
+    if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
+        same = nvs_get_blob(h, NVS_KEY_SENT, got, &len) == ESP_OK && len == SHA_PREFIX &&
+               memcmp(got, sha, SHA_PREFIX) == 0;
+        nvs_close(h);
+    }
+    return same;
+}
+
+static void sent_set(const uint8_t sha[SHA_PREFIX])
+{
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(NVS_NS, NVS_READWRITE, &h);
+    if (err == ESP_OK) {
+        err = nvs_set_blob(h, NVS_KEY_SENT, sha, SHA_PREFIX);
+        if (err == ESP_OK) {
+            err = nvs_commit(h);
+        }
+        nvs_close(h);
+    }
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "sent image record: %s", esp_err_to_name(err));
+    }
+}
+
 static uint8_t tries_get(void)
 {
     nvs_handle_t h;
@@ -120,7 +154,8 @@ static void tries_set(uint8_t n)
 /* Size of an ESP application image: header, segments, padding, checksum,
  * optional SHA-256. The image is for the C6, so esp_image_verify() (which
  * checks the chip ID against the P4) cannot be used. */
-static esp_err_t image_size(const esp_partition_t *p, size_t *size, char *ver, size_t ver_len)
+static esp_err_t image_size(const esp_partition_t *p, size_t *size, char *ver, size_t ver_len,
+                            uint8_t sha[SHA_PREFIX])
 {
     esp_image_header_t hdr;
     ESP_RETURN_ON_ERROR(esp_partition_read(p, 0, &hdr, sizeof hdr), TAG, "read header");
@@ -143,8 +178,10 @@ static esp_err_t image_size(const esp_partition_t *p, size_t *size, char *ver, s
             if (esp_partition_read(p, off + sizeof seg, &desc, sizeof desc) == ESP_OK &&
                 desc.magic_word == ESP_APP_DESC_MAGIC_WORD) {
                 strlcpy(ver, desc.version, ver_len);
+                memcpy(sha, desc.app_elf_sha256, SHA_PREFIX);
             } else {
                 strlcpy(ver, "unknown", ver_len);
+                memset(sha, 0, SHA_PREFIX);
             }
         }
         off += sizeof seg + seg.data_len;
@@ -204,8 +241,17 @@ esp_err_t c6_update_check(void)
              ESP_HOSTED_VERSION_MAJOR_1, ESP_HOSTED_VERSION_MINOR_1, ESP_HOSTED_VERSION_PATCH_1,
              cp.major1, cp.minor1, cp.patch1);
 
-    if (cp.major1 == (uint32_t)ESP_HOSTED_VERSION_MAJOR_1 &&
-        cp.minor1 == (uint32_t)ESP_HOSTED_VERSION_MINOR_1) {
+    const bool same_ver = cp.major1 == (uint32_t)ESP_HOSTED_VERSION_MAJOR_1 &&
+                          cp.minor1 == (uint32_t)ESP_HOSTED_VERSION_MINOR_1;
+
+    const esp_partition_t *p =
+        esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, CP_FW_LABEL);
+    size_t size = 0;
+    char new_ver[32] = "";
+    uint8_t sha[SHA_PREFIX] = {0};
+    const bool have_image = p != NULL && image_size(p, &size, new_ver, sizeof new_ver, sha) == ESP_OK;
+
+    if (same_ver && (!have_image || sent_matches(sha))) {
         if (tries_get() != 0) {
             tries_set(0);
             ESP_LOGI(TAG, "C6 update confirmed");
@@ -216,22 +262,15 @@ esp_err_t c6_update_check(void)
     /* The C6 update ends in a restart, and a restart while a new P4 image is
      * pending verify rolls that image back (ADR-0008). */
     if (ota_pending_verify()) {
-        ESP_LOGW(TAG, "C6 version differs, but this image is pending verify: C6 update skipped");
+        ESP_LOGW(TAG, "C6 update due, but this image is pending verify: C6 update skipped");
         return ESP_OK;
     }
-
-    const esp_partition_t *p =
-        esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, CP_FW_LABEL);
-    if (p == NULL) {
-        ESP_LOGW(TAG, "no '%s' partition: C6 stays on its current firmware", CP_FW_LABEL);
-        return ESP_OK;
-    }
-    size_t size = 0;
-    char new_ver[32];
-    err = image_size(p, &size, new_ver, sizeof new_ver);
-    if (err != ESP_OK) {
+    if (!have_image) {
         ESP_LOGW(TAG, "C6 version mismatch, but no usable image in '%s'", CP_FW_LABEL);
         return ESP_OK;
+    }
+    if (same_ver) {
+        ESP_LOGI(TAG, "'%s' holds a C6 build the C6 has not been sent", CP_FW_LABEL);
     }
     /* App OTA never rewrites cp_fw: pushing an image that does not match the
      * host would only repeat the mismatch and burn the attempt counter. */
@@ -259,6 +298,7 @@ esp_err_t c6_update_check(void)
         ESP_LOGE(TAG, "C6 update failed: %s. The C6 keeps its old firmware.", esp_err_to_name(err));
         return err;
     }
+    sent_set(sha);
 
     /* The activate RPC exists from C6 firmware v2.6.0; older firmware
      * switches to the new image at ota_end. */

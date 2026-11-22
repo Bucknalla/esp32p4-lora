@@ -5,7 +5,8 @@ P4 over SDIO). Source: ESP-Hosted 3.1.0 `examples/ota/coprocessor_ota/cp`,
 pinned to `espressif/esp_hosted ==3.1.0` so it matches the host side.
 
 - Transport: SDIO slave (C6 fixed pins 18–23), SW aggregation, RPC V2.
-- Bluetooth is off (the factory image had HCI over SDIO; the plan has no BLE).
+- Bluetooth LE controller on, HCI over the SDIO link (VHCI), for BLE setup
+  on the P4's NimBLE (ADR-0014).
 - `PROJECT_VER` = the ESP-Hosted version, so logs show it.
 
 ## Update path (no C6 cable needed)
@@ -16,7 +17,8 @@ tools/flash_c6_image.sh <port>      # build, write to the P4's cp_fw partition
 ```
 
 On the next boot `firmware/main/c6_update.c` compares the C6's ESP-Hosted
-version (from its init event) with the host's. If major.minor differ, it pushes
+version (from its init event) with the host's. If major.minor differ, or
+`cp_fw` holds a build not yet sent (ELF SHA-256 prefix in NVS `c6upd/sent`), it pushes
 `cp_fw` with the OTA RPCs in 1 KB chunks and restarts. An NVS counter
 (`c6upd/tries`, max 3) stops a reboot loop; it resets when the versions match.
 

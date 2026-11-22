@@ -544,38 +544,42 @@ static esp_err_t api_settings(httpd_req_t *req)
                                                          : "TTN reporting off: restarting\n");
 }
 
-/* ---- first-time setup (ADR-0011) -----------------------------------------------
- * Only while the setup access point is open (no Wi-Fi credentials). With no
- * admin password yet, the form also sets it (claim); otherwise it needs an
- * admin session. */
+/* ---- claim (ADR-0014) ------------------------------------------------------------
+ * With no admin password yet, the first LAN visitor sets it, for CLAIM_MINUTES
+ * after start or after BLE setup joined a network. Then the window shuts until
+ * the next restart or BLE setup; the console WEB_PASS always works. */
 
-static esp_err_t api_setup_get(httpd_req_t *req)
+#define CLAIM_MINUTES 15
+
+static _Atomic int64_t s_claim_from_us;
+
+void web_claim_restart(void)
+{
+    atomic_store(&s_claim_from_us, esp_timer_get_time());
+}
+
+static bool claim_open(void)
+{
+    return !webauth_has_password(LWC_ROLE_ADMIN) &&
+           esp_timer_get_time() - atomic_load(&s_claim_from_us) < CLAIM_MINUTES * 60LL * 1000000LL;
+}
+
+static esp_err_t api_claim_get(httpd_req_t *req)
 {
     esp_err_t r;
     if (!gate(req, LWC_ROLE_NONE, &r)) {
         return r;
     }
-    if (!wifi_setup_active()) {
-        return send_status(req, "404 Not Found", "setup is closed\n");
-    }
-    char names[WIFI_SETUP_MAX_NETS][33];
-    const size_t n = wifi_setup_networks(names, WIFI_SETUP_MAX_NETS);
-    char out[WIFI_SETUP_MAX_NETS * 72 + 64];
     char host[WEBAUTH_HOST_LEN];
     webauth_hostname(host);
-    size_t o = (size_t)snprintf(out, sizeof out, "{\"host\":\"%s.local\",\"admin_set\":%s,\"networks\":[",
-                                host, webauth_has_password(LWC_ROLE_ADMIN) ? "true" : "false");
-    for (size_t i = 0; i < n; i++) {
-        if (i > 0 && o + 1U < sizeof out) {
-            out[o++] = ',';
-        }
-        json_quote(out, sizeof out, &o, names[i]);
-    }
-    o += (size_t)snprintf(out + o, sizeof out - o, "]}\n");
+    char out[160];
+    const int n = snprintf(out, sizeof out, "{\"open\":%s,\"admin_set\":%s,\"host\":\"%s.local\"}\n",
+                           claim_open() ? "true" : "false",
+                           webauth_has_password(LWC_ROLE_ADMIN) ? "true" : "false", host);
     common_headers(req);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-    return httpd_resp_send(req, out, (ssize_t)o);
+    return httpd_resp_send(req, out, n);
 }
 
 /* Read a form body of at most BODY_MAX bytes into `body` (NUL-terminated). */
@@ -596,279 +600,49 @@ static bool read_body(httpd_req_t *req, char *body, size_t *got)
     return true;
 }
 
-/* Validate and store a setup form; NULL on success, else the reason. Used by
- * the HTTPS page and the plain-HTTP fallback on the captive portal. */
-static const char *setup_save(char *body, size_t got, bool claim, bool want_repeat, esp_err_t *err)
-{
-    char ssid[33], pass[64], admin[64], admin2[64], ttn[8];
-    const bool ttn_on = lwc_form_get(body, got, "ttn", ttn, sizeof ttn) > 0; /* checkbox */
-    int sl = lwc_form_get(body, got, "ssid", ssid, sizeof ssid);
-    if (sl < 1) { /* "Other network" in the list: the typed name */
-        sl = lwc_form_get(body, got, "ssid_other", ssid, sizeof ssid);
-    }
-    const int pl = lwc_form_get(body, got, "password", pass, sizeof pass);
-    const int al = claim ? lwc_form_get(body, got, "admin", admin, sizeof admin) : 8;
-    const bool same = !claim || !want_repeat ||
-                      (lwc_form_get(body, got, "admin2", admin2, sizeof admin2) == al &&
-                       strcmp(admin, admin2) == 0);
-    memset(body, 0, got);
-    const char *why = NULL;
-    *err = ESP_OK;
-    if (sl < 1) {
-        why = "Choose a network.";
-    } else if (pl < 8) {
-        why = "Wi-Fi password: 8 to 63 characters.";
-    } else if (al < 8) {
-        why = "Admin password: 8 to 63 characters.";
-    } else if (!same) {
-        why = "The admin passwords differ.";
-    }
-    if (why == NULL && claim) {
-        *err = webauth_set_password(LWC_ROLE_ADMIN, admin, (size_t)al);
-    }
-    if (why == NULL && *err == ESP_OK) {
-        *err = wifi_store_credentials(ssid, pass);
-    }
-    if (why == NULL && *err == ESP_OK) {
-        *err = pktfwd_set_ttn(ttn_on);
-    }
-    memset(pass, 0, sizeof pass);
-    memset(admin, 0, sizeof admin);
-    memset(admin2, 0, sizeof admin2);
-    if (why == NULL && *err != ESP_OK) {
-        why = esp_err_to_name(*err);
-    }
-    if (why == NULL) {
-        ESP_LOGW(TAG, "setup: Wi-Fi stored%s; restarting", claim ? " and admin password set" : "");
-    }
-    return why;
-}
-
-static esp_err_t api_setup_post(httpd_req_t *req)
+static esp_err_t api_claim_post(httpd_req_t *req)
 {
     esp_err_t r;
     if (!gate(req, LWC_ROLE_NONE, &r)) {
         return r;
     }
-    if (!wifi_setup_active()) {
-        return send_status(req, "404 Not Found", "setup is closed\n");
-    }
-    const bool claim = !webauth_has_password(LWC_ROLE_ADMIN);
-    if (!claim && role_of(req) != LWC_ROLE_ADMIN) {
-        return send_status(req, "401 Unauthorized", "log in as admin to change Wi-Fi\n");
+    if (!claim_open()) {
+        return send_status(req, "403 Forbidden", "claim is closed\n");
     }
     char body[BODY_MAX + 1];
     size_t got;
     if (!read_body(req, body, &got)) {
         return send_status(req, "400 Bad Request", "bad body\n");
     }
-    esp_err_t err;
-    const char *why = setup_save(body, got, claim, false, &err); /* the page checks the repeat */
-    if (why != NULL) {
-        return send_status(req, err != ESP_OK ? "500 Internal Server Error" : "400 Bad Request", why);
+    char admin[64], ttn[8];
+    const bool ttn_on = lwc_form_get(body, got, "ttn", ttn, sizeof ttn) > 0; /* checkbox */
+    const int al = lwc_form_get(body, got, "admin", admin, sizeof admin);
+    memset(body, 0, sizeof body);
+    if (al < 8) {
+        memset(admin, 0, sizeof admin);
+        return send_status(req, "400 Bad Request", "Admin password: 8 to 63 characters.\n");
     }
-    return reboot_soon(req, "web setup complete", "saved: the gateway restarts and joins the network\n");
-}
-
-/* ---- captive portal (ADR-0013) -----------------------------------------------
- * Plain HTTP on port 80, only in setup mode. Every request for another host
- * or path (the phones' connectivity probes) is sent to the portal page; that
- * page offers the HTTPS setup first and, for an unclaimed gateway only, a
- * plain-HTTP fallback form with a warning. */
-
-#define PORTAL_PAGE_MAX 8192
-
-static httpd_handle_t s_portal;
-
-/* Append `v` HTML-escaped (network names come from the air). */
-static void html_text(char *out, size_t cap, size_t *o, const char *v)
-{
-    for (; *v != '\0' && *o + 7U < cap; v++) {
-        const char *e = *v == '<' ? "&lt;" : *v == '>' ? "&gt;" : *v == '&' ? "&amp;"
-                        : *v == '"' ? "&quot;" : *v == '\'' ? "&#39;" : NULL;
-        if (e != NULL) {
-            *o += (size_t)snprintf(out + *o, cap - *o, "%s", e);
-        } else {
-            out[(*o)++] = *v;
-        }
+    esp_err_t err = webauth_set_password(LWC_ROLE_ADMIN, admin, (size_t)al);
+    memset(admin, 0, sizeof admin);
+    if (err != ESP_OK) {
+        return send_status(req, "500 Internal Server Error", esp_err_to_name(err));
     }
-    out[*o] = '\0';
-}
-
-static void html_raw(char *out, size_t cap, size_t *o, const char *v)
-{
-    const int n = snprintf(out + *o, cap - *o, "%s", v);
-    *o = n < 0 ? *o : (*o + (size_t)n < cap ? *o + (size_t)n : cap - 1U);
-}
-
-static const char k_portal_head[] =
-    "<!doctype html><html lang=en><meta charset=utf-8>"
-    "<meta name=viewport content='width=device-width,initial-scale=1'><title>Gateway setup</title><style>"
-    "body{margin:0;font:16px/1.5 system-ui,sans-serif;background:#121416;color:#e3e6e8}"
-    "header{padding:12px 16px;background:#0b0d0e;border-bottom:3px solid #e8a100;"
-    "font:600 14px ui-monospace,monospace;letter-spacing:.14em;text-transform:uppercase}"
-    "main{max-width:400px;margin:0 auto;padding:16px}"
-    ".btn{display:block;text-align:center;padding:12px;border-radius:4px;background:#e8a100;color:#1b1f22;"
-    "font:600 13px ui-monospace,monospace;letter-spacing:.08em;text-transform:uppercase;text-decoration:none}"
-    "p{color:#8b949a;font-size:14px}code{color:#e3e6e8}details{margin-top:24px;border-top:1px solid #3d454b;padding-top:8px}"
-    "summary{cursor:pointer;color:#8b949a}.warn{border-left:6px solid #e8a100;padding:6px 10px;color:#e3e6e8}"
-    "label{display:grid;gap:4px;margin:12px 0;font-size:13px;color:#8b949a}"
-    "input,select{font:inherit;padding:8px;border-radius:4px;border:1px solid #3d454b;background:#1a1d20;color:#e3e6e8}"
-    "button{width:100%;padding:10px;border-radius:4px;border:1px solid #3d454b;background:#1a1d20;color:#e3e6e8;font:inherit}"
-    "</style><header>&#9632; LoRaWAN Gateway setup</header><main>";
-
-static esp_err_t portal_send(httpd_req_t *req, const char *status, const char *html, size_t len)
-{
-    httpd_resp_set_status(req, status);
-    httpd_resp_set_type(req, "text/html; charset=utf-8");
-    httpd_resp_set_hdr(req, "Content-Security-Policy",
-                       "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'");
-    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-    return httpd_resp_send(req, html, (ssize_t)len);
-}
-
-static esp_err_t portal_get(httpd_req_t *req)
-{
-    if (!wifi_setup_active()) {
-        return send_status(req, "404 Not Found", "setup is closed\n");
+    ESP_LOGW(TAG, "claim: admin password set from the LAN");
+    if (ttn_on == pktfwd_ttn_enabled()) {
+        return send_status(req, "200 OK", "claimed: log in as admin\n");
     }
-    char host[64] = "";
-    (void)httpd_req_get_hdr_value_str(req, "Host", host, sizeof host);
-    ESP_LOGI(TAG, "portal: GET %.40s (host %.40s)", req->uri, host);
-    /* Everything goes straight to the secure page; the plain fallback stays
-     * at /plain for phones whose sign-in sheet cannot accept the certificate. */
-    if (strcmp(host, "192.168.4.1") != 0 || strcmp(req->uri, "/plain") != 0) {
-        httpd_resp_set_status(req, "302 Found");
-        httpd_resp_set_hdr(req, "Location", "https://192.168.4.1/");
-        httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-        return httpd_resp_send(req, NULL, 0);
+    err = pktfwd_set_ttn(ttn_on);
+    if (err != ESP_OK) {
+        return send_status(req, "500 Internal Server Error", esp_err_to_name(err));
     }
-    char *out = heap_caps_malloc(PORTAL_PAGE_MAX, MALLOC_CAP_SPIRAM);
-    if (out == NULL) {
-        return send_status(req, "500 Internal Server Error", "no memory\n");
-    }
-    size_t o = 0;
-    out[0] = '\0';
-    html_raw(out, PORTAL_PAGE_MAX, &o, k_portal_head);
-    html_raw(out, PORTAL_PAGE_MAX, &o,
-             "<a class=btn href='https://192.168.4.1/'>Open secure setup</a>"
-             "<p>The secure page uses this gateway's own certificate, so your phone warns once: "
-             "check the fingerprint on the console if you can, then continue. If this sign-in window "
-             "cannot open it, open Safari or Chrome and go to <code>https://192.168.4.1/</code> "
-             "while you stay on this Wi-Fi.</p>");
-    if (webauth_has_password(LWC_ROLE_ADMIN)) {
-        html_raw(out, PORTAL_PAGE_MAX, &o,
-                 "<p>This gateway already has an admin: changing its Wi-Fi needs the secure page.</p>");
-    } else {
-        html_raw(out, PORTAL_PAGE_MAX, &o,
-                 "<details><summary>Set up without encryption</summary>"
-                 "<p class=warn>Your Wi-Fi password and the new admin password cross this open setup "
-                 "network unencrypted. Anyone in radio range now could capture them. Use this only if "
-                 "the secure page will not open.</p>"
-                 "<form method=post action='/setup'>"
-                 "<label>Wi-Fi network<select name=ssid>");
-        char names[WIFI_SETUP_MAX_NETS][33];
-        const size_t n = wifi_setup_networks(names, WIFI_SETUP_MAX_NETS);
-        for (size_t i = 0; i < n; i++) {
-            html_raw(out, PORTAL_PAGE_MAX, &o, "<option value=\"");
-            html_text(out, PORTAL_PAGE_MAX, &o, names[i]);
-            html_raw(out, PORTAL_PAGE_MAX, &o, "\">");
-            html_text(out, PORTAL_PAGE_MAX, &o, names[i]);
-            html_raw(out, PORTAL_PAGE_MAX, &o, "</option>");
-        }
-        html_raw(out, PORTAL_PAGE_MAX, &o,
-                 "<option value=''>Other network (type its name below)</option></select></label>"
-                 "<label>Other network name<input name=ssid_other maxlength=32 autocomplete=off></label>"
-                 "<label>Wi-Fi password<input type=password name=password minlength=8 maxlength=63 required></label>"
-                 "<label>New admin password<input type=password name=admin minlength=8 maxlength=63 required></label>"
-                 "<label>Repeat admin password<input type=password name=admin2 minlength=8 maxlength=63 required></label>"
-                 "<label style='display:flex;gap:8px;align-items:center'><input type=checkbox name=ttn checked>"
-                 "Report to The Things Network (eu1)</label>"
-                 "<button type=submit>Save without encryption</button></form></details>");
-    }
-    html_raw(out, PORTAL_PAGE_MAX, &o, "</main>");
-    const esp_err_t r = portal_send(req, "200 OK", out, o);
-    heap_caps_free(out);
-    return r;
-}
-
-static esp_err_t portal_result(httpd_req_t *req, const char *status, const char *msg)
-{
-    char page[sizeof k_portal_head + 512];
-    size_t o = 0;
-    page[0] = '\0';
-    html_raw(page, sizeof page, &o, k_portal_head);
-    html_raw(page, sizeof page, &o, "<p>");
-    html_text(page, sizeof page, &o, msg);
-    html_raw(page, sizeof page, &o, "</p><a class=btn href='/plain'>Back</a></main>");
-    return portal_send(req, status, page, o);
-}
-
-/* Plain-HTTP fallback: first-time claim only (an existing admin's session
- * cookie is Secure and never comes over HTTP). */
-static esp_err_t portal_post(httpd_req_t *req)
-{
-    if (!wifi_setup_active()) {
-        return send_status(req, "404 Not Found", "setup is closed\n");
-    }
-    if (!peer_is_lan(req)) {
-        return send_status(req, "403 Forbidden", "LAN only\n");
-    }
-    char origin[48] = "";
-    if (httpd_req_get_hdr_value_str(req, "Origin", origin, sizeof origin) == ESP_OK &&
-        strcmp(origin, "http://192.168.4.1") != 0 && strcmp(origin, "null") != 0) {
-        return send_status(req, "403 Forbidden", "wrong origin\n");
-    }
-    if (webauth_has_password(LWC_ROLE_ADMIN)) {
-        return portal_result(req, "403 Forbidden", "This gateway already has an admin: use the secure setup page.");
-    }
-    char body[BODY_MAX + 1];
-    size_t got;
-    if (!read_body(req, body, &got)) {
-        return portal_result(req, "400 Bad Request", "The form could not be read.");
-    }
-    esp_err_t err;
-    const char *why = setup_save(body, got, true, true, &err);
-    if (why != NULL) {
-        return portal_result(req, err != ESP_OK ? "500 Internal Server Error" : "400 Bad Request", why);
-    }
-    (void)schedule_reboot("portal setup complete");
-    char host[WEBAUTH_HOST_LEN], msg[256];
-    webauth_hostname(host);
-    snprintf(msg, sizeof msg,
-             "Saved. The gateway restarts and joins your network. Switch this phone back to your own "
-             "Wi-Fi, then open https://%s.local/ (or its address from your router).", host);
-    return portal_result(req, "200 OK", msg);
-}
-
-static esp_err_t portal_start(void)
-{
-    httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    cfg.server_port = 80;
-    cfg.ctrl_port = 32790; /* clear of the HTTPS server and other httpd instances */
-    cfg.stack_size = 10240; /* PBKDF2 in setup_save */
-    cfg.core_id = 0;
-    cfg.max_open_sockets = 3;
-    cfg.lru_purge_enable = true;
-    cfg.uri_match_fn = httpd_uri_match_wildcard;
-    ESP_RETURN_ON_ERROR(httpd_start(&s_portal, &cfg), TAG, "portal");
-    static const httpd_uri_t post = {.uri = "/setup", .method = HTTP_POST, .handler = portal_post};
-    static const httpd_uri_t get = {.uri = "/*", .method = HTTP_GET, .handler = portal_get};
-    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_portal, &post), TAG, "portal post");
-    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_portal, &get), TAG, "portal get");
-    ESP_LOGI(TAG, "captive portal on port 80 (setup mode)");
-    /* Phone apps whose DNS now points here fail TLS against our certificate
-     * all the time during setup: keep that out of the log. */
-    esp_log_level_set("esp-tls-mbedtls", ESP_LOG_NONE);
-    esp_log_level_set("esp_https_server", ESP_LOG_NONE);
-    esp_log_level_set("httpd", ESP_LOG_ERROR);
-    return ESP_OK;
+    return reboot_soon(req, "claim changed TTN reporting", "claimed: the gateway restarts, then log in as admin\n");
 }
 
 /* ---- start -------------------------------------------------------------------------- */
 
 esp_err_t web_start(void)
 {
+    web_claim_restart();
     lwc_sess_init(&s_sess, SESSION_IDLE_S, SESSION_ABS_S);
     lwc_throttle_init(&s_throttle, 5, 60, 900);
 
@@ -902,10 +676,10 @@ esp_err_t web_start(void)
         {.uri = "/api/coredump", .method = HTTP_DELETE, .handler = api_coredump_delete},
         {.uri = "/api/ota/check", .method = HTTP_POST, .handler = api_ota_check},
         {.uri = "/api/reboot", .method = HTTP_POST, .handler = api_reboot},
-        {.uri = "/api/setup", .method = HTTP_GET, .handler = api_setup_get},
+        {.uri = "/api/claim", .method = HTTP_GET, .handler = api_claim_get},
         {.uri = "/api/ttn/qr.svg", .method = HTTP_GET, .handler = api_ttn_qr},
         {.uri = "/api/settings", .method = HTTP_POST, .handler = api_settings},
-        {.uri = "/api/setup", .method = HTTP_POST, .handler = api_setup_post},
+        {.uri = "/api/claim", .method = HTTP_POST, .handler = api_claim_post},
     };
     for (size_t i = 0; i < sizeof uris / sizeof uris[0]; i++) {
         ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_srv, &uris[i]), TAG, "uri %s", uris[i].uri);
@@ -913,9 +687,6 @@ esp_err_t web_start(void)
     char fp[100];
     webauth_fingerprint(fp, sizeof fp);
     ESP_LOGI(TAG, "HTTPS on port 443 (LAN only); certificate SHA-256 %s", fp);
-    if (wifi_setup_active()) {
-        (void)portal_start();
-    }
     /* mDNS: https://lorawan-gateway-xxxxxx.local/ on every interface. */
     char host[WEBAUTH_HOST_LEN];
     webauth_hostname(host);
@@ -927,7 +698,8 @@ esp_err_t web_start(void)
         ESP_LOGW(TAG, "mDNS did not start");
     }
     if (!webauth_has_password(LWC_ROLE_ADMIN)) {
-        ESP_LOGW(TAG, "no admin password: set one with tools/web_password.py (console WEB_PASS)");
+        ESP_LOGW(TAG, "no admin password: the first LAN visit to https://%s.local/ sets it (%d min), "
+                      "or tools/web_password.py (console WEB_PASS)", host, CLAIM_MINUTES);
     }
     return ESP_OK;
 }

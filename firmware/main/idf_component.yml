@@ -10,3 +10,5 @@ dependencies:
   espressif/qrcode: "^0.2.0"
   # lorawan-gateway-xxxxxx.local for the web UI (ADR-0013)
   espressif/mdns: "^1.15.1"
+  # BLE Wi-Fi provisioning (ESP BLE Provisioning app), NimBLE over ESP-Hosted HCI (ADR-0014)
+  espressif/network_provisioning: "^1.0.0"

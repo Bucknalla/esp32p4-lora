@@ -181,41 +181,34 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (e) { el.textContent = e.message; }
   });
   $('#cd-del').addEventListener('click', () => { if (confirm('Erase the stored coredump?')) action('/api/coredump', 'DELETE'); });
-  /* First-time setup: the page exists only while the setup access point is open. */
-  let setupHost = 'lorawan-gateway.local';
-  fetch('/api/setup', { headers: H }).then((r) => (r.ok ? r.json() : null)).then((st) => {
-    if (!st) return;
-    setupHost = st.host;
-    $('#setup').hidden = false;
-    $('#claim').hidden = st.admin_set;
-    if (!st.admin_set) $('#login').hidden = true; /* nothing to log in to yet */
-    for (const x of document.querySelectorAll('#claim input')) x.required = !st.admin_set;
-    const opt = (value, text) => { const o = document.createElement('option'); o.value = value; o.textContent = text; return o; };
-    $('#ssid').replaceChildren(...st.networks.map((n) => opt(n, n)), opt('', 'Other network…'));
-    const other = () => {
-      const on = $('#ssid').value === '';
-      $('#ssid-other-row').hidden = !on;
-      $('#ssid-other-row input').required = on;
-    };
-    $('#ssid').addEventListener('change', other);
-    other();
+  /* Claim: with no admin password yet, the first LAN visit sets it (ADR-0014). */
+  fetch('/api/claim', { headers: H }).then((r) => (r.ok ? r.json() : null)).then((st) => {
+    if (!st || st.admin_set) return;
+    if (st.open) {
+      $('#setup').hidden = false;
+      $('#login').hidden = true; /* nothing to log in to yet */
+    } else {
+      $('#login-msg').textContent = 'No admin password yet and the claim window has closed: restart the gateway, or hold its button 5 s.';
+    }
   }).catch(() => {});
   $('#setup-form').addEventListener('submit', async (ev) => {
     ev.preventDefault();
     const msg = $('#setup-msg');
     msg.classList.remove('bad');
-    if (!$('#claim').hidden && ev.target.admin.value !== $('#admin2').value) {
+    if (ev.target.admin.value !== $('#admin2').value) {
       msg.textContent = 'The admin passwords differ.';
       msg.classList.add('bad');
       return;
     }
     msg.textContent = 'Saving…';
     try {
-      const r = await fetch('/api/setup', { method: 'POST', headers: { ...H, 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(new FormData(ev.target)) });
+      const r = await fetch('/api/claim', { method: 'POST', headers: { ...H, 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(new FormData(ev.target)) });
       const t = (await r.text()).trim();
       if (!r.ok) throw new Error(t);
       ev.target.reset();
-      msg.textContent = 'Saved. The gateway restarts and joins that network. Switch this device back to your own Wi-Fi, then open https://' + setupHost + '/ (or its address from your router).';
+      $('#setup').hidden = true;
+      $('#login').hidden = false;
+      $('#login-msg').textContent = t.includes('restarts') ? 'Admin password set. The gateway restarts; log in when it is back.' : 'Admin password set. Log in as admin.';
     } catch (e) { msg.textContent = e.message; msg.classList.add('bad'); }
   });
   const role = sessionStorage.getItem('role');
