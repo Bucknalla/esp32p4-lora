@@ -555,7 +555,7 @@ static esp_err_t api_settings(httpd_req_t *req)
  * GET lists the local network server's devices (viewer; no keys). POST adds
  * one, POST /api/devices/delete removes one (admin). AppKeys go in, never out. */
 
-#define DEVICES_JSON_MAX 16384
+#define DEVICES_JSON_MAX 20480 /* 32 devices at ~500 B each, worst case */
 
 static esp_err_t api_devices_get(httpd_req_t *req)
 {

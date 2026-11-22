@@ -28,6 +28,8 @@ typedef enum {
     LWC_NS_MAC_1_0_4 = 1, /* 1.0.4: DevNonce is a counter, must increase */
 } lwc_ns_mac_t;
 
+/* Stored whole by the firmware (one NVS record per device): changing this
+ * struct changes the record format. Runtime state goes in lwc_ns_link_t. */
 typedef struct {
     bool used;
     char name[LWC_NS_NAME_MAX + 1U];
@@ -49,8 +51,23 @@ typedef struct {
     uint32_t fcnt_down; /* next downlink counter */
 } lwc_ns_dev_t;
 
+#define LWC_NS_RETRANS_MAX 7U        /* ACKs again for one repeated confirmed uplink */
+#define LWC_NS_STATUS_PERIOD_S 86400U /* DevStatusReq at most once a day, with another downlink */
+
+/* Per-device state that is not stored: it is rebuilt after a restart. */
+typedef struct {
+    uint8_t retrans;     /* repeats of the last uplink seen */
+    bool status_asked;   /* DevStatusReq sent at status_req_s */
+    uint32_t status_req_s;
+    bool has_status;     /* last DevStatusAns */
+    uint8_t battery;     /* 0 external, 1..254, 255 unknown */
+    int8_t margin;       /* dB */
+    uint32_t status_s;
+} lwc_ns_link_t;
+
 typedef struct {
     lwc_ns_dev_t dev[LWC_NS_MAX_DEVICES];
+    lwc_ns_link_t link[LWC_NS_MAX_DEVICES];
     uint32_t join_nonce; /* next JoinNonce: increases on every join (24 bit) */
     uint32_t next_addr;  /* DevAddr allocator */
 } lwc_ns_t;
@@ -95,9 +112,12 @@ lwc_ns_join_res_t lwc_ns_join(lwc_ns_t *ns, const uint8_t *frame, size_t n, uint
 typedef enum {
     LWC_NS_UP_OK = 0,
     LWC_NS_UP_NOT_OURS, /* no joined device has that DevAddr */
-    LWC_NS_UP_BAD_MIC,  /* a device has the DevAddr, but the MIC fails: maybe a collision */
-    LWC_NS_UP_REPLAY,   /* authentic, but the counter is not new */
+    LWC_NS_UP_BAD_MIC,  /* a device has the DevAddr, but the MIC fails: maybe a collision, or an
+                           old frame (its counter is read as the next 16-bit epoch) */
+    LWC_NS_UP_REPLAY,   /* authentic, but the counter is not new (and not a repeat to answer) */
     LWC_NS_UP_MALFORMED,
+    LWC_NS_UP_RETRANS,  /* the last frame again (a device without its ACK, or NbTrans > 1):
+                           answer it again, do not deliver the payload twice */
 } lwc_ns_up_res_t;
 
 typedef struct {
@@ -105,6 +125,7 @@ typedef struct {
     uint32_t fcnt;
     bool confirmed;
     bool adr;
+    bool adr_ack_req;
     bool has_port;
     uint8_t port;
     uint8_t payload[242]; /* decrypted FRMPayload */
@@ -113,7 +134,50 @@ typedef struct {
     size_t fopts_len;
 } lwc_ns_uplink_t;
 
+/**
+ * Check an uplink. On LWC_NS_UP_OK the payload is decrypted into *out; on
+ * LWC_NS_UP_RETRANS only the header fields are set (no payload).
+ */
 lwc_ns_up_res_t lwc_ns_uplink(lwc_ns_t *ns, const uint8_t *frame, size_t n, lwc_ns_uplink_t *out);
+
+/* ---- answer (class A downlink) -------------------------------------------- */
+
+/** How the uplink was received. */
+typedef struct {
+    int16_t snr10;   /* SNR in 0.1 dB */
+    uint8_t sf;
+    bool time_ok;    /* gps_s/gps_frac hold the uplink's GPS time */
+    uint32_t gps_s;
+    uint8_t gps_frac;
+    uint32_t now_s;  /* monotonic seconds */
+} lwc_ns_rx_t;
+
+#define LWC_NS_DL_MAX 32U
+
+typedef struct {
+    uint8_t frame[LWC_NS_DL_MAX];
+    size_t len;
+    uint32_t fcnt;
+    /* what is in it, for the log */
+    bool ack;
+    bool link_check;
+    bool device_time;
+    bool dev_status;
+} lwc_ns_dl_t;
+
+/**
+ * After LWC_NS_UP_OK or LWC_NS_UP_RETRANS: read the device's MAC commands
+ * and decide whether it needs a downlink now (ACK for a confirmed uplink,
+ * ADRACKReq, LinkCheckReq, DeviceTimeReq). If so, build it (MAC answers in
+ * FOpts, no FRMPayload), advance the downlink counter and return true: store
+ * the counter before the frame goes out. A repeated uplink gets its ACK
+ * again; its MAC commands are not read again.
+ */
+bool lwc_ns_answer(lwc_ns_t *ns, lwc_ns_up_res_t res, const lwc_ns_uplink_t *up, const lwc_ns_rx_t *rx,
+                   lwc_ns_dl_t *dl);
+
+/** Demodulation floor for an SF at 125 kHz, in 0.1 dB (SF7 -7.5 dB ... SF12 -20 dB). */
+int16_t lwc_ns_required_snr10(uint8_t sf);
 
 /* ---- modes ---------------------------------------------------------------- */
 

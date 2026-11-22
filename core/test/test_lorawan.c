@@ -119,6 +119,39 @@ static void downlink(void)
     uint8_t mic[4];
     lwc_lw_data_mic(key, true, d.dev_addr, 10, f, n - 4U, mic);
     CHECK(memcmp(mic, &f[n - 4U], 4) == 0);
+
+    /* rebuild it byte for byte: decrypt FRMPayload with any key, build with the same key */
+    uint8_t app[16], plain[32], g[64];
+    hex("00112233445566778899aabbccddeeff", app);
+    CHECK(d.has_port && d.frm_len <= sizeof plain);
+    lwc_lw_crypt(app, true, d.dev_addr, 10, d.frm, d.frm_len, plain);
+    size_t m = lwc_lw_data_build(LWC_LW_UNCONFIRMED_DOWN, 0x01020304U, d.fctrl, 10, NULL, 0, true, d.fport,
+                                 plain, d.frm_len, key, app, g, sizeof g);
+    CHECK(m == n && memcmp(g, f, n) == 0);
+    CHECK(lwc_lw_data_build(LWC_LW_UNCONFIRMED_DOWN, 0x01020304U, 0, 10, NULL, 0, true, d.fport, plain,
+                            d.frm_len, key, app, g, n - 1U) == 0U); /* no room */
+
+    /* ACK only: 12 bytes, no FPort; the counter's high bits are in the MIC only */
+    m = lwc_lw_data_build(LWC_LW_UNCONFIRMED_DOWN, 0x00000042U, LWC_LW_FCTRL_ACK | LWC_LW_FCTRL_ADR, 0x10005,
+                          NULL, 0, false, 0, NULL, 0, key, NULL, g, sizeof g);
+    CHECK(m == 12U && g[0] == 0x60 && g[5] == 0xA0 && g[6] == 5 && g[7] == 0);
+    CHECK(lwc_lw_data_parse(g, m, &d) == LWC_LW_OK && !d.has_port && d.fopts_len == 0);
+    CHECK(lwc_lw_data_mic_ok(key, true, 0x42, 0x10005, g, m) && !lwc_lw_data_mic_ok(key, true, 0x42, 5, g, m));
+
+    /* MAC commands in FOpts (FOptsLen set from the length, FCtrl's low bits ignored) */
+    static const uint8_t fo[3] = {0x02, 0x0A, 0x01};
+    m = lwc_lw_data_build(LWC_LW_CONFIRMED_DOWN, 7, 0x0F, 1, fo, 3, false, 0, NULL, 0, key, NULL, g, sizeof g);
+    CHECK(m == 15U && g[0] == 0xA0 && g[5] == 0x03 && memcmp(&g[8], fo, 3) == 0);
+    /* MAC commands on port 0: encrypted with the network key */
+    m = lwc_lw_data_build(LWC_LW_UNCONFIRMED_DOWN, 7, 0, 2, NULL, 0, true, 0, fo, 3, key, NULL, g, sizeof g);
+    CHECK(m == 16U && g[8] == 0 && lwc_lw_data_parse(g, m, &d) == LWC_LW_OK);
+    lwc_lw_crypt(key, true, 7, 2, d.frm, d.frm_len, plain);
+    CHECK(memcmp(plain, fo, 3) == 0);
+    /* refused */
+    CHECK(lwc_lw_data_build(LWC_LW_UNCONFIRMED_DOWN, 7, 0, 2, fo, 3, true, 0, fo, 3, key, NULL, g, sizeof g) == 0U);
+    CHECK(lwc_lw_data_build(LWC_LW_JOIN_ACCEPT, 7, 0, 2, NULL, 0, false, 0, NULL, 0, key, NULL, g, sizeof g) == 0U);
+    CHECK(lwc_lw_data_build(LWC_LW_UNCONFIRMED_DOWN, 7, 0, 2, fo, 16, false, 0, NULL, 0, key, NULL, g, sizeof g) == 0U);
+    CHECK(lwc_lw_data_build(LWC_LW_UNCONFIRMED_DOWN, 7, 0, 2, NULL, 0, true, 1, fo, 3, key, NULL, g, sizeof g) == 0U);
 }
 
 static void fcnt(void)

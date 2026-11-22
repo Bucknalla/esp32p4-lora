@@ -1,5 +1,6 @@
 /* libFuzzer target: LoRaWAN frames come from the air and are untrusted. */
 #include "lwc/lorawan.h"
+#include "lwc/mac.h"
 #include "lwc/ns.h"
 
 #include <stdint.h>
@@ -40,7 +41,22 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     size_t alen;
     (void)lwc_ns_join(&ns, data, size, acc, sizeof acc, &alen, NULL);
     static lwc_ns_uplink_t up;
-    if (lwc_ns_uplink(&ns, data, size, &up) == LWC_NS_UP_OK && up.len > sizeof up.payload) {
+    const lwc_ns_up_res_t r = lwc_ns_uplink(&ns, data, size, &up);
+    if (r == LWC_NS_UP_OK && up.len > sizeof up.payload) {
+        __builtin_trap();
+    }
+    if (r == LWC_NS_UP_OK || r == LWC_NS_UP_RETRANS) {
+        static lwc_ns_dl_t dl;
+        const lwc_ns_rx_t rx = {.snr10 = (int16_t)((int)(size % 600U) - 300), .sf = (uint8_t)(7U + size % 6U),
+                                .time_ok = (size & 1U) != 0U, .gps_s = 1, .now_s = (uint32_t)size};
+        if (lwc_ns_answer(&ns, r, &up, &rx, &dl) && (dl.len < 12U || dl.len > 8U + 15U + 4U)) {
+            __builtin_trap(); /* FOpts only: 12..27 bytes */
+        }
+    }
+    /* MAC commands as they come in FOpts or on port 0 */
+    lwc_mac_up_t m;
+    const size_t cmds = lwc_mac_parse_up(data, size, &m);
+    if (cmds > size || (m.link_adr_ans == 0U && m.link_adr_status != 0U)) {
         __builtin_trap();
     }
     return 0;
