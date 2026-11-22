@@ -4,6 +4,7 @@
  * 3.1.0 examples/ota/coprocessor_ota (partition method).
  */
 #include "c6_update.h"
+#include "fault.h"
 #include "ota.h"
 
 #include <inttypes.h>
@@ -258,6 +259,6 @@ esp_err_t c6_update_check(void)
     }
     ESP_LOGW(TAG, "image sent; restarting to resync with the C6");
     vTaskDelay(pdMS_TO_TICKS(RESTART_DELAY_MS));
-    esp_restart();
+    fault_restart("C6 firmware updated");
     return ESP_OK; /* not reached */
 }

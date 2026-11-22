@@ -22,6 +22,7 @@
 #include "freertos/task.h"
 #include "loragw_hal.h"
 #include "radio_pkt.h"
+#include "sv.h"
 #include "sdkconfig.h"
 
 #ifndef CONFIG_GW_TX_ENABLE
@@ -193,10 +194,15 @@ static void handle_packet(const struct lgw_pkt_rx_s *p, int64_t now_us)
     }
 }
 
+/* Watchdog budget: lgw_start takes ~3.2 s; everything else beats. */
+#define SV_BUDGET_MS 30000
+static sv_id_t s_sv = -1;
+
 /* Returns when the HAL fails; the caller recovers. */
 static void receive_loop(void)
 {
     for (;;) {
+        sv_beat(s_sv);
         if (!conc_tx_service()) {
             ESP_LOGE(TAG, "TX path lost the concentrator: restarting it");
             return;
@@ -220,7 +226,9 @@ static void radio_task(void *arg)
 {
     (void)arg;
     uint32_t backoff = BACKOFF_MIN_MS;
+    s_sv = sv_register("radio", SV_BUDGET_MS);
     for (;;) {
+        sv_beat(s_sv);
         if (conc_reset() == ESP_OK && configure_sx1301() == 0 && conc_tx_configure() == 0) {
             const TickType_t t0 = xTaskGetTickCount();
             if (lgw_start() == LGW_HAL_SUCCESS) {
@@ -239,7 +247,7 @@ static void radio_task(void *arg)
         }
         atomic_fetch_add(&g_radio_stats.restarts, 1U);
         ESP_LOGW(TAG, "concentrator restart in %u ms", (unsigned)backoff);
-        vTaskDelay(pdMS_TO_TICKS(backoff));
+        sv_delay(s_sv, backoff);
         backoff = (backoff * 2U > BACKOFF_MAX_MS) ? BACKOFF_MAX_MS : backoff * 2U;
     }
 }

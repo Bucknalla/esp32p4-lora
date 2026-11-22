@@ -53,8 +53,10 @@ mkdir -p "$dist"
 for rev in rev3 rev1; do
     bdir="$root/build/rel-$rev"
     rm -rf "$bdir"
-    GW_FW_VERSION="$version" GW_BUILD_DIR="$bdir" "$root/tools/build.sh" "$rev" build >"$dist/build-$rev.log" 2>&1 ||
+    GW_RELEASE=1 GW_FW_VERSION="$version" GW_BUILD_DIR="$bdir" "$root/tools/build.sh" "$rev" build >"$dist/build-$rev.log" 2>&1 ||
         { echo "build $rev failed: see $dist/build-$rev.log" >&2; exit 1; }
+    grep -qx 'CONFIG_GW_OTA_AUTO_INSTALL=y' "$bdir/sdkconfig" && ! grep -qx 'CONFIG_GW_TEST_COMMANDS=y' "$bdir/sdkconfig" ||
+        { echo "$rev: not a release configuration (auto-install off or test commands on)" >&2; exit 1; }
     espsecure verify-signature --version 2 --keyfile "$key" "$bdir/lorawan_gateway.bin" >/dev/null ||
         { echo "$rev image signature does not verify" >&2; exit 1; }
     cp "$bdir/lorawan_gateway.bin" "$dist/lorawan_gateway-$rev.bin"

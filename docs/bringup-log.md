@@ -204,3 +204,21 @@ lgw_stop OK; HAL task stack: 15516 of 24576 bytes free
 - All pull tests in ADR-0008 passed. Test releases were deleted afterwards;
   v0.2.0-dev.1 and -dev.2 (dirty-tree builds) remain, dev.2 is latest and
   runs on the board.
+
+### Update: supervisor, fault record, retained log ring (ADR-0009)
+
+- Dev build flashed over USB; auto-install off, so it reported
+  "update available" for v0.2.0 instead of replacing itself.
+- `TEST_ABORT`: coredump in flash (16 KB erased, ~16 KB written), fault note
+  kept in RTC memory, panic counted. First try of the PSRAM ring kept nothing:
+  header magic and size (first 8 bytes at 0x48000000) were overwritten during
+  boot while head, used and CRC survived. With a 4 KB guard the ring kept
+  4.9 KB and printed the previous boot's last lines.
+- `TEST_STALL`: supervisor abort after 30 s naming `console`; `idf.py
+  coredump-info` shows `sv` in `esp_system_abort` and the console task in
+  `handle_line`.
+- Outage build (DNS name that cannot resolve, unroutable OTA URL, 1 min
+  poll) ran 12 min with no abort.
+- 31 min soak of the dev build: no abort or reset, every TTN stat
+  acknowledged, three update checks (each "update available", not
+  installed), least free stack 2.7 KB (main task).

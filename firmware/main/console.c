@@ -1,6 +1,7 @@
 #include "console.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "driver/uart.h"
@@ -13,6 +14,8 @@
 #include "lwc/console_cmd.h"
 #include "nvs.h"
 #include "ota.h"
+#include "fault.h"
+#include "sv.h"
 #include "sdkconfig.h"
 #include "radio_tx.h"
 #include "wifi.h"
@@ -28,6 +31,13 @@ static const char *TAG = "console";
 #define TASK_STACK 4096
 #define TASK_PRIO 2
 #define TASK_CORE 0
+#define SV_BUDGET_MS 30000 /* reads time out every second */
+
+#ifndef CONFIG_GW_TEST_COMMANDS
+#define CONFIG_GW_TEST_COMMANDS 0
+#endif
+
+static sv_id_t s_sv = -1;
 
 /* Replies start with a fixed prefix so tools can find them among log lines. */
 #define REPLY(fmt, ...) printf("CONSOLE: " fmt "\n", ##__VA_ARGS__)
@@ -119,8 +129,29 @@ static void handle_line(char *line, size_t len)
         char line_out[256];
         ota_status_line(line_out, sizeof line_out);
         REPLY("STATUS %s", line_out);
+        fault_status_line(line_out, sizeof line_out);
+        REPLY("FAULTS %s", line_out);
+        sv_status_line(line_out, sizeof line_out);
+        REPLY("STACK_FREE %s", line_out);
         return;
     }
+    case LWC_CMD_TEST_ABORT:
+    case LWC_CMD_TEST_STALL:
+#if CONFIG_GW_TEST_COMMANDS
+        if (cmd.kind == LWC_CMD_TEST_ABORT) {
+            REPLY("OK TEST_ABORT");
+            fflush(stdout);
+            fault_note("console TEST_ABORT");
+            abort();
+        }
+        REPLY("OK TEST_STALL: console stops beating the watchdog");
+        for (;;) {
+            vTaskDelay(pdMS_TO_TICKS(1000)); /* no sv_beat: the supervisor must fire */
+        }
+#else
+        REPLY("ERR test commands not in this build");
+        return;
+#endif
     case LWC_CMD_WIFI_CLEAR:
         err = clear_wifi();
         if (err == ESP_OK) {
@@ -142,7 +173,7 @@ static void handle_line(char *line, size_t len)
     }
     fflush(stdout);
     vTaskDelay(pdMS_TO_TICKS(RESTART_DELAY_MS));
-    esp_restart(); /* simplest way to apply new credentials */
+    fault_restart("console Wi-Fi change"); /* simplest way to apply new credentials */
 }
 
 static void console_task(void *arg)
@@ -151,8 +182,10 @@ static void console_task(void *arg)
     static char line[CONSOLE_LINE_MAX];
     size_t len = 0;
     bool overflow = false;
+    s_sv = sv_register("console", SV_BUDGET_MS);
 
     for (;;) {
+        sv_beat(s_sv);
         uint8_t ch;
         const int n = uart_read_bytes(CONSOLE_UART, &ch, 1, pdMS_TO_TICKS(READ_TIMEOUT_MS));
         if (n <= 0) {

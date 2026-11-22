@@ -99,6 +99,19 @@ menu "LoRaWAN gateway board"
             int "Check for updates every (minutes)"
             range 1 1440
             default 15
+        config GW_OTA_AUTO_INSTALL
+            bool "Install new releases automatically"
+            default y
+            help
+                Off: checks only report "update available"; the console command
+                OTA_CHECK still installs. tools/build.sh turns this off for dev
+                builds flashed over USB (so they are not replaced by the latest
+                release within a minute) and on for release builds.
+        config GW_TEST_COMMANDS
+            bool "Console test commands (TEST_ABORT, TEST_STALL)"
+            default n
+            help
+                Dev builds only (tools/build.sh); never in a release.
         config GW_OTA_HEALTH_REQUIRE_SERVER
             bool "Health check requires reaching the update URL"
             default y
