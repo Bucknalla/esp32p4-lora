@@ -71,3 +71,4 @@ check, `lgw_start` (~3.2 s) and the concentrator recovery backoff (up to
 | Outage build: forwarder server `gw.invalid`, OTA URL `https://192.0.2.1/...`, poll every minute, 12 min | no abort, no reset; 15 DNS failures (fast), 10 TLS connect timeouts (15 s each, inside the 180 s budget); internal heap min 337 KB |
 | Soak, normal dev build, 31 min (two OTA poll cycles) | no abort, no reset; 60/60 TTN stats acknowledged; internal heap 348 KB free (min 298 KB); abnormal-reset run cleared after 10 min |
 | Least free stack with the log hook | console 2884 B (of 4096), main 2708 B, pktfwd 5132 B, ota 7108 B, radio 7288 B |
+| Reboot-loop guard: `TEST_STALL` six times in a row | stalls 1–5 aborted (coredump, reboot); the 6th logged "abnormal run 5: not aborting" and the gateway kept running; a web UI reboot cleared it. Coredump downloaded over HTTPS decodes (`esp-coredump info_corefile -t raw`) |

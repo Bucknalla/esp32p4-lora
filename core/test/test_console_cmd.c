@@ -78,6 +78,13 @@ static void test_other(void)
     CHECK(parse("TEST_ABORT", &c) == LWC_CMD_OK && c.kind == LWC_CMD_TEST_ABORT);
     CHECK(parse("TEST_STALL\r\n", &c) == LWC_CMD_OK && c.kind == LWC_CMD_TEST_STALL);
     CHECK(parse("TEST_STALL 5", &c) == LWC_CMD_ERR_SYNTAX);
+    /* WEB_PASS admin "p@ssw0rd!" */
+    CHECK(parse("WEB_PASS admin 7040737377307264 21", &c) == LWC_CMD_ERR_SYNTAX); /* 4 fields */
+    CHECK(parse("WEB_PASS admin 704073737730726421", &c) == LWC_CMD_OK && c.kind == LWC_CMD_WEB_PASS &&
+          c.role == 2 && strcmp(c.pass, "p@ssw0rd!") == 0);
+    CHECK(parse("WEB_PASS viewer 3132333435363738", &c) == LWC_CMD_OK && c.role == 1);
+    CHECK(parse("WEB_PASS root 3132333435363738", &c) == LWC_CMD_ERR_SYNTAX);
+    CHECK(parse("WEB_PASS admin 31323334353637", &c) == LWC_CMD_ERR_LENGTH && c.pass[0] == '\0');
     CHECK(parse("", &c) == LWC_CMD_OK && c.kind == LWC_CMD_NONE);
     CHECK(parse("   \r\n", &c) == LWC_CMD_OK && c.kind == LWC_CMD_NONE);
     CHECK(parse("wifi_set 41 3132333435363738", &c) == LWC_CMD_ERR_UNKNOWN);

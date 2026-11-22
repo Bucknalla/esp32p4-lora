@@ -16,5 +16,8 @@ void logbuf_init(void);
 /** Print the previous boot's last lines (after an abnormal reset). */
 void logbuf_print_previous(void);
 
+/** Copy this boot's newest log text (NUL-terminated). False if busy. */
+bool logbuf_current(char *out, size_t cap);
+
 /** Text kept from the previous boot ("" when none). */
 const char *logbuf_previous(void);

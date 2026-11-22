@@ -16,6 +16,8 @@
 #include "ota.h"
 #include "fault.h"
 #include "sv.h"
+#include "web.h"
+#include "webauth.h"
 #include "sdkconfig.h"
 #include "radio_tx.h"
 #include "wifi.h"
@@ -133,7 +135,21 @@ static void handle_line(char *line, size_t len)
         REPLY("FAULTS %s", line_out);
         sv_status_line(line_out, sizeof line_out);
         REPLY("STACK_FREE %s", line_out);
+        web_status_line(line_out, sizeof line_out);
+        REPLY("WEB %s", line_out);
         return;
+    }
+    case LWC_CMD_WEB_PASS: {
+        const lwc_role_t role = cmd.role == 2U ? LWC_ROLE_ADMIN : LWC_ROLE_VIEWER;
+        err = webauth_set_password(role, cmd.pass, strlen(cmd.pass));
+        lwc_cmd_wipe(&cmd);
+        if (err == ESP_OK) {
+            web_sessions_end_all(); /* a new password logs everyone out */
+            REPLY("OK WEB_PASS %s", role == LWC_ROLE_ADMIN ? "admin" : "viewer");
+        } else {
+            REPLY("ERR %s", esp_err_to_name(err));
+        }
+        return; /* no restart */
     }
     case LWC_CMD_TEST_ABORT:
     case LWC_CMD_TEST_STALL:

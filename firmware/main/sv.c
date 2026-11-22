@@ -79,7 +79,7 @@ static void sv_task(void *arg)
             char why[48];
             snprintf(why, sizeof why, "watchdog: %s stalled %" PRIu32 " s", s_sv.e[id].name,
                      late / 1000U);
-            if (fault_streak() >= SV_LOOP_LIMIT) {
+            if (!lwc_sv_should_abort(fault_streak(), SV_LOOP_LIMIT)) {
                 /* Rebooting has not helped: keep running, so OTA can fix it. */
                 ESP_LOGE(TAG, "%s (abnormal run %" PRIu32 ": not aborting)", why, fault_streak());
                 lwc_sv_pause(&s_sv, id);

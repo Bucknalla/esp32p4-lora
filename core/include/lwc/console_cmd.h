@@ -6,6 +6,7 @@
  *   TX_TEST          one low-power test frame (bring-up)
  *   OTA_CHECK        check the update URL now (install if newer)
  *   STATUS           firmware version, slot, OTA state, IP, faults
+ *   WEB_PASS <admin|viewer> <password-hex>   set a web UI password (8..63 bytes)
  *   TEST_ABORT       test builds only: abort (coredump, reset)
  *   TEST_STALL       test builds only: console task stops beating (watchdog)
  *
@@ -36,6 +37,7 @@ typedef enum {
     LWC_CMD_STATUS,
     LWC_CMD_TEST_ABORT,
     LWC_CMD_TEST_STALL,
+    LWC_CMD_WEB_PASS,
 } lwc_cmd_kind_t;
 
 typedef enum {
@@ -49,7 +51,8 @@ typedef enum {
 typedef struct {
     lwc_cmd_kind_t kind;
     char ssid[LWC_WIFI_SSID_MAX + 1U]; /* NUL-terminated */
-    char pass[LWC_WIFI_PASS_MAX + 1U]; /* NUL-terminated */
+    char pass[LWC_WIFI_PASS_MAX + 1U]; /* NUL-terminated; WIFI_SET and WEB_PASS */
+    uint8_t role;                      /* WEB_PASS: 1 viewer, 2 admin (lwc_role_t) */
 } lwc_cmd_t;
 
 /** Parse one line (without or with trailing CR/LF). */

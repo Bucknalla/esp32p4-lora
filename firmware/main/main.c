@@ -27,6 +27,7 @@
 #include "fault.h"
 #include "logbuf.h"
 #include "sv.h"
+#include "web.h"
 #include "sdkconfig.h"
 
 static const char *TAG = "main";
@@ -168,6 +169,11 @@ void app_main(void)
     err = ota_start();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "OTA server: %s", esp_err_to_name(err));
+    }
+
+    err = web_start();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "web UI: %s", esp_err_to_name(err));
     }
 
     if (s_rx_queue != NULL) {
