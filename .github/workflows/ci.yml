@@ -26,13 +26,14 @@ jobs:
       - name: Fuzz frame parser (60 s)
         run: |
           cmake -S core -B build/fuzz -G Ninja -DCMAKE_C_COMPILER=clang -DLWC_FUZZ=ON -DLWC_SANITIZE=OFF
-          cmake --build build/fuzz --target fuzz_frame fuzz_console_cmd fuzz_gwmp fuzz_txpk fuzz_logring fuzz_form
+          cmake --build build/fuzz --target fuzz_frame fuzz_console_cmd fuzz_gwmp fuzz_txpk fuzz_logring fuzz_form fuzz_lorawan
           ./build/fuzz/fuzz_frame -max_total_time=60 -max_len=300
           ./build/fuzz/fuzz_console_cmd -max_total_time=60 -max_len=400
           ./build/fuzz/fuzz_gwmp -max_total_time=60 -max_len=2048
           ./build/fuzz/fuzz_txpk -max_total_time=60 -max_len=2048
           ./build/fuzz/fuzz_logring -max_total_time=60 -max_len=600
           ./build/fuzz/fuzz_form -max_total_time=60 -max_len=600
+          ./build/fuzz/fuzz_lorawan -max_total_time=60 -max_len=300
 
   firmware:
     name: Firmware (${{ matrix.rev }})
