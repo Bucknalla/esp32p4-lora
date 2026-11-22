@@ -6,3 +6,5 @@ dependencies:
   # Wi-Fi through the on-module ESP32-C6 (ESP-Hosted over SDIO)
   espressif/esp_wifi_remote: "^1.6.5"
   espressif/esp_hosted: "^3.1.0"
+  # QR code of the gateway EUI for TTN registration (web UI, ADR-0012)
+  espressif/qrcode: "^0.2.0"

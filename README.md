@@ -45,6 +45,11 @@ RTS-on/DTR-off state for a moment, which resets the board.
 
 ## Wi-Fi
 
+A gateway with no Wi-Fi credentials opens the open access point
+`lorawan-gateway-XXXXXX` for 15 minutes after power-on (ADR-0011). Join it
+with a phone, open `https://192.168.4.1/`, pick the network, enter its
+password and a new admin password. Over USB instead:
+
 ```sh
 python tools/provision_wifi.py <PORT> "<SSID>"   # asks for the password, writes NVS
 tools/flash_c6_image.sh <PORT>                    # C6 firmware via the P4 (see c6-firmware/)
@@ -76,6 +81,21 @@ reset in that window also rolls back: watch with `capture_log.py --no-reset`.
 The console command `STATUS` prints version, slot, state, IP and the last
 check result. After OTA updates, use `flash` (not `app-flash`) over USB.
 
+## Status LED
+
+The HAT's two-colour LED has one colour on 3.3 V (power, always on) and one on
+the `STATUS` net (P4 GPIO4 on the Nebra V1 HAT), which the firmware drives:
+
+| Pattern | Meaning |
+| --- | --- |
+| fast blink (5 Hz) | starting, no network yet |
+| slow blink (0.5 Hz) | setup access point open |
+| steady on | online (TTN link up, or TTN reporting off) |
+| double blink | needs attention: upstream down, concentrator restarting or not started, new image pending verify |
+| short blip | a downlink was sent |
+
+The web UI's status details show the current pattern (`Status LED`).
+
 ## Faults, watchdog and logs (ADR-0009)
 
 - Every long-lived task has a software watchdog budget; a stall aborts with
@@ -95,6 +115,10 @@ HTTPS on port 443, LAN only, roles `admin` and `viewer`:
 python tools/web_password.py <PORT> admin --generate   # random, saved to ~/.config/esp32p4-lora/web_admin_password
 python tools/web_password.py <PORT> viewer             # or type one (8-63 bytes)
 ```
+
+Registering on The Things Network: the Status page shows the gateway EUI, a
+QR code of it and the values to enter in the TTN console (ADR-0012). Reporting
+to TTN can be switched off on the System tab.
 
 Open `https://<gateway-ip>/`. The certificate is self-signed and made on the
 device: compare its SHA-256 with the one console `STATUS` prints (`WEB ...

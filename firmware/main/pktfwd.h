@@ -13,3 +13,12 @@ esp_err_t pktfwd_start(QueueHandle_t rx_queue);
 
 /** True while the server answers PULL_DATA (any task may call). */
 bool pktfwd_link_up(void);
+
+/** Report to The Things Network (NVS; default on). Read at start-up. */
+bool pktfwd_ttn_enabled(void);
+
+/** Store the setting; it applies after a restart. */
+esp_err_t pktfwd_set_ttn(bool on);
+
+/** Gateway EUI as 16 upper-case hex digits (from the base MAC). */
+esp_err_t pktfwd_eui(char out[17]);

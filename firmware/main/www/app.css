@@ -60,10 +60,19 @@ h3 { font: 600 11px var(--mono); color: var(--muted); text-transform: uppercase;
 details summary { cursor: pointer; color: var(--muted); margin: 10px 0 4px; font: 11px var(--mono); letter-spacing: .12em; text-transform: uppercase; }
 #logs .W { color: #f0b429; } #logs .E { color: #ff6b6b; font-weight: 600; }
 /* Login: one narrow panel, fields stacked, amber primary action. */
-#login { max-width: 360px; margin: 8vh auto 0; }
-#login form label { display: grid; gap: 4px; margin: 0 0 14px; font: 11px var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
-#login input, #login select { width: 100%; font: 15px system-ui, sans-serif; text-transform: none; letter-spacing: 0; color: var(--fg); }
-#login button[type=submit] { width: 100%; margin-top: 4px; padding: 10px; background: var(--amber); border-color: var(--amber); color: #1b1f22; }
-#login button[type=submit]:hover { filter: brightness(1.08); }
-#login .msg { margin: 10px 0 0; text-align: center; }
-#login .msg:empty { display: none; }
+#login, #setup { max-width: 360px; margin: 8vh auto 0; }
+#setup + #login { margin-top: 16px; }
+#login form label, #setup form label { display: grid; gap: 4px; margin: 0 0 14px; font: 11px var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+#login input, #login select, #setup input, #setup select { width: 100%; font: 15px system-ui, sans-serif; text-transform: none; letter-spacing: 0; color: var(--fg); }
+#login button[type=submit], #setup button[type=submit] { width: 100%; margin-top: 4px; padding: 10px; background: var(--amber); border-color: var(--amber); color: #1b1f22; }
+#login button[type=submit]:hover, #setup button[type=submit]:hover { filter: brightness(1.08); }
+#login .msg, #setup .msg { margin: 10px 0 0; text-align: center; }
+#login .msg:empty, #setup .msg:empty { display: none; }
+/* TTN registration card */
+.ttn { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; margin-bottom: 12px; }
+.ttn img { background: #fff; padding: 6px; border-radius: var(--r); border: 1px solid var(--rule); }
+.ttn > div { flex: 1 1 260px; }
+.ttn dd button { padding: 2px 8px; margin-left: 8px; }
+.hint { color: var(--muted); font-size: 13px; }
+#setup label.check { display: flex; gap: 8px; align-items: center; font: 14px system-ui, sans-serif; text-transform: none; letter-spacing: 0; color: var(--fg); }
+#setup label.check input { width: auto; }

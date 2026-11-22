@@ -8,6 +8,8 @@
  *   GET  /api/logs[?prev=1]                    viewer
  *   GET  /api/coredump, DELETE /api/coredump   admin
  *   POST /api/ota/check, POST /api/reboot      admin
+ *   GET|POST /api/setup    only while the setup AP is open (ADR-0011)
+ *   GET  /api/ttn/qr.svg (viewer), POST /api/settings ttn=on|off (admin)
  * POST/DELETE need the header "X-Requested-With: gw" (CSRF guard).
  */
 #pragma once

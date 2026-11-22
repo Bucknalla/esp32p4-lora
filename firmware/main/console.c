@@ -52,21 +52,6 @@ static void wipe(void *p, size_t n)
     }
 }
 
-static esp_err_t store_wifi(const lwc_cmd_t *c)
-{
-    nvs_handle_t h;
-    ESP_RETURN_ON_ERROR(nvs_open(WIFI_NVS_NAMESPACE, NVS_READWRITE, &h), TAG, "nvs_open");
-    esp_err_t err = nvs_set_str(h, WIFI_NVS_KEY_SSID, c->ssid);
-    if (err == ESP_OK) {
-        err = nvs_set_str(h, WIFI_NVS_KEY_PASS, c->pass);
-    }
-    if (err == ESP_OK) {
-        err = nvs_commit(h);
-    }
-    nvs_close(h);
-    return err;
-}
-
 static esp_err_t clear_wifi(void)
 {
     nvs_handle_t h;
@@ -94,7 +79,7 @@ static void handle_line(char *line, size_t len)
     case LWC_CMD_NONE:
         return;
     case LWC_CMD_WIFI_SET:
-        err = store_wifi(&cmd);
+        err = wifi_store_credentials(cmd.ssid, cmd.pass);
         if (err == ESP_OK) {
             ESP_LOGI(TAG, "Wi-Fi credentials stored for \"%s\"", cmd.ssid);
             REPLY("OK WIFI_SET");

@@ -31,7 +31,7 @@ const LABELS = {
   version: 'Version', slot: 'Slot', state: 'Image state', wifi: 'Wi-Fi IP', eth: 'Ethernet IP', upstream: 'Upstream (TTN)',
   last_check: 'Last update check', boots: 'Boots', panic: 'Panics', wdt: 'Watchdog resets', brownout: 'Brownouts',
   sw: 'Software restarts', run: 'Abnormal resets in a row', rx: 'Packets received', crc_ok: 'CRC OK', dropped: 'Dropped (queue full)',
-  starts: 'Concentrator starts', restarts: 'Concentrator restarts', uptime_s: 'Uptime', heap_internal: 'Internal RAM free',
+  starts: 'Concentrator starts', led: 'Status LED', restarts: 'Concentrator restarts', uptime_s: 'Uptime', heap_internal: 'Internal RAM free',
   heap_internal_min: 'Internal RAM free (lowest)', heap_psram: 'PSRAM free',
 };
 const fmtUptime = (s) => { s = +s; const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
@@ -60,11 +60,12 @@ async function refreshStatus() {
     const s = await (await api('/api/status')).json();
     const all = {};
     for (const [g, line] of Object.entries(s)) all[g] = Object.fromEntries(kv(line));
-    const o = all.ota || {}, r = all.radio || {}, f = all.faults || {};
+    const o = all.ota || {}, r = all.radio || {}, f = all.faults || {}, g = all.ttn || {};
+    const ttnOn = g.report !== 'off';
     const rx = +r.rx || 0, ok = +r.crc_ok || 0;
     const restarts = +r.restarts || 0, run = +f.run || 0;
     const notices = [];
-    if (r.upstream !== 'up') notices.push(['warn', 'Upstream (TTN) is down: uplinks are not forwarded.']);
+    if (ttnOn && r.upstream !== 'up') notices.push(['warn', 'Upstream (TTN) is down: uplinks are not forwarded.']);
     if (o.state && o.state !== 'valid') notices.push(['warn', 'Firmware ' + o.state + ': it rolls back unless its health check passes.']);
     if (run > 0) notices.push(['warn', run + ' crash or watchdog reset(s) in a row. See Logs → Previous boot.']);
     if (restarts > 0) notices.push(['warn', 'The concentrator restarted ' + restarts + ' time(s) since boot.']);
@@ -76,11 +77,17 @@ async function refreshStatus() {
       return li;
     }));
     $('#tiles').replaceChildren(
-      tile('Upstream', r.upstream === 'up' ? 'Connected' : 'Down', 'TTN, Semtech UDP', r.upstream === 'up' ? 'ok' : 'warn'),
+      ttnOn ? tile('Upstream', r.upstream === 'up' ? 'Connected' : 'Down', 'TTN, Semtech UDP', r.upstream === 'up' ? 'ok' : 'warn')
+            : tile('Upstream', 'Off', 'TTN reporting is off'),
       tile('Packets', String(rx), ok + ' with valid CRC'),
       tile('Uptime', fmtUptime(r.uptime_s || 0), (f.boots || '?') + ' boots, ' + (f.panic || 0) + ' panics'),
       tile('Internal RAM', fmtKB(r.heap_internal || 0), 'lowest ' + fmtKB(r.heap_internal_min || 0)),
     );
+    $('#ttn').hidden = !ttnOn;
+    $('#ttn-eui').textContent = g.eui || '';
+    $('#ttn-server').textContent = (g.server || '') + (g.port ? ' : ' + g.port + ' (UDP)' : '');
+    if (ttnOn && !$('#ttn-qr').src) $('#ttn-qr').src = '/api/ttn/qr.svg';
+    $('#ttn-on').checked = ttnOn;
     const fw = $('#fw');
     fw.replaceChildren();
     for (const k of ['version', 'slot', 'state', 'last_check', 'wifi', 'eth']) {
@@ -161,7 +168,46 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#warn-only').addEventListener('change', refreshLogs);
   $('#ota-check').addEventListener('click', () => { if (confirm('Download and install the latest release if it differs from this one? The gateway restarts.')) action('/api/ota/check', 'POST'); });
   $('#reboot').addEventListener('click', () => { if (confirm('Reboot the gateway?')) action('/api/reboot', 'POST'); });
+  $('#ttn-copy').addEventListener('click', async (ev) => {
+    try { await navigator.clipboard.writeText($('#ttn-eui').textContent); ev.target.textContent = 'Copied'; }
+    catch (e) { getSelection().selectAllChildren($('#ttn-eui')); }
+  });
+  $('#ttn-save').addEventListener('click', async () => {
+    if (!confirm('Save and restart the gateway?')) return;
+    const el = $('#fw-msg');
+    try {
+      const r = await api('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'ttn=' + ($('#ttn-on').checked ? 'on' : 'off') });
+      el.textContent = (await r.text()).trim();
+    } catch (e) { el.textContent = e.message; }
+  });
   $('#cd-del').addEventListener('click', () => { if (confirm('Erase the stored coredump?')) action('/api/coredump', 'DELETE'); });
+  /* First-time setup: the page exists only while the setup access point is open. */
+  fetch('/api/setup', { headers: H }).then((r) => (r.ok ? r.json() : null)).then((st) => {
+    if (!st) return;
+    $('#setup').hidden = false;
+    $('#claim').hidden = st.admin_set;
+    if (!st.admin_set) $('#login').hidden = true; /* nothing to log in to yet */
+    for (const x of document.querySelectorAll('#claim input')) x.required = !st.admin_set;
+    $('#nets').replaceChildren(...st.networks.map((n) => { const o = document.createElement('option'); o.value = n; return o; }));
+  }).catch(() => {});
+  $('#setup-form').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const msg = $('#setup-msg');
+    msg.classList.remove('bad');
+    if (!$('#claim').hidden && ev.target.admin.value !== $('#admin2').value) {
+      msg.textContent = 'The admin passwords differ.';
+      msg.classList.add('bad');
+      return;
+    }
+    msg.textContent = 'Saving…';
+    try {
+      const r = await fetch('/api/setup', { method: 'POST', headers: { ...H, 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(new FormData(ev.target)) });
+      const t = (await r.text()).trim();
+      if (!r.ok) throw new Error(t);
+      ev.target.reset();
+      msg.textContent = 'Saved. The gateway restarts and joins that network. Reconnect this device to your own network and open the gateway by its new address (see your router).';
+    } catch (e) { msg.textContent = e.message; msg.classList.add('bad'); }
+  });
   const role = sessionStorage.getItem('role');
   if (role) { show(true, role); } else { show(false); }
   setInterval(() => { if (!$('#app').hidden && $('#tab-logs').hidden) refreshStatus(); }, 10000);
