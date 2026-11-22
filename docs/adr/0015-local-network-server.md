@@ -1,6 +1,6 @@
 # ADR-0015: Local network server and gateway modes (phase 3)
 
-- Status: accepted (slice 1 done: crypto and frame codec)
+- Status: accepted (slices 1 and 2 done: crypto, frame codec, join and uplink logic)
 - Date: 2026-11-22
 
 ## Context
@@ -50,7 +50,7 @@ mode was the Semtech UDP forwarder (ADR-0012), switched on or off.
 ## Slices
 
 1. Core crypto and LoRaWAN 1.0.x codec (`lwc/aes.h`, `lwc/lorawan.h`). Done.
-2. Core join and uplink decisions over a fixed-size device table.
+2. Core join and uplink decisions over a fixed-size device table (`lwc/ns.h`). Done.
 3. Firmware: router between radio, local server and forwarder; mode setting;
    persistence; TX path (dry run).
 4. API and UI: mode selector and devices on the Config tab.
@@ -62,3 +62,17 @@ Then downlinks (ACK, MAC commands), ADR, and integrations (phase 4).
   and transmit approval; until then, host tests and dry-run logs.
 - Standalone mode stops the gateway serving the community network; hybrid
   keeps it.
+
+## Notes from slice 2
+
+- **DevNonce**: devices are added as LoRaWAN 1.0.4 (DevNonce is a counter and
+  must increase) or 1.0.2/1.0.3 (random DevNonce; the last 8 are refused).
+  Many devices in use are 1.0.2/1.0.3.
+- **JoinNonce** is one counter for the gateway and must be stored: 1.0.4
+  devices refuse a join-accept whose JoinNonce is not greater than the last.
+- **Rejoin** keeps the device's DevAddr and resets its counters.
+- **Uplink**: frames are tried against every joined device with that DevAddr;
+  an authentic frame with an old counter is a replay (dropped, not forwarded).
+  FRMPayload on port 0 is decrypted with the network key.
+- **Hybrid**: "handled locally" means an accepted join or uplink, or a replay
+  of one; a bad MIC is not, so it is forwarded.
