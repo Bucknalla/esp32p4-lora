@@ -299,9 +299,23 @@
         </div>
       </div>
       <div class="panel">
-        <h2>Task stack headroom</h2>
-        <p class="note">Bytes never used on each task's stack. Below 1 KB a task is close to overflowing.</p>
-        <div id="sys-stack" class="stacks"></div>
+        <h2>Tasks</h2>
+        <div id="sys-cores" class="cores"></div>
+        <div class="table">
+          <table id="sys-tasks">
+            <thead><tr>
+              <th><button type="button" class="sort" data-sort="name">Task</button></th>
+              <th class="num"><button type="button" class="sort" data-sort="cpu">CPU</button></th>
+              <th><button type="button" class="sort" data-sort="stack">Stack used</button></th>
+              <th>Headroom</th>
+              <th class="num">Core</th>
+              <th class="num">Priority</th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <button type="button" id="tasks-more" class="ghost small" hidden></button>
+        <p class="note">CPU is the share of one core over the last few seconds. Stack used is the most the task has used since the gateway started.</p>
       </div>
       <div class="panel">
         <div class="title-row">
