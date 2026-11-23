@@ -29,9 +29,9 @@ gateways.
   authentication (a known gateway EUI was enough to send as this gateway),
   and the servers in view speak Basics Station: TTN, ChirpStack v4 (through
   its gateway bridge) and AWS IoT Core for LoRaWAN.
-- **Settings**: Config tab, TTN card, admin only: the server host
-  (`eu1.cloud.thethings.network` by default; any Basics Station LNS) and the
-  API key. The mode alone decides whether the gateway connects. Without a
+- **Settings**: Setup tab, admin only: the server (TTN presets eu1, nam1,
+  au1 on port 8887, or another host and port; `lns_host`, `lns_port`) and the
+  API key. The TTN registration help shows only for a TTN host. The mode alone decides whether the gateway connects. Without a
   key the gateway does not connect, and the status page says so; hybrid
   mode keeps serving local devices. NVS: `pktfwd/lbs_host`, `pktfwd/lbs_key`
   (the namespace keeps its old name so stored settings survive).
@@ -111,6 +111,10 @@ gateways.
 - Setting up TTN needs one more step than UDP did: an API key from the TTN
   console. The registration help on the Config tab says how.
 - A server that speaks only Semtech UDP cannot be used.
+- The client authenticates with a bearer key only. Servers that require TLS
+  client certificates (common with ChirpStack's Basics Station bridge and
+  AWS IoT Core for LoRaWAN) cannot be used until client certificates are
+  added.
 - TLS costs RAM (one connection, about 40 KB) and needs a set clock to check
   certificates; with no clock or no network, the local server keeps working.
 - Local devices still do not appear in TTN: TTN sees the gateway only.
