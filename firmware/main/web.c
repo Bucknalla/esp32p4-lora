@@ -4,6 +4,7 @@
 #include <inttypes.h>
 #include <stdatomic.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 
@@ -653,7 +654,28 @@ static esp_err_t api_radio_post(httpd_req_t *req)
     if (!read_body(req, body, &got)) {
         return send_status(req, "400 Bad Request", "bad body\n");
     }
-    char g[12], tx[8], ltx[8];
+    char g[12], tx[8], ltx[8], v[16];
+    /* receive windows (rx1_delay, rx2_hz, rx2_dr): their own save */
+    const int rl = lwc_form_get(body, got, "rx1_delay", v, sizeof v);
+    if (rl >= 0) {
+        radio_rx_cfg_t w;
+        radioplan_rx(&w);
+        char hz[16], dr[8];
+        w.rx1_delay_s = (uint8_t)atoi(v);
+        if (lwc_form_get(body, got, "rx2_hz", hz, sizeof hz) >= 0) {
+            w.rx2_hz = (uint32_t)strtoul(hz, NULL, 10);
+        }
+        if (lwc_form_get(body, got, "rx2_dr", dr, sizeof dr) >= 0) {
+            w.rx2_dr = (uint8_t)atoi(dr);
+        }
+        r = radioplan_set_rx(&w);
+        if (r == ESP_ERR_INVALID_ARG) {
+            return send_status(req, "400 Bad Request",
+                               "RX1 delay 1-15 s; RX2 a transmit frequency in 863-870 MHz; RX2 DR0-DR5\n");
+        }
+        return r == ESP_OK ? send_status(req, "200 OK", "saved: applies to devices that join from now on\n")
+                           : send_status(req, "500 Internal Server Error", esp_err_to_name(r));
+    }
     radio_tx_cfg_t c;
     radioplan_tx(&c);
     const radio_tx_cfg_t old = c;
@@ -681,6 +703,103 @@ static esp_err_t api_radio_post(httpd_req_t *req)
         return send_status(req, "200 OK", "saved: the radio restarts with the new power cap\n");
     }
     return send_status(req, "200 OK", "saved\n");
+}
+
+/* Channel plan editor (ADR-0017, admin): r0, r1 = radio centres in Hz;
+ * m0..m7 = "enable:radio:if_hz"; std = "enable:radio:if_hz:sf:bw_khz";
+ * fsk = "enable:radio:if_hz"; or reset=1 for the built-in plan. Stored as
+ * "local"; a connected network server replaces it with its own. */
+static bool parse_chan(const char *s, lwc_plan_chan_t *c, int *sf, int *bw)
+{
+    int en = 0, radio = 0;
+    long ifhz = 0;
+    int n = 0;
+    if (sf != NULL) {
+        n = sscanf(s, "%d:%d:%ld:%d:%d", &en, &radio, &ifhz, sf, bw);
+        if (n != 5) {
+            return false;
+        }
+    } else if (sscanf(s, "%d:%d:%ld", &en, &radio, &ifhz) != 3) {
+        return false;
+    }
+    if ((en != 0 && en != 1) || (radio != 0 && radio != 1) || ifhz < -1000000L || ifhz > 1000000L) {
+        return false;
+    }
+    *c = (lwc_plan_chan_t){en == 1, (uint8_t)radio, (int32_t)ifhz};
+    return true;
+}
+
+static const char *plan_err_text(lwc_plan_err_t e)
+{
+    return e == LWC_PLAN_ERR_RADIO     ? "a radio centre is outside 863-870 MHz\n"
+           : e == LWC_PLAN_ERR_IF      ? "a channel is outside its radio's band (|IF| <= 400 kHz at 125 kHz)\n"
+           : e == LWC_PLAN_ERR_BAND    ? "a channel reaches outside 863-870 MHz\n"
+           : e == LWC_PLAN_ERR_DEFAULT ? "868.1, 868.3 and 868.5 MHz must stay (EU868 default channels)\n"
+           : e == LWC_PLAN_ERR_STD     ? "std channel: SF7-12, 125/250/500 kHz\n"
+                                       : "plan not valid\n";
+}
+
+static esp_err_t api_radio_plan(httpd_req_t *req)
+{
+    esp_err_t r;
+    if (!gate(req, LWC_ROLE_ADMIN, &r)) {
+        return r;
+    }
+    char body[BODY_MAX + 1];
+    size_t got;
+    if (!read_body(req, body, &got)) {
+        return send_status(req, "400 Bad Request", "bad body\n");
+    }
+    char v[48];
+    lwc_plan_t p;
+    radioplan_src_t src = RADIOPLAN_LOCAL;
+    if (lwc_form_get(body, got, "reset", v, sizeof v) >= 0 && strcmp(v, "1") == 0) {
+        lwc_plan_default_eu868(&p);
+        src = RADIOPLAN_DEFAULT;
+    } else {
+        radioplan_get(&p);
+        for (int i = 0; i < 2; i++) {
+            const char key[3] = {'r', (char)('0' + i), '\0'};
+            if (lwc_form_get(body, got, key, v, sizeof v) >= 0) {
+                p.radio_hz[i] = (uint32_t)strtoul(v, NULL, 10);
+            }
+        }
+        for (unsigned i = 0; i < LWC_PLAN_MULTISF; i++) {
+            const char key[3] = {'m', (char)('0' + i), '\0'};
+            if (lwc_form_get(body, got, key, v, sizeof v) >= 0 && !parse_chan(v, &p.multisf[i], NULL, NULL)) {
+                return send_status(req, "400 Bad Request", "m0..m7: enable:radio:if_hz\n");
+            }
+        }
+        int sf = p.std_sf, bw = p.std_bw_khz;
+        if (lwc_form_get(body, got, "std", v, sizeof v) >= 0) {
+            if (!parse_chan(v, &p.std, &sf, &bw) || sf < 0 || sf > 12 || bw < 0 || bw > 500) {
+                return send_status(req, "400 Bad Request", "std: enable:radio:if_hz:sf:bw_khz\n");
+            }
+            p.std_sf = (uint8_t)sf;
+            p.std_bw_khz = (uint16_t)bw;
+        }
+        if (lwc_form_get(body, got, "fsk", v, sizeof v) >= 0 && !parse_chan(v, &p.fsk, NULL, NULL)) {
+            return send_status(req, "400 Bad Request", "fsk: enable:radio:if_hz\n");
+        }
+    }
+    const lwc_plan_err_t pe = lwc_plan_check(&p);
+    if (pe != LWC_PLAN_OK) {
+        return send_status(req, "400 Bad Request", plan_err_text(pe));
+    }
+    bool changed = false;
+    r = radioplan_store(&p, src, &changed);
+    if (r == ESP_ERR_INVALID_STATE) {
+        return send_status(req, "409 Conflict", "the radio could not start with this plan earlier\n");
+    }
+    if (r != ESP_OK) {
+        return send_status(req, "500 Internal Server Error", esp_err_to_name(r));
+    }
+    if (changed) {
+        ESP_LOGW(TAG, "channel plan changed on the Config tab (%s)", radioplan_source_name(src));
+        conc_hal_restart();
+        return send_status(req, "200 OK", "saved: the radio restarts with the new plan\n");
+    }
+    return send_status(req, "200 OK", "unchanged\n");
 }
 
 static esp_err_t api_devices_get(httpd_req_t *req)
@@ -908,6 +1027,7 @@ esp_err_t web_start(void)
         {.uri = "/api/devices", .method = HTTP_GET, .handler = api_devices_get},
         {.uri = "/api/radio", .method = HTTP_GET, .handler = api_radio_get},
         {.uri = "/api/radio", .method = HTTP_POST, .handler = api_radio_post},
+        {.uri = "/api/radio/plan", .method = HTTP_POST, .handler = api_radio_plan},
         {.uri = "/api/devices", .method = HTTP_POST, .handler = api_devices_post},
         {.uri = "/api/devices/delete", .method = HTTP_POST, .handler = api_devices_delete},
     };

@@ -22,6 +22,7 @@
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stddef.h>
 #include <string.h>
 #include <sys/time.h>
 
@@ -53,7 +54,8 @@ static const char *TAG = "lns";
 #define TASK_PRIO 4
 #define TASK_CORE 1
 #define NVS_NS "lns"
-#define REC_VER 1U
+#define META_VER 1U /* "meta" record: JoinNonce and DevAddr allocator (never reset) */
+#define DEV_VER 2U  /* device record: 2 adds the receive windows (ADR-0017 step 5); 1 is migrated */
 #define FCNT_DOWN_SKIP 16U /* downlink counter skip at boot: never reuse one */
 #define DOWN_POWER_DBM 14  /* EU868 RX1 default; the radio caps it (ADR-0007) */
 #define PAYLOAD_SHOW 32U
@@ -68,6 +70,63 @@ typedef struct {
     uint8_t ver;
     lwc_ns_dev_t d;
 } dev_rec_t;
+
+/* Device record version 1, frozen: lwc_ns_dev_t before the receive windows.
+ * Read once at boot and written back as version 2. */
+typedef struct {
+    bool used;
+    char name[LWC_NS_NAME_MAX + 1U];
+    uint64_t dev_eui;
+    uint64_t join_eui;
+    uint8_t app_key[16];
+    uint8_t mac;
+    uint16_t nonces[LWC_NS_NONCE_HISTORY];
+    uint8_t nonce_count;
+    uint8_t nonce_pos;
+    bool joined;
+    uint32_t dev_addr;
+    uint8_t nwk_s_key[16];
+    uint8_t app_s_key[16];
+    bool has_up;
+    uint32_t fcnt_up;
+    uint32_t fcnt_down;
+} dev_v1_t;
+
+typedef struct {
+    uint8_t ver;
+    dev_v1_t d;
+} dev_rec_v1_t;
+
+/* Version 2 only appends fields: every version 1 field keeps its offset. */
+_Static_assert(offsetof(dev_rec_t, d) == offsetof(dev_rec_v1_t, d), "record header");
+_Static_assert(offsetof(lwc_ns_dev_t, nonces) == offsetof(dev_v1_t, nonces), "v1 layout");
+_Static_assert(offsetof(lwc_ns_dev_t, app_s_key) == offsetof(dev_v1_t, app_s_key), "v1 layout");
+_Static_assert(offsetof(lwc_ns_dev_t, fcnt_down) == offsetof(dev_v1_t, fcnt_down), "v1 layout");
+
+static void from_v1(const dev_v1_t *o, lwc_ns_dev_t *d)
+{
+    memset(d, 0, sizeof *d);
+    d->used = o->used;
+    memcpy(d->name, o->name, sizeof d->name);
+    d->dev_eui = o->dev_eui;
+    d->join_eui = o->join_eui;
+    memcpy(d->app_key, o->app_key, sizeof d->app_key);
+    d->mac = o->mac;
+    memcpy(d->nonces, o->nonces, sizeof d->nonces);
+    d->nonce_count = o->nonce_count;
+    d->nonce_pos = o->nonce_pos;
+    d->joined = o->joined;
+    d->dev_addr = o->dev_addr;
+    memcpy(d->nwk_s_key, o->nwk_s_key, sizeof d->nwk_s_key);
+    memcpy(d->app_s_key, o->app_s_key, sizeof d->app_s_key);
+    d->has_up = o->has_up;
+    d->fcnt_up = o->fcnt_up;
+    d->fcnt_down = o->fcnt_down;
+    /* version 1 devices joined with the defaults */
+    d->rx1_delay_s = 1;
+    d->rx2_dr = 0;
+    d->rx2_hz = LWC_NS_RX2_FREQ_HZ;
+}
 
 typedef struct {
     uint32_t fcnt_up;
@@ -133,7 +192,7 @@ static void erase_key(nvs_handle_t h, const char *key)
 /* Unused in a dry-run build, which stores no join. */
 static esp_err_t save_meta(void)
 {
-    const meta_rec_t m = {REC_VER, s_ns.join_nonce, s_ns.next_addr};
+    const meta_rec_t m = {META_VER, s_ns.join_nonce, s_ns.next_addr};
     return save_blob("meta", &m, sizeof m);
 }
 
@@ -143,7 +202,7 @@ static esp_err_t save_dev(size_t i)
     key_of(k, 'd', i);
     dev_rec_t *r = calloc(1, sizeof *r);
     ESP_RETURN_ON_FALSE(r != NULL, ESP_ERR_NO_MEM, TAG, "rec");
-    r->ver = REC_VER;
+    r->ver = DEV_VER;
     r->d = s_ns.dev[i];
     const esp_err_t err = save_blob(k, r, sizeof *r);
     memset(r, 0, sizeof *r); /* keys */
@@ -172,12 +231,13 @@ static void load(void)
     }
     meta_rec_t m;
     size_t len = sizeof m;
-    if (nvs_get_blob(h, "meta", &m, &len) == ESP_OK && len == sizeof m && m.ver == REC_VER) {
+    if (nvs_get_blob(h, "meta", &m, &len) == ESP_OK && len == sizeof m && m.ver == META_VER) {
         s_ns.join_nonce = m.join_nonce;
         s_ns.next_addr = m.next_addr;
     }
     dev_rec_t *r = calloc(1, sizeof *r);
     unsigned n = 0;
+    bool migrate[LWC_NS_MAX_DEVICES] = {false};
     for (size_t i = 0; r != NULL && i < LWC_NS_MAX_DEVICES; i++) {
         char k[4];
         key_of(k, 'd', i);
@@ -185,11 +245,15 @@ static void load(void)
         if (nvs_get_blob(h, k, r, &len) != ESP_OK) {
             continue;
         }
-        if (len != sizeof *r || r->ver != REC_VER || !r->d.used) {
+        if (len == sizeof *r && r->ver == DEV_VER && r->d.used) {
+            s_ns.dev[i] = r->d;
+        } else if (len == sizeof(dev_rec_v1_t) && r->ver == 1U && ((const dev_rec_v1_t *)r)->d.used) {
+            from_v1(&((const dev_rec_v1_t *)r)->d, &s_ns.dev[i]);
+            migrate[i] = true;
+        } else {
             ESP_LOGW(TAG, "device record %s has another format: skipped", k);
             continue;
         }
-        s_ns.dev[i] = r->d;
         cnt_rec_t c;
         key_of(k, 'c', i);
         len = sizeof c;
@@ -209,6 +273,11 @@ static void load(void)
     for (size_t i = 0; i < LWC_NS_MAX_DEVICES; i++) {
         if (s_ns.dev[i].used) {
             (void)save_cnt(i); /* the skipped downlink counter */
+        }
+        if (migrate[i]) {
+            const esp_err_t err = save_dev(i);
+            ESP_LOGW(TAG, "device %s: record version 1 -> 2%s", s_ns.dev[i].name,
+                     err == ESP_OK ? "" : " (not written: read again at the next boot)");
         }
     }
     ESP_LOGI(TAG, "%u device(s) loaded", n);
@@ -240,16 +309,18 @@ static int32_t since_uplink_ms(const radio_pkt_t *p)
 
 /* Queue a class A downlink: RX1 `delay_us` after the uplink, RX2 one second
  * later if RX1 is refused. `what` names it in the log. */
-static void send_down(const radio_pkt_t *p, const uint8_t *frame, size_t len, uint32_t delay_us, const char *what,
-                      uint64_t dev_eui)
+static void send_down(const radio_pkt_t *p, const uint8_t *frame, size_t len, uint32_t delay_us, uint32_t rx2_hz,
+                      uint8_t rx2_dr, const char *what, uint64_t dev_eui)
 {
     static radio_tx_req_t req;
     memset(&req, 0, sizeof req);
     req.source = RADIO_SRC_LNS;
     req.token = ++s_tx_token;
-    lwc_ns_downlink(false, p->tmst, p->freq_hz, p->sf, p->bw_khz, delay_us, DOWN_POWER_DBM, frame, len, &req.pk);
+    lwc_ns_downlink(false, p->tmst, p->freq_hz, p->sf, p->bw_khz, delay_us, rx2_hz, rx2_dr, DOWN_POWER_DBM, frame, len,
+                    &req.pk);
     lwc_txpk_t rx2;
-    lwc_ns_downlink(true, p->tmst, p->freq_hz, p->sf, p->bw_khz, delay_us, DOWN_POWER_DBM, NULL, 0, &rx2);
+    lwc_ns_downlink(true, p->tmst, p->freq_hz, p->sf, p->bw_khz, delay_us, rx2_hz, rx2_dr, DOWN_POWER_DBM, NULL, 0,
+                    &rx2);
     req.alt = (radio_tx_alt_t){.on = true, .tmst = rx2.tmst, .freq_hz = rx2.freq_hz, .sf = rx2.sf,
                                .bw_khz = rx2.bw_khz};
     char e[17];
@@ -313,6 +384,9 @@ static bool handle(const radio_pkt_t *p)
         static lwc_plan_t plan;
         radioplan_get(&plan); /* the CFList follows the radio's plan (ADR-0017) */
         lwc_ns_set_plan(&s_ns, &plan);
+        radio_rx_cfg_t rxw;
+        radioplan_rx(&rxw);
+        (void)lwc_ns_set_rx(&s_ns, rxw.rx1_delay_s, rxw.rx2_hz, rxw.rx2_dr);
         const lwc_ns_join_res_t r = lwc_ns_join(&s_ns, p->payload, p->size, acc, sizeof acc, &alen, &idx);
         if (r == LWC_NS_JOIN_ACCEPT) {
             const uint64_t eui = s_ns.dev[idx].dev_eui;
@@ -339,7 +413,8 @@ static bool handle(const radio_pkt_t *p)
                      s_ns.dev[idx].name, s_ns.dev[idx].dev_addr, p->rssi, (double)p->lsnr);
             xSemaphoreGive(s_lock);
             if (err == ESP_OK) {
-                send_down(p, acc, alen, LWC_NS_JOIN_DELAY_US, "join-accept", eui);
+                /* the device learns its windows from this frame: it uses the defaults for it */
+                send_down(p, acc, alen, LWC_NS_JOIN_DELAY_US, LWC_NS_RX2_FREQ_HZ, 0, "join-accept", eui);
             } else {
                 ESP_LOGE(TAG, "join not answered: storing the device failed (%s)", esp_err_to_name(err));
             }
@@ -387,12 +462,15 @@ static bool handle(const radio_pkt_t *p)
                 }
             }
             const uint64_t eui = s_ns.dev[up.idx].dev_eui;
+            const uint32_t rx1_us = lwc_ns_rx1_delay_us(&s_ns.dev[up.idx]);
+            const uint32_t rx2_hz = s_ns.dev[up.idx].rx2_hz != 0U ? s_ns.dev[up.idx].rx2_hz : LWC_NS_RX2_FREQ_HZ;
+            const uint8_t rx2_dr = s_ns.dev[up.idx].rx2_dr;
             memset(&up, 0, sizeof up);
             xSemaphoreGive(s_lock);
             if (send) {
                 char what[128];
                 describe(&dl, what, sizeof what);
-                send_down(p, dl.frame, dl.len, LWC_NS_RX1_DELAY_US, what, eui);
+                send_down(p, dl.frame, dl.len, rx1_us, rx2_hz, rx2_dr, what, eui);
             }
             return handled;
         } else if (r == LWC_NS_UP_REPLAY) {
@@ -557,7 +635,8 @@ size_t lns_devices_json(char *out, size_t cap)
                     "%s{\"dev_eui\":\"%s\",\"join_eui\":\"%s\",\"name\":\"%s\",\"mac\":\"%s\","
                     "\"joined\":%s,\"answered\":%s,\"dev_addr\":\"%08" PRIX32 "\",\"fcnt_up\":%" PRIu32 ",\"uplinks\":%" PRIu32
                     ",\"seen_s\":%" PRId64 ",\"rssi\":%d,\"snr\":%.1f,\"sf\":%u,\"port\":%d,\"payload\":\"%s\","
-                    "\"battery\":%d,\"margin\":%d,\"tx_power\":%u,\"adr\":%s}",
+                    "\"battery\":%d,\"margin\":%d,\"tx_power\":%u,\"adr\":%s,\"rx1_delay_s\":%u,\"rx2_hz\":%" PRIu32
+                    ",\"rx2_dr\":%u}",
                     first ? "" : ",", eui_str(d->dev_eui, dev), eui_str(d->join_eui, join), name,
                     d->mac == LWC_NS_MAC_1_0_4 ? "1.0.4" : "1.0.2", d->joined ? "true" : "false",
                     st->join_unanswered ? "false" : "true",
@@ -565,7 +644,8 @@ size_t lns_devices_json(char *out, size_t cap)
                     st->seen_us != 0 ? (now - st->seen_us) / 1000000LL : (int64_t)-1, st->rssi,
                     (double)st->snr, st->sf, st->has_port ? st->port : -1, pl,
                     s_ns.link[i].has_status ? (int)s_ns.link[i].battery : -1, (int)s_ns.link[i].margin,
-                    s_ns.link[i].tx_power, s_ns.link[i].adr_pending ? "\"pending\"" : "null");
+                    s_ns.link[i].tx_power, s_ns.link[i].adr_pending ? "\"pending\"" : "null", (unsigned)d->rx1_delay_s,
+                    d->rx2_hz, (unsigned)d->rx2_dr);
             first = false;
         }
         xSemaphoreGive(s_lock);

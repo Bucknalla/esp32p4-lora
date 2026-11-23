@@ -82,14 +82,68 @@ async function refreshRadio() {
     $('#radio-tx').textContent = (p.tx ? 'on' : 'off') + ' · local server ' + (p.lns_tx ? 'on' : 'off (dry run)')
       + ' · cap ' + p.cap_dbm + ' dBm at the connector (ceiling ' + p.ceiling_dbm + ', antenna ' + (p.gain_db10 / 10).toFixed(1) + ' dBi)'
       + (p.tx_built ? '' : ' · transmit not built in');
+    $('#radio-rx').textContent = 'RX1 ' + p.rx1_delay_s + ' s · RX2 ' + MHZ(p.rx2_hz) + ' DR' + p.rx2_dr + ' (new joins)';
+    if (!$('#rx-form').dataset.dirty) { $('#rx-d').value = p.rx1_delay_s; $('#rx-f').value = (p.rx2_hz / 1e6).toFixed(3); $('#rx-dr').value = String(p.rx2_dr); }
     const f = $('#tx-form');
     if (!f.dataset.dirty) { $('#tx-gain').value = (p.gain_db10 / 10).toFixed(1); $('#tx-on').checked = p.tx; $('#tx-lns').checked = p.lns_tx; }
+    if (!$('#plan-form').dataset.dirty) fillPlanEditor(p);
     $('#radio-rows').replaceChildren(
       ...p.multisf.map((c, i) => row('Multi-SF ' + i, c, 'LoRa SF7–12, 125 kHz')),
       row('LoRa std', p.std, 'LoRa SF' + p.std_sf + ', ' + p.std_bw_khz + ' kHz'),
       row('FSK', p.fsk, 'FSK 50 kbit/s'),
     );
   } catch (e) { $('#radio-src').textContent = e.message; }
+}
+
+/* Channel plan editor: one row per channel (multi-SF 0-7, std, FSK). */
+const PE_CHANS = ['m0', 'm1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'std', 'fsk'];
+function fillPlanEditor(p) {
+  $('#pe-r0').value = (p.radios[0] / 1e6).toFixed(1);
+  $('#pe-r1').value = (p.radios[1] / 1e6).toFixed(1);
+  $('#pe-sf').value = String(p.std_sf);
+  $('#pe-bw').value = String(p.std_bw_khz);
+  const chans = [...p.multisf, p.std, p.fsk];
+  $('#pe-rows').replaceChildren(...chans.map((c, i) => {
+    const tr = document.createElement('tr');
+    tr.dataset.k = PE_CHANS[i];
+    const td = (el) => { const d = document.createElement('td'); d.append(el); return d; };
+    const name = document.createElement('span');
+    name.textContent = i < 8 ? 'Multi-SF ' + i : i === 8 ? 'LoRa std' : 'FSK';
+    const on = document.createElement('input');
+    on.type = 'checkbox'; on.checked = c.enable; on.className = 'pe-on';
+    const radio = document.createElement('select');
+    radio.className = 'pe-radio';
+    for (const r of ['0', '1']) { const o = document.createElement('option'); o.value = o.textContent = r; radio.append(o); }
+    radio.value = String(c.radio);
+    const ifk = document.createElement('input');
+    ifk.type = 'number'; ifk.step = '25'; ifk.min = '-500'; ifk.max = '500'; ifk.className = 'pe-if';
+    ifk.value = String(c.if / 1000);
+    const f = document.createElement('span');
+    f.className = 'mono pe-hz';
+    tr.append(td(name), td(on), td(radio), td(ifk), td(f));
+    return tr;
+  }));
+  updatePlanFreqs();
+}
+function updatePlanFreqs() {
+  const r = [parseFloat($('#pe-r0').value) * 1e6, parseFloat($('#pe-r1').value) * 1e6];
+  for (const tr of document.querySelectorAll('#pe-rows tr')) {
+    const on = tr.querySelector('.pe-on').checked;
+    const hz = r[+tr.querySelector('.pe-radio').value] + parseFloat(tr.querySelector('.pe-if').value) * 1000;
+    tr.querySelector('.pe-hz').textContent = on && isFinite(hz) ? MHZ(hz) : 'off';
+  }
+}
+function planBody() {
+  const b = new URLSearchParams();
+  b.set('r0', String(Math.round(parseFloat($('#pe-r0').value) * 1e6)));
+  b.set('r1', String(Math.round(parseFloat($('#pe-r1').value) * 1e6)));
+  for (const tr of document.querySelectorAll('#pe-rows tr')) {
+    const v = [tr.querySelector('.pe-on').checked ? 1 : 0, tr.querySelector('.pe-radio').value,
+      Math.round(parseFloat(tr.querySelector('.pe-if').value) * 1000)];
+    if (tr.dataset.k === 'std') v.push($('#pe-sf').value, $('#pe-bw').value);
+    b.set(tr.dataset.k, v.join(':'));
+  }
+  return b;
 }
 
 async function refreshDevices() {
@@ -277,6 +331,34 @@ document.addEventListener('DOMContentLoaded', () => {
       const r = await api('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'mode=' + m.value });
       el.textContent = (await r.text()).trim();
     } catch (e) { el.textContent = e.message; }
+  });
+  $('#plan-form').addEventListener('input', (ev) => { ev.currentTarget.dataset.dirty = '1'; updatePlanFreqs(); });
+  const savePlan = async (body, what) => {
+    if (!confirm(what + ' The radio restarts (about 3 s); local devices must join again.')) return;
+    const el = $('#cfg-msg');
+    el.classList.remove('bad');
+    try {
+      const r = await api('/api/radio/plan', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
+      el.textContent = (await r.text()).trim();
+      delete $('#plan-form').dataset.dirty;
+      refreshRadio();
+    } catch (e) { el.textContent = e.message; el.classList.add('bad'); }
+  };
+  $('#plan-form').addEventListener('submit', (ev) => { ev.preventDefault(); savePlan(planBody(), 'Save this channel plan?'); });
+  $('#pe-reset').addEventListener('click', () => savePlan(new URLSearchParams({ reset: '1' }), 'Go back to the built-in EU868 plan?'));
+  $('#rx-form').addEventListener('input', (ev) => { ev.currentTarget.dataset.dirty = '1'; });
+  $('#rx-form').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const body = new URLSearchParams({ rx1_delay: $('#rx-d').value, rx2_hz: String(Math.round(parseFloat($('#rx-f').value) * 1e6)), rx2_dr: $('#rx-dr').value });
+    if (!confirm('Save the receive windows? They apply to devices that join from now on.')) return;
+    const el = $('#cfg-msg');
+    el.classList.remove('bad');
+    try {
+      const r = await api('/api/radio', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
+      el.textContent = (await r.text()).trim();
+      delete ev.target.dataset.dirty;
+      refreshRadio();
+    } catch (e) { el.textContent = e.message; el.classList.add('bad'); }
   });
   $('#tx-form').addEventListener('input', (ev) => { ev.currentTarget.dataset.dirty = '1'; });
   $('#tx-form').addEventListener('submit', async (ev) => {

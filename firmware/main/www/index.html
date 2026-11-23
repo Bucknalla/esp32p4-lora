@@ -68,6 +68,26 @@
           <thead><tr><th>Channel</th><th>Frequency</th><th>Radio</th><th>Modulation</th></tr></thead>
           <tbody id="radio-rows"></tbody>
         </table></div>
+        <details class="admin" id="plan-edit">
+          <summary>Edit channel plan</summary>
+          <p class="hint" id="plan-note">The plan you save here is used until a network server sends its own: in TTN and hybrid modes TTN's plan replaces it at the next connection. Local devices must join again after a change (they keep the channels of their join-accept).</p>
+          <form id="plan-form" autocomplete="off">
+            <div class="row">
+              <label>Radio 0 (MHz) <input id="pe-r0" type="number" step="0.1" min="863" max="870"></label>
+              <label>Radio 1 (MHz) <input id="pe-r1" type="number" step="0.1" min="863" max="870"></label>
+            </div>
+            <div class="table"><table>
+              <thead><tr><th>Channel</th><th>On</th><th>Radio</th><th>IF (kHz)</th><th>Frequency</th></tr></thead>
+              <tbody id="pe-rows"></tbody>
+            </table></div>
+            <div class="row">
+              <label>Std SF <select id="pe-sf"><option>7</option><option>8</option><option>9</option><option>10</option><option>11</option><option>12</option></select></label>
+              <label>Std bandwidth <select id="pe-bw"><option value="125">125 kHz</option><option value="250">250 kHz</option><option value="500">500 kHz</option></select></label>
+            </div>
+            <button type="submit">Save and restart the radio</button>
+            <button type="button" id="pe-reset">Back to built-in EU868</button>
+          </form>
+        </details>
         <dl>
           <dt>Transmit</dt><dd id="radio-tx"></dd>
         </dl>
@@ -77,6 +97,16 @@
           <label class="check"><input name="lns_tx" id="tx-lns" type="checkbox"> Local server transmit (join-accepts, ACKs)</label>
           <button type="submit">Save</button>
         </form>
+        <dl>
+          <dt>Local receive windows</dt><dd id="radio-rx"></dd>
+        </dl>
+        <form class="admin" id="rx-form" autocomplete="off">
+          <label>RX1 delay (s) <input name="rx1_delay" id="rx-d" type="number" min="1" max="15" step="1"></label>
+          <label>RX2 frequency (MHz) <input name="rx2_mhz" id="rx-f" type="number" min="863" max="870" step="0.025"></label>
+          <label>RX2 data rate <select name="rx2_dr" id="rx-dr"><option value="0">DR0 (SF12)</option><option value="1">DR1 (SF11)</option><option value="2">DR2 (SF10)</option><option value="3">DR3 (SF9)</option><option value="4">DR4 (SF8)</option><option value="5">DR5 (SF7)</option></select></label>
+          <button type="submit">Save</button>
+        </form>
+        <p class="hint">Receive windows for local devices are sent in the join-accept: a change applies to devices that join after it. TTN sets its own for its devices. RX2 must be a frequency this gateway may transmit on (EU868 sub-bands).</p>
         <p class="hint">The power cap is 16.1 dBm EIRP (EU868, 14 dBm ERP) minus the antenna gain, never above the firmware ceiling. The gain table was measured for EU868 cards: with another card the real output power is unknown. A gain change restarts the radio (about 3 s).</p>
       </div>
       <div id="ttn" hidden>
