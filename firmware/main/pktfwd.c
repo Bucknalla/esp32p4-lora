@@ -23,7 +23,6 @@
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_mac.h"
-#include "esp_netif_sntp.h"
 #include "esp_random.h"
 #include "esp_timer.h"
 #include "eth.h"
@@ -345,14 +344,6 @@ static void pktfwd_task(void *arg)
     (void)arg;
     uint32_t backoff = BACKOFF_MIN_MS;
     const sv_id_t sv = sv_register("pktfwd", SV_BUDGET_MS);
-
-    while (!have_ip()) {
-        sv_delay(sv, 1000);
-    }
-    esp_sntp_config_t sntp = ESP_NETIF_SNTP_DEFAULT_CONFIG(CONFIG_GW_PKTFWD_NTP_SERVER);
-    if (esp_netif_sntp_init(&sntp) != ESP_OK) {
-        ESP_LOGW(TAG, "SNTP start failed: packets go out without \"time\"");
-    }
 
     for (;;) {
         sv_beat(sv);

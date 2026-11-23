@@ -18,6 +18,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "esp_netif_sntp.h"
 #include "eth.h"
 #include "c6_update.h"
 #include "console.h"
@@ -189,6 +190,14 @@ void app_main(void)
     err = led_start();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "status LED: %s", esp_err_to_name(err));
+    }
+
+    /* Wall clock in every mode: packet timestamps, DeviceTimeAns, TLS. Started
+     * before the network is up; SNTP retries, and asks again on a new IP. */
+    esp_sntp_config_t sntp = ESP_NETIF_SNTP_DEFAULT_CONFIG(CONFIG_GW_PKTFWD_NTP_SERVER);
+    sntp.renew_servers_after_new_IP = true;
+    if (esp_netif_sntp_init(&sntp) != ESP_OK) {
+        ESP_LOGW(TAG, "SNTP start failed: no wall clock");
     }
 
     /* Gateway mode (ADR-0015): TTN mode forwards the radio queue; hybrid mode
