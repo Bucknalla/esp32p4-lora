@@ -311,5 +311,17 @@
   </section>
 </main>
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+<div id="busy" class="busy" role="alertdialog" aria-modal="true" aria-labelledby="busy-title" aria-describedby="busy-status" hidden>
+  <div class="busy-card">
+    <div class="spinner" aria-hidden="true"></div>
+    <h2 id="busy-title"></h2>
+    <p id="busy-status" aria-live="polite"></p>
+    <p class="note"><span id="busy-time"></span></p>
+    <div class="actions" id="busy-actions" hidden>
+      <button type="button" class="primary" id="busy-reload">Reload the page</button>
+      <button type="button" class="ghost" id="busy-close">Close</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>
