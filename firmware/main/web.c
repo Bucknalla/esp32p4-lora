@@ -28,6 +28,8 @@
 #include "lwip/sockets.h"
 #include "ota.h"
 #include "lbsfwd.h"
+#include "radioplan.h"
+#include "conc_hal.h"
 #include "radio_pkt.h"
 #include "sdkconfig.h"
 #include "sv.h"
@@ -590,6 +592,97 @@ static esp_err_t api_settings(httpd_req_t *req)
 
 #define DEVICES_JSON_MAX 20480 /* 32 devices at ~500 B each, worst case */
 
+/* ---- radio plan (ADR-0017) --------------------------------------------------------- */
+
+static esp_err_t api_radio_get(httpd_req_t *req)
+{
+    esp_err_t r;
+    if (!gate(req, LWC_ROLE_VIEWER, &r)) {
+        return r;
+    }
+    static char out[1024];
+    const size_t n = radioplan_json(out, sizeof out);
+    if (n == 0U) {
+        return send_status(req, "500 Internal Server Error", "plan\n");
+    }
+    common_headers(req);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_send(req, out, (ssize_t)n);
+}
+
+/* gain=<dBi, one decimal>, tx=on|off, lns_tx=on|off (admin). A gain change
+ * restarts the radio (the gain table is cut at start). */
+static bool parse_db10(const char *s, int16_t *out)
+{
+    const bool neg = s[0] == '-';
+    const char *p = neg ? s + 1 : s;
+    int v = 0, digits = 0, frac = -1;
+    for (; *p != '\0'; p++) {
+        if (*p == '.' && frac < 0) {
+            frac = 0;
+            continue;
+        }
+        if (*p < '0' || *p > '9' || frac > 0 || digits > 3) {
+            return false;
+        }
+        v = v * 10 + (*p - '0');
+        digits++;
+        if (frac == 0) {
+            frac = 1;
+        }
+    }
+    if (digits == 0) {
+        return false;
+    }
+    if (frac != 1) {
+        v *= 10; /* no decimal given */
+    }
+    *out = (int16_t)(neg ? -v : v);
+    return true;
+}
+
+static esp_err_t api_radio_post(httpd_req_t *req)
+{
+    esp_err_t r;
+    if (!gate(req, LWC_ROLE_ADMIN, &r)) {
+        return r;
+    }
+    char body[BODY_MAX + 1];
+    size_t got;
+    if (!read_body(req, body, &got)) {
+        return send_status(req, "400 Bad Request", "bad body\n");
+    }
+    char g[12], tx[8], ltx[8];
+    radio_tx_cfg_t c;
+    radioplan_tx(&c);
+    const radio_tx_cfg_t old = c;
+    if (lwc_form_get(body, got, "gain", g, sizeof g) >= 0 && !parse_db10(g, &c.gain_db10)) {
+        return send_status(req, "400 Bad Request", "gain: dBi, e.g. 3.0\n");
+    }
+    if (lwc_form_get(body, got, "tx", tx, sizeof tx) >= 0) {
+        c.tx_on = strcmp(tx, "on") == 0;
+    }
+    if (lwc_form_get(body, got, "lns_tx", ltx, sizeof ltx) >= 0) {
+        c.lns_tx = strcmp(ltx, "on") == 0;
+    }
+    r = radioplan_set_tx(&c);
+    if (r == ESP_ERR_INVALID_ARG) {
+        return send_status(req, "400 Bad Request", "gain: -5.0 to 15.0 dBi\n");
+    }
+    if (r == ESP_ERR_NOT_SUPPORTED) {
+        return send_status(req, "400 Bad Request", "transmit is not built into this firmware\n");
+    }
+    if (r != ESP_OK) {
+        return send_status(req, "500 Internal Server Error", esp_err_to_name(r));
+    }
+    if (c.gain_db10 != old.gain_db10) {
+        conc_hal_restart();
+        return send_status(req, "200 OK", "saved: the radio restarts with the new power cap\n");
+    }
+    return send_status(req, "200 OK", "saved\n");
+}
+
 static esp_err_t api_devices_get(httpd_req_t *req)
 {
     esp_err_t r;
@@ -813,6 +906,8 @@ esp_err_t web_start(void)
         {.uri = "/api/settings", .method = HTTP_POST, .handler = api_settings},
         {.uri = "/api/claim", .method = HTTP_POST, .handler = api_claim_post},
         {.uri = "/api/devices", .method = HTTP_GET, .handler = api_devices_get},
+        {.uri = "/api/radio", .method = HTTP_GET, .handler = api_radio_get},
+        {.uri = "/api/radio", .method = HTTP_POST, .handler = api_radio_post},
         {.uri = "/api/devices", .method = HTTP_POST, .handler = api_devices_post},
         {.uri = "/api/devices/delete", .method = HTTP_POST, .handler = api_devices_delete},
     };

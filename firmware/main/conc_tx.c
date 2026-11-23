@@ -24,6 +24,7 @@
 #include "loragw_reg.h"
 #include "lwc/txpk.h"
 #include "radio_tx.h"
+#include "radioplan.h"
 #include "sdkconfig.h"
 
 #ifndef CONFIG_GW_TX_TRACE
@@ -72,6 +73,7 @@ radio_tx_stats_t g_radio_tx_stats;
 
 static int8_t s_min_dbm, s_max_dbm;
 static bool s_counter_ok;
+static bool s_lut_ok; /* a gain table under the cap was loaded */
 static lwc_jit_t s_jit;
 static lwc_dutycycle_t s_dc;
 static struct lgw_pkt_tx_s s_frames[LWC_JIT_SLOTS];
@@ -83,13 +85,15 @@ static radio_tx_req_t s_req;
 const char *radio_tx_result_str(radio_tx_result_t r)
 {
     switch (r) {
-    case RADIO_TX_OK: return "NONE";
+    case RADIO_TX_OK: return "OK";
     case RADIO_TX_TOO_LATE: return "TOO_LATE";
     case RADIO_TX_TOO_EARLY: return "TOO_EARLY";
     case RADIO_TX_COLLISION: return "COLLISION_PACKET";
     case RADIO_TX_FREQ: return "TX_FREQ";
     case RADIO_TX_GPS: return "GPS_UNLOCKED";
     case RADIO_TX_DUTY: return "DUTY_CYCLE";
+    case RADIO_TX_BUSY: return "BUSY";
+    case RADIO_TX_OFF: return "TX_OFF";
     default: return "TOO_LATE";
     }
 }
@@ -99,19 +103,25 @@ int conc_tx_configure(void)
 #if CONFIG_GW_TX_ENABLE
     struct lgw_tx_gain_lut_s lut;
     memset(&lut, 0, sizeof lut);
+    const int cap = radioplan_tx_cap_dbm(); /* ADR-0017: ceiling, lowered by the antenna gain */
     for (size_t i = 0; i < sizeof k_nebra_lut / sizeof k_nebra_lut[0]; i++) {
-        if (k_nebra_lut[i].rf_power <= CONFIG_GW_TX_MAX_DBM) {
+        if (k_nebra_lut[i].rf_power <= cap) {
             lut.lut[lut.size++] = k_nebra_lut[i];
         }
     }
-    if (lut.size == 0 || lgw_txgain_setconf(&lut) != LGW_HAL_SUCCESS) {
+    s_lut_ok = false;
+    if (lut.size == 0) {
+        ESP_LOGW(TAG, "power cap %d dBm is below the lowest gain step: no transmit", cap);
+    } else if (lgw_txgain_setconf(&lut) != LGW_HAL_SUCCESS) {
         ESP_LOGE(TAG, "TX gain LUT rejected");
         return -1;
+    } else {
+        s_lut_ok = true;
+        s_min_dbm = lut.lut[0].rf_power;
+        s_max_dbm = lut.lut[lut.size - 1].rf_power;
+        ESP_LOGI(TAG, "TX on RF chain %d, %u gain steps %d..%d dBm (cap %d dBm, ceiling %d)", TX_RF_CHAIN,
+                 lut.size, s_min_dbm, s_max_dbm, cap, CONFIG_GW_TX_MAX_DBM);
     }
-    s_min_dbm = lut.lut[0].rf_power;
-    s_max_dbm = lut.lut[lut.size - 1].rf_power;
-    ESP_LOGI(TAG, "TX on RF chain %d, %u gain steps %d..%d dBm (cap %d dBm)", TX_RF_CHAIN,
-             lut.size, s_min_dbm, s_max_dbm, CONFIG_GW_TX_MAX_DBM);
 #else
     ESP_LOGW(TAG, "TX disabled (CONFIG_GW_TX_ENABLE)");
 #endif
@@ -217,6 +227,12 @@ static void admit(const radio_tx_req_t *r)
     return;
 #else
     const lwc_txpk_t *p = &r->pk;
+    radio_tx_cfg_t txc;
+    radioplan_tx(&txc);
+    if (!txc.tx_on || !s_lut_ok) {
+        reply(r, RADIO_TX_OFF, 0, false); /* transmit off (Config tab) or no gain step under the cap */
+        return;
+    }
     if (!s_counter_ok) {
         reply(r, RADIO_TX_BUSY, 0, false);
         return;

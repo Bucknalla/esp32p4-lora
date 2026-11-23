@@ -18,6 +18,16 @@ void lwc_ns_init(lwc_ns_t *ns)
     memset(ns, 0, sizeof *ns);
     ns->join_nonce = 1;
     ns->next_addr = 1;
+    lwc_plan_t p;
+    lwc_plan_default_eu868(&p);
+    lwc_ns_set_plan(ns, &p);
+}
+
+void lwc_ns_set_plan(lwc_ns_t *ns, const lwc_plan_t *plan)
+{
+    if (ns != NULL && plan != NULL) {
+        (void)lwc_plan_cflist(plan, ns->cflist_hz);
+    }
 }
 
 int lwc_ns_find(const lwc_ns_t *ns, uint64_t dev_eui)
@@ -152,9 +162,8 @@ lwc_ns_join_res_t lwc_ns_join(lwc_ns_t *ns, const uint8_t *frame, size_t n, uint
     }
     const uint32_t jn = ns->join_nonce & 0xFFFFFFU;
     ns->join_nonce = (jn + 1U) & 0xFFFFFFU;
-    static const uint32_t ch[5] = {867100000, 867300000, 867500000, 867700000, 867900000};
     uint8_t cflist[16];
-    lwc_lw_cflist_freqs(ch, cflist);
+    lwc_lw_cflist_freqs(ns->cflist_hz, cflist);
     *accept_len = lwc_lw_join_accept(d->app_key, jn, LWC_NS_NET_ID, addr, LWC_NS_DL_SETTINGS,
                                      LWC_NS_RX_DELAY, cflist, accept, cap);
     nonce_push(d, jr.dev_nonce);

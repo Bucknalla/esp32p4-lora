@@ -6,13 +6,15 @@
  *
  * Transmit: join-accepts and class A answers (ACK, MAC commands) go through
  * the radio task's JIT queue, duty-cycle budget and power cap, tagged
- * RADIO_SRC_LNS, in RX1 with RX2 as the fallback. Until CONFIG_GW_LNS_TX is on
- * (approval to transmit), they are only logged: dry run.
+ * RADIO_SRC_LNS, in RX1 with RX2 as the fallback. Until local transmit is
+ * switched on (Config tab, ADR-0017; default CONFIG_GW_LNS_TX), they are only
+ * logged: dry run.
  *
  * Keys: AppKeys and session keys are in plain NVS (ADR-0002); they are never
  * logged or returned by the API.
  */
 #include "lns.h"
+#include "radioplan.h"
 
 #include <inttypes.h>
 #include <math.h>
@@ -38,9 +40,12 @@
 #include "sdkconfig.h"
 #include "sv.h"
 
-#ifndef CONFIG_GW_LNS_TX
-#define CONFIG_GW_LNS_TX 0 /* Kconfig leaves a bool that is off undefined */
-#endif
+static bool lns_tx(void)
+{
+    radio_tx_cfg_t c;
+    radioplan_tx(&c);
+    return c.lns_tx;
+}
 
 static const char *TAG = "lns";
 
@@ -126,7 +131,7 @@ static void erase_key(nvs_handle_t h, const char *key)
 }
 
 /* Unused in a dry-run build, which stores no join. */
-__attribute__((unused)) static esp_err_t save_meta(void)
+static esp_err_t save_meta(void)
 {
     const meta_rec_t m = {REC_VER, s_ns.join_nonce, s_ns.next_addr};
     return save_blob("meta", &m, sizeof m);
@@ -157,6 +162,9 @@ static esp_err_t save_cnt(size_t i)
 static void load(void)
 {
     lwc_ns_init(&s_ns);
+    lwc_plan_t plan;
+    radioplan_get(&plan);
+    lwc_ns_set_plan(&s_ns, &plan);
     nvs_handle_t h;
     if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) {
         ESP_LOGI(TAG, "no devices yet");
@@ -246,7 +254,12 @@ static void send_down(const radio_pkt_t *p, const uint8_t *frame, size_t len, ui
                                .bw_khz = rx2.bw_khz};
     char e[17];
     const int32_t late = since_uplink_ms(p);
-#if CONFIG_GW_LNS_TX
+    if (!lns_tx()) {
+        ESP_LOGW(TAG, "DRY RUN: %s for %s (%u B) at RX1 %" PRIu32 " Hz SF%u tmst %" PRIu32 ", %" PRId32
+                      " ms after the uplink, not sent (local transmit off)",
+                 what, eui_str(dev_eui, e), (unsigned)len, req.pk.freq_hz, req.pk.sf, req.pk.tmst, late);
+        return;
+    }
     if (g_radio_tx_req == NULL || xQueueSend(g_radio_tx_req, &req, pdMS_TO_TICKS(10)) != pdTRUE) {
         ESP_LOGW(TAG, "%s for %s: radio queue full", what, eui_str(dev_eui, e));
         return;
@@ -254,11 +267,6 @@ static void send_down(const radio_pkt_t *p, const uint8_t *frame, size_t len, ui
     atomic_fetch_add(&s_downs, 1U);
     ESP_LOGI(TAG, "%s %u for %s: RX1 %" PRIu32 " Hz SF%u, queued %" PRId32 " ms after the uplink", what,
              (unsigned)req.token, eui_str(dev_eui, e), req.pk.freq_hz, req.pk.sf, late);
-#else
-    ESP_LOGW(TAG, "DRY RUN: %s for %s (%u B) at RX1 %" PRIu32 " Hz SF%u tmst %" PRIu32 ", %" PRId32
-                  " ms after the uplink, not sent (transmit not approved: CONFIG_GW_LNS_TX off)",
-             what, eui_str(dev_eui, e), (unsigned)len, req.pk.freq_hz, req.pk.sf, req.pk.tmst, late);
-#endif
 }
 
 /* After an accepted or repeated uplink: build the class A answer if the
@@ -302,27 +310,30 @@ static bool handle(const radio_pkt_t *p)
     xSemaphoreTake(s_lock, portMAX_DELAY);
     if (mt == LWC_LW_JOIN_REQUEST) {
         size_t alen = 0, idx = 0;
+        static lwc_plan_t plan;
+        radioplan_get(&plan); /* the CFList follows the radio's plan (ADR-0017) */
+        lwc_ns_set_plan(&s_ns, &plan);
         const lwc_ns_join_res_t r = lwc_ns_join(&s_ns, p->payload, p->size, acc, sizeof acc, &alen, &idx);
         if (r == LWC_NS_JOIN_ACCEPT) {
             const uint64_t eui = s_ns.dev[idx].dev_eui;
             esp_err_t err = ESP_OK;
             memset(&s_stat[idx], 0, sizeof s_stat[idx]);
-#if CONFIG_GW_LNS_TX
-            handled = true;
-            /* Store the DevNonce and JoinNonce before anything goes out. */
-            err = save_dev(idx);
-            if (err == ESP_OK) {
-                err = save_meta();
+            if (lns_tx()) {
+                handled = true;
+                /* Store the DevNonce and JoinNonce before anything goes out. */
+                err = save_dev(idx);
+                if (err == ESP_OK) {
+                    err = save_meta();
+                }
+                if (err == ESP_OK) {
+                    err = save_cnt(idx);
+                }
+            } else {
+                /* Dry run: nothing is sent, so nothing is stored, and in hybrid
+                 * mode the join still goes to TTN, where the device may also be
+                 * registered. The session exists in RAM only. */
+                s_stat[idx].join_unanswered = true;
             }
-            if (err == ESP_OK) {
-                err = save_cnt(idx);
-            }
-#else
-            /* Dry run: nothing is sent, so nothing is stored, and in hybrid
-             * mode the join still goes to TTN, where the device may also be
-             * registered. The session exists in RAM only. */
-            s_stat[idx].join_unanswered = true;
-#endif
             atomic_fetch_add(&s_joins, 1U);
             ESP_LOGI(TAG, "join: %s (%s) DevAddr %08" PRIX32 ", RSSI %d SNR %.1f", eui_str(eui, e),
                      s_ns.dev[idx].name, s_ns.dev[idx].dev_addr, p->rssi, (double)p->lsnr);
@@ -436,7 +447,7 @@ esp_err_t lns_start(QueueHandle_t radio_q, QueueHandle_t *fwd_q)
         *fwd_q = s_fwd_q;
     }
     ESP_LOGI(TAG, "local network server: %s mode, NetID %06X%s", gwmode_name(gwmode()),
-             (unsigned)LWC_NS_NET_ID, CONFIG_GW_LNS_TX ? "" : ", DRY RUN (no transmit)");
+             (unsigned)LWC_NS_NET_ID, lns_tx() ? "" : ", DRY RUN (local transmit off)");
     const BaseType_t ok = xTaskCreatePinnedToCore(lns_task, "lns", TASK_STACK, NULL, TASK_PRIO, NULL, TASK_CORE);
     ESP_RETURN_ON_FALSE(ok == pdPASS, ESP_ERR_NO_MEM, TAG, "task");
     atomic_store(&s_running, true);
@@ -578,5 +589,5 @@ void lns_status_line(char *buf, size_t len)
              "mode=%s local=%s devices=%u joined=%u joins=%u uplinks=%u downlinks=%u forwarded=%u fwd_dropped=%u tx=%s",
              gwmode_name(gwmode()), lns_running() ? "on" : "off", devs, joined, atomic_load(&s_joins),
              atomic_load(&s_uplinks), atomic_load(&s_downs), atomic_load(&s_fwd), atomic_load(&s_fwd_drop),
-             CONFIG_GW_LNS_TX ? "on" : "dry-run");
+             lns_tx() ? "on" : "dry-run");
 }

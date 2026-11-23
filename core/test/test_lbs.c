@@ -255,6 +255,41 @@ static void router_config(void)
     CHECK(lwc_lbs_parse_router_config(badif, strlen(badif), &c) == LWC_LBS_ERR_FIELD);
 }
 
+/* The router_config TTN eu1 sent this gateway (2026-11-23), as received. */
+static void router_config_ttn(void)
+{
+    static const char rc[] =
+        "{\"msgtype\":\"router_config\",\"NetID\":null,\"JoinEui\":null,\"region\":\"EU863\",\"hwspec\""
+        ":\"sx1301/1\",\"freq_range\":[863000000,870000000],\"DRs\":[[12,125,0],[11,125,0],[10,"
+        "125,0],[9,125,0],[8,125,0],[7,125,0],[7,250,0],[0,0,0],[0,0,0],[0,0,0],[0,0,0],["
+        "0,0,0],[0,0,0],[0,0,0],[0,0,0],[0,0,0]],\"sx1301_conf\":[{\"radio_0\":{\"enable\":true"
+        ",\"freq\":867500000},\"radio_1\":{\"enable\":true,\"freq\":868500000},\"chan_multiSF_0\":{"
+        "\"enable\":true,\"radio\":1,\"if\":-400000},\"chan_multiSF_1\":{\"enable\":true,\"radio\":1,"
+        "\"if\":-200000},\"chan_multiSF_2\":{\"enable\":true,\"radio\":1,\"if\":0},\"chan_multiSF_3\""
+        ":{\"enable\":true,\"radio\":0,\"if\":-400000},\"chan_multiSF_4\":{\"enable\":true,\"radio\":"
+        "0,\"if\":-200000},\"chan_multiSF_5\":{\"enable\":true,\"radio\":0,\"if\":0},\"chan_multiSF_"
+        "6\":{\"enable\":true,\"radio\":0,\"if\":200000},\"chan_multiSF_7\":{\"enable\":true,\"radio\""
+        ":0,\"if\":400000},\"chan_Lora_std\":{\"enable\":true,\"radio\":1,\"if\":-200000,\"bandwidth"
+        "\":250000,\"spread_factor\":7},\"chan_FSK\":{\"enable\":true,\"radio\":1,\"if\":300000,\"dat"
+        "arate\":50000}}],\"nocca\":true,\"nodc\":true,\"nodwell\":true,\"MuxTime\":1795449071.152"
+        "2963,\"bcning\":{\"DR\":3,\"layout\":[2,8,17],\"freqs\":[869525000]}}";
+    lwc_lbs_router_config_t c;
+    CHECK(lwc_lbs_parse_router_config(rc, strlen(rc), &c) == LWC_LBS_OK);
+    CHECK(strcmp(c.region, "EU863") == 0 && c.drs_ok && c.have_sx1301 && c.multisf == 0xFF);
+    CHECK(c.std_on && c.std_bw_hz == 250000 && c.std_sf == 7 && c.std_radio == 1 && c.std_if == -200000);
+    CHECK(c.fsk_on && c.fsk_radio == 1 && c.fsk_if == 300000);
+    lwc_plan_t p, d;
+    CHECK(lwc_lbs_router_plan(&c, &p));
+    /* TTN's plan is the built-in one plus FSK at 868.8 MHz */
+    lwc_plan_default_eu868(&d);
+    CHECK(!lwc_plan_equal(&p, &d));
+    d.fsk.enable = true;
+    CHECK(lwc_plan_equal(&p, &d) && lwc_plan_hz(&p, &p.fsk) == 868800000);
+    /* no sx1301_conf: no plan */
+    static const char bare[] = "{\"msgtype\":\"router_config\",\"region\":\"EU863\"}";
+    CHECK(lwc_lbs_parse_router_config(bare, strlen(bare), &c) == LWC_LBS_OK && !lwc_lbs_router_plan(&c, &p));
+}
+
 int main(void)
 {
     drs();
@@ -265,6 +300,7 @@ int main(void)
     msgtypes();
     dnmsgs();
     router_config();
+    router_config_ttn();
     if (failures != 0) {
         fprintf(stderr, "test_lbs: %d failure(s)\n", failures);
         return 1;
