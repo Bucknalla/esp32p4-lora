@@ -3,175 +3,296 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>LoRaWAN Gateway</title>
+<meta name="color-scheme" content="light dark">
+<title>LoRaWAN gateway</title>
 <link rel="stylesheet" href="/app.css">
 <script src="/app.js" defer></script>
 </head>
 <body>
-<header>
-  <h1>LoRaWAN Gateway</h1>
-  <span id="who"></span>
-  <button id="logout" hidden>Log out</button>
+<header class="bar">
+  <div class="brand">
+    <svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M3 22c3 0 4-12 7-12s4 12 7 12 4-12 7-12 4 6 5 8"/><circle cx="16" cy="27" r="2"/></svg>
+    <span>LoRaWAN gateway</span>
+  </div>
+  <span id="link-pill" class="pill" hidden></span>
+  <div class="bar-end">
+    <div class="theme" role="radiogroup" aria-label="Colour theme">
+      <button type="button" data-theme-set="light" aria-label="Light theme" title="Light"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></button>
+      <button type="button" data-theme-set="auto" aria-label="Follow the system" title="System"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg></button>
+      <button type="button" data-theme-set="dark" aria-label="Dark theme" title="Dark"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg></button>
+    </div>
+    <span id="who" class="who"></span>
+    <button id="logout" class="ghost" hidden>Log out</button>
+  </div>
 </header>
+
 <main>
-  <section id="setup" hidden>
-    <h2>Claim this gateway</h2>
-    <p class="hint">No admin yet. Set the admin password now; the first person on this network to do it owns the gateway.</p>
+  <section id="setup" class="gate" hidden>
+    <h1>Claim this gateway</h1>
+    <p class="lead">There is no admin yet. The first person on this network to set the admin password owns the gateway.</p>
     <form id="setup-form">
       <label>New admin password <input type="password" name="admin" minlength="8" maxlength="63" required autocomplete="new-password"></label>
-      <label>Repeat admin password <input type="password" id="admin2" minlength="8" maxlength="63" required autocomplete="new-password"></label>
-      <button type="submit">Set admin password</button>
+      <label>Repeat the password <input type="password" id="admin2" minlength="8" maxlength="63" required autocomplete="new-password"></label>
+      <button type="submit" class="primary">Set admin password</button>
       <p id="setup-msg" class="msg"></p>
     </form>
   </section>
-  <section id="login" hidden>
-    <h2>Log in</h2>
+
+  <section id="login" class="gate" hidden>
+    <h1>Log in</h1>
     <form id="login-form">
       <label>User
-        <select name="user"><option>admin</option><option>viewer</option></select>
+        <select name="user"><option value="admin">Admin</option><option value="viewer">Viewer (read only)</option></select>
       </label>
       <label>Password <input type="password" name="password" autocomplete="current-password" required></label>
-      <button type="submit">Log in</button>
+      <button type="submit" class="primary">Log in</button>
       <p id="login-msg" class="msg"></p>
     </form>
   </section>
+
   <section id="app" hidden>
-    <nav>
-      <button data-tab="status" class="on">Status</button>
-      <button data-tab="config">Config</button>
-      <button data-tab="logs">Logs</button>
-      <button data-tab="firmware">System</button>
+    <nav class="tabs" aria-label="Sections">
+      <button data-tab="overview" class="on">Overview</button>
+      <button data-tab="setup">Setup</button>
+      <button data-tab="devices">Devices</button>
+      <button data-tab="radio">Radio</button>
+      <button data-tab="system">System</button>
     </nav>
-    <div id="tab-status" class="tab">
-      <ul id="notices"></ul>
-      <div id="tiles" class="tiles"></div>
-      <details><summary>All details</summary><div id="groups"></div></details>
+
+    <!-- Overview: health at a glance -->
+    <div id="tab-overview" class="tab">
+      <ul id="notices" class="notices"></ul>
+      <div id="health" class="health"></div>
+      <div class="split">
+        <div class="panel">
+          <h2>Traffic since boot</h2>
+          <div id="traffic"></div>
+        </div>
+        <div class="panel">
+          <h2>Memory</h2>
+          <div id="memory"></div>
+        </div>
+      </div>
+      <details class="more"><summary>All status values</summary><div id="groups"></div></details>
     </div>
-    <div id="tab-config" class="tab" hidden>
-      <h3>Gateway mode</h3>
-      <dl>
-        <dt>Mode</dt><dd id="mode-state"></dd>
-      </dl>
-      <fieldset class="admin modes" id="mode-pick">
-        <label><input type="radio" name="mode" value="ttn"> <b>The Things Network</b> <span class="hint">Every frame goes to TTN (eu1). No local devices.</span></label>
-        <label><input type="radio" name="mode" value="hybrid"> <b>Hybrid</b> <span class="hint">Devices listed below are handled on this gateway; everything else still goes to TTN.</span></label>
-        <label><input type="radio" name="mode" value="standalone"> <b>Standalone</b> <span class="hint">Only the devices below; nothing goes to TTN. Works without internet.</span></label>
-        <button id="mode-save" type="button">Save and restart</button>
-      </fieldset>
-      <div id="radio-box">
-        <h3>Radio</h3>
-        <dl>
-          <dt>Channel plan</dt><dd id="radio-src"></dd>
-          <dt>Radio centres</dt><dd id="radio-centres" class="mono"></dd>
-        </dl>
+
+    <!-- Setup: the configuration sequence -->
+    <div id="tab-setup" class="tab" hidden>
+      <h1>Set up the gateway</h1>
+      <p class="lead">Three steps. Each one shows whether it is done.</p>
+      <ol class="steps">
+        <li class="step" id="step-mode">
+          <div class="step-head"><span class="marker" aria-hidden="true"></span><h2>Choose how the gateway works</h2><span class="state"></span></div>
+          <div class="step-body">
+            <div class="modes" role="radiogroup" aria-label="Gateway mode" id="mode-pick">
+              <label class="mode-card">
+                <input type="radio" name="mode" value="ttn">
+                <b>Network server</b>
+                <span>Every device is served by your network server, such as TTN. Nothing runs on the gateway itself.</span>
+              </label>
+              <label class="mode-card">
+                <input type="radio" name="mode" value="hybrid">
+                <b>Hybrid</b>
+                <span>Your devices are served here; all other traffic goes to your network server.</span>
+              </label>
+              <label class="mode-card">
+                <input type="radio" name="mode" value="standalone">
+                <b>Standalone</b>
+                <span>Only your devices, served here. Works without internet.</span>
+              </label>
+            </div>
+            <div class="actions admin">
+              <button id="mode-save" type="button" class="primary" disabled>Save and restart</button>
+              <span id="mode-note" class="note"></span>
+            </div>
+          </div>
+        </li>
+
+        <li class="step" id="step-ttn">
+          <div class="step-head"><span class="marker" aria-hidden="true"></span><h2>Connect to your network server</h2><span class="state"></span></div>
+          <div class="step-body">
+            <div class="ttn">
+              <img id="ttn-qr" alt="QR code of the gateway EUI" width="132" height="132">
+              <div class="ttn-facts">
+                <div class="fact"><span>Gateway EUI</span><code id="ttn-eui"></code><button id="ttn-copy" type="button" class="small">Copy</button></div>
+                <div class="fact"><span>Server</span><code id="ttn-server"></code></div>
+                <div class="fact"><span>Protocol</span><span>LoRa Basics Station over TLS</span></div>
+                <div class="fact"><span>API key</span><span id="ttn-key" class="chip"></span></div>
+              </div>
+            </div>
+            <form class="admin" id="lns-form" autocomplete="off">
+              <div class="servers" role="radiogroup" aria-label="Network server" id="srv-pick">
+                <label class="srv-opt"><input type="radio" name="srv" value="eu1.cloud.thethings.network"><b>TTN Europe</b><span>eu1</span></label>
+                <label class="srv-opt"><input type="radio" name="srv" value="nam1.cloud.thethings.network"><b>TTN North America</b><span>nam1</span></label>
+                <label class="srv-opt"><input type="radio" name="srv" value="au1.cloud.thethings.network"><b>TTN Australia</b><span>au1</span></label>
+                <label class="srv-opt"><input type="radio" name="srv" value="other"><b>Other server</b><span>ChirpStack, your own</span></label>
+              </div>
+              <div class="grid-form" id="srv-other" hidden>
+                <label>Host <input name="lns_host" id="lns-host" maxlength="63" pattern="[A-Za-z0-9.\-]+" placeholder="lns.example.org"></label>
+                <label>Port <input name="lns_port" id="lns-port" type="number" min="1" max="65535" placeholder="8887"></label>
+              </div>
+              <div id="help-ttn">
+                <ol class="howto">
+                  <li>In the TTN console, <b>Register gateway</b> with the EUI above (or scan the code) and the frequency plan <b>Europe 863-870 MHz (SF9 for RX2)</b>.</li>
+                  <li>On the gateway's page, open <b>API keys</b> and add one with only <i>Link as Gateway to a Gateway Server for traffic exchange</i>.</li>
+                  <li>Paste the key below. It is stored on the gateway and never shown again.</li>
+                </ol>
+                <p><a class="ext" id="ttn-console" href="https://eu1.cloud.thethings.network/console/gateways/add" target="_blank" rel="noopener noreferrer">Open the TTN console</a></p>
+              </div>
+              <div id="help-other" hidden>
+                <ol class="howto">
+                  <li>Register the gateway EUI above on your network server, with an EU868 channel plan.</li>
+                  <li>Create a key for Basics Station access. The gateway sends it as <code>Authorization: Bearer</code>; TLS client certificates are not supported yet.</li>
+                  <li>Paste the key below. It is stored on the gateway and never shown again.</li>
+                </ol>
+              </div>
+              <div class="grid-form">
+                <label>API key <input name="lns_key" type="password" maxlength="159" placeholder="Leave empty to keep the stored key" autocomplete="off"></label>
+                <div class="actions"><button type="submit" class="primary">Save and restart</button></div>
+              </div>
+            </form>
+          </div>
+        </li>
+
+        <li class="step" id="step-dev">
+          <div class="step-head"><span class="marker" aria-hidden="true"></span><h2>Add your devices</h2><span class="state"></span></div>
+          <div class="step-body">
+            <p id="dev-summary"></p>
+            <button type="button" class="ghost" data-goto="devices">Open Devices</button>
+          </div>
+        </li>
+      </ol>
+    </div>
+
+    <!-- Devices -->
+    <div id="tab-devices" class="tab" hidden>
+      <div class="title-row">
+        <h1>Local devices</h1>
+        <button type="button" class="primary admin" id="dev-add-open">Add a device</button>
+      </div>
+      <p id="dev-note" class="lead"></p>
+      <div id="dev-list" class="dev-list"></div>
+      <div class="panel admin" id="dev-add-box" hidden>
+        <h2>Add a device (OTAA)</h2>
+        <form id="dev-add" class="grid-form" autocomplete="off">
+          <label>Name <input name="name" maxlength="23" placeholder="Optional"></label>
+          <label>DevEUI <input name="dev_eui" class="hex" required pattern="[0-9A-Fa-f]{16}" maxlength="16" placeholder="16 hex digits"></label>
+          <label>JoinEUI (AppEUI) <input name="join_eui" class="hex" required pattern="[0-9A-Fa-f]{16}" maxlength="16" placeholder="16 hex digits"></label>
+          <label>AppKey <input name="app_key" class="hex" type="password" required pattern="[0-9A-Fa-f]{32}" maxlength="32" placeholder="32 hex digits, never shown again" autocomplete="off"></label>
+          <label>LoRaWAN version <select name="mac"><option value="1.0.2">1.0.2 / 1.0.3</option><option value="1.0.4">1.0.4</option></select></label>
+          <div class="actions"><button type="submit" class="primary">Add device</button><button type="button" class="ghost" id="dev-add-cancel">Cancel</button></div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Radio: the spectrum is the page -->
+    <div id="tab-radio" class="tab" hidden>
+      <div class="title-row">
+        <h1>Radio</h1>
+        <span id="plan-src" class="chip"></span>
+      </div>
+      <figure class="spectrum">
+        <div class="spec-scroll"><svg id="spectrum" viewBox="0 0 1000 220" role="img" aria-labelledby="spec-cap"></svg></div>
+        <div id="spec-tip" class="chart-tip" role="tooltip" hidden></div>
+        <figcaption id="spec-cap">
+          <span class="key k-multi">Multi-SF channel (SF7–12, 125 kHz)</span>
+          <span class="key k-std">Single-SF channel</span>
+          <span class="key k-fsk">FSK channel</span>
+          <span class="key k-radio">Radio receive window</span>
+          <span class="key k-rx2">RX2 for your devices</span>
+        </figcaption>
+      </figure>
+      <details class="more"><summary>Channel list</summary>
         <div class="table"><table>
           <thead><tr><th>Channel</th><th>Frequency</th><th>Radio</th><th>Modulation</th></tr></thead>
           <tbody id="radio-rows"></tbody>
         </table></div>
-        <details class="admin" id="plan-edit">
-          <summary>Edit channel plan</summary>
-          <p class="hint" id="plan-note">The plan you save here is used until a network server sends its own: in TTN and hybrid modes TTN's plan replaces it at the next connection. Local devices must join again after a change (they keep the channels of their join-accept).</p>
-          <form id="plan-form" autocomplete="off">
-            <div class="row">
-              <label>Radio 0 (MHz) <input id="pe-r0" type="number" step="0.1" min="863" max="870"></label>
-              <label>Radio 1 (MHz) <input id="pe-r1" type="number" step="0.1" min="863" max="870"></label>
-            </div>
-            <div class="table"><table>
-              <thead><tr><th>Channel</th><th>On</th><th>Radio</th><th>IF (kHz)</th><th>Frequency</th></tr></thead>
-              <tbody id="pe-rows"></tbody>
-            </table></div>
-            <div class="row">
-              <label>Std SF <select id="pe-sf"><option>7</option><option>8</option><option>9</option><option>10</option><option>11</option><option>12</option></select></label>
-              <label>Std bandwidth <select id="pe-bw"><option value="125">125 kHz</option><option value="250">250 kHz</option><option value="500">500 kHz</option></select></label>
-            </div>
-            <button type="submit">Save and restart the radio</button>
-            <button type="button" id="pe-reset">Back to built-in EU868</button>
+      </details>
+
+      <div class="split">
+        <div class="panel">
+          <h2>Transmit</h2>
+          <form id="tx-form" autocomplete="off">
+            <label class="switch"><input type="checkbox" id="tx-on" name="tx"><span class="track" aria-hidden="true"></span><span>Gateway transmit<small>Downlinks from the network server: join-accepts, ACKs</small></span></label>
+            <label class="switch"><input type="checkbox" id="tx-lns" name="lns_tx"><span class="track" aria-hidden="true"></span><span>Local server transmit<small>Answers to your own devices</small></span></label>
+            <label class="slider">Antenna gain <output id="tx-gain-out"></output>
+              <input type="range" id="tx-gain" name="gain" min="-5" max="15" step="0.5">
+            </label>
+            <div class="meter-row"><span>Power cap at the connector</span><b id="tx-cap"></b></div>
+            <div class="meter" aria-hidden="true"><span id="tx-cap-bar"></span><i id="tx-ceiling-mark"></i></div>
+            <p class="note">Cap = 16.1 dBm EIRP (EU868) minus the antenna gain, never above the firmware ceiling. The gain table was measured for EU868 cards.</p>
+            <div class="actions admin"><button type="submit" class="primary" disabled>Save</button></div>
           </form>
-        </details>
-        <dl>
-          <dt>Transmit</dt><dd id="radio-tx"></dd>
-        </dl>
-        <form class="admin" id="tx-form" autocomplete="off">
-          <label>Antenna gain (dBi) <input name="gain" id="tx-gain" type="number" step="0.1" min="-5" max="15"></label>
-          <label class="check"><input name="tx" id="tx-on" type="checkbox"> Gateway transmit (TTN downlinks)</label>
-          <label class="check"><input name="lns_tx" id="tx-lns" type="checkbox"> Local server transmit (join-accepts, ACKs)</label>
-          <button type="submit">Save</button>
-        </form>
-        <dl>
-          <dt>Local receive windows</dt><dd id="radio-rx"></dd>
-        </dl>
-        <form class="admin" id="rx-form" autocomplete="off">
-          <label>RX1 delay (s) <input name="rx1_delay" id="rx-d" type="number" min="1" max="15" step="1"></label>
-          <label>RX2 frequency (MHz) <input name="rx2_mhz" id="rx-f" type="number" min="863" max="870" step="0.025"></label>
-          <label>RX2 data rate <select name="rx2_dr" id="rx-dr"><option value="0">DR0 (SF12)</option><option value="1">DR1 (SF11)</option><option value="2">DR2 (SF10)</option><option value="3">DR3 (SF9)</option><option value="4">DR4 (SF8)</option><option value="5">DR5 (SF7)</option></select></label>
-          <button type="submit">Save</button>
-        </form>
-        <p class="hint">Receive windows for local devices are sent in the join-accept: a change applies to devices that join after it. TTN sets its own for its devices. RX2 must be a frequency this gateway may transmit on (EU868 sub-bands).</p>
-        <p class="hint">The power cap is 16.1 dBm EIRP (EU868, 14 dBm ERP) minus the antenna gain, never above the firmware ceiling. The gain table was measured for EU868 cards: with another card the real output power is unknown. A gain change restarts the radio (about 3 s).</p>
+        </div>
+        <div class="panel">
+          <h2>Receive windows for your devices</h2>
+          <form id="rx-form" class="stack" autocomplete="off">
+            <label>RX1 delay <span class="unit"><input name="rx1_delay" id="rx-d" type="number" min="1" max="15" step="1"> s</span></label>
+            <label>RX2 frequency <span class="unit"><input name="rx2_mhz" id="rx-f" type="number" min="863" max="870" step="0.025"> MHz</span></label>
+            <label>RX2 data rate <select name="rx2_dr" id="rx-dr"><option value="0">DR0 (SF12)</option><option value="1">DR1 (SF11)</option><option value="2">DR2 (SF10)</option><option value="3">DR3 (SF9)</option><option value="4">DR4 (SF8)</option><option value="5">DR5 (SF7)</option></select></label>
+            <p class="note">Sent to each device when it joins: a change reaches devices that join after it. Your network server sets its own for its devices.</p>
+            <div class="actions admin"><button type="submit" class="primary" disabled>Save</button></div>
+          </form>
+        </div>
       </div>
-      <div id="ttn" hidden>
-        <h3>Register this gateway</h3>
-        <div class="ttn">
-          <img id="ttn-qr" alt="QR code of the gateway EUI" width="140" height="140">
-          <div>
-            <dl>
-              <dt>Gateway EUI</dt><dd><span id="ttn-eui"></span> <button id="ttn-copy" type="button">Copy</button></dd>
-              <dt>Frequency plan</dt><dd>Europe 863-870 MHz (SF9 for RX2 - recommended)</dd>
-              <dt>Server address</dt><dd id="ttn-server"></dd>
-              <dt>API key</dt><dd id="ttn-key"></dd>
-            </dl>
-            <p class="hint">In the console choose <b>Register gateway</b>, enter the EUI (or scan the code with a phone) and the frequency plan above. Then, on the gateway's page, open <b>API keys</b> → <b>Add API key</b> with only the right <i>Link as Gateway to a Gateway Server for traffic exchange</i>, and enter it below. The gateway connects with LoRa Basics Station over TLS.</p>
-            <form class="admin" id="lns-form" autocomplete="off">
-              <label>Server <input name="lns_host" id="lns-host" maxlength="63" pattern="[A-Za-z0-9.\-]+" placeholder="eu1.cloud.thethings.network"></label>
-              <label>API key <input name="lns_key" type="password" maxlength="159" placeholder="NNSXS...: stored, never shown again" autocomplete="off"></label>
-              <button type="submit">Save and restart</button>
-            </form>
-            <p><a href="https://eu1.cloud.thethings.network/console/gateways/add" target="_blank" rel="noopener noreferrer">Open the TTN console (eu1) →</a></p>
+
+      <details class="more admin" id="plan-edit">
+        <summary>Edit the channel plan</summary>
+        <p class="note" id="plan-note">A plan saved here is used until the network server sends its own: in network server and hybrid modes, the server's plan replaces it at the next connection. Local devices must join again after a change.</p>
+        <form id="plan-form" autocomplete="off">
+          <div class="inline">
+            <label>Radio 0 <span class="unit"><input id="pe-r0" type="number" step="0.1" min="863" max="870"> MHz</span></label>
+            <label>Radio 1 <span class="unit"><input id="pe-r1" type="number" step="0.1" min="863" max="870"> MHz</span></label>
+            <label>Single-SF channel <select id="pe-sf"><option value="7">SF7</option><option value="8">SF8</option><option value="9">SF9</option><option value="10">SF10</option><option value="11">SF11</option><option value="12">SF12</option></select></label>
+            <label>Its bandwidth <select id="pe-bw"><option value="125">125 kHz</option><option value="250">250 kHz</option><option value="500">500 kHz</option></select></label>
+          </div>
+          <div class="table"><table>
+            <thead><tr><th>Channel</th><th>On</th><th>Radio</th><th>Offset (kHz)</th><th>Frequency</th></tr></thead>
+            <tbody id="pe-rows"></tbody>
+          </table></div>
+          <div class="actions">
+            <button type="submit" class="primary">Save and restart the radio</button>
+            <button type="button" class="ghost" id="pe-reset">Back to built-in EU868</button>
+          </div>
+        </form>
+      </details>
+    </div>
+
+    <!-- System -->
+    <div id="tab-system" class="tab" hidden>
+      <h1>System</h1>
+      <div class="split">
+        <div class="panel">
+          <h2>Firmware</h2>
+          <dl id="fw" class="facts"></dl>
+          <div class="actions admin">
+            <button id="ota-check" class="primary">Install latest release</button>
+            <button id="reboot" class="ghost">Reboot</button>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>Crash dump</h2>
+          <p class="note">Written after a crash; send it with a bug report.</p>
+          <div class="actions admin">
+            <a id="cd-get" class="button ghost" href="/api/coredump" download>Download</a>
+            <button id="cd-del" class="ghost">Erase</button>
           </div>
         </div>
       </div>
-      <div id="devices-box">
-        <h3>Local devices</h3>
-        <p id="dev-note" class="hint"></p>
-        <div class="table"><table>
-          <thead><tr><th>Device</th><th>Status</th><th>Last seen</th><th>Signal</th><th>Last payload</th><th class="admin"></th></tr></thead>
-          <tbody id="dev-rows"></tbody>
-        </table></div>
-        <details class="admin" id="dev-add-box">
-          <summary>Add a device (OTAA)</summary>
-          <form id="dev-add" autocomplete="off">
-            <label>Name <input name="name" maxlength="23" placeholder="optional"></label>
-            <label>DevEUI <input name="dev_eui" required pattern="[0-9A-Fa-f]{16}" maxlength="16" placeholder="16 hex digits"></label>
-            <label>JoinEUI / AppEUI <input name="join_eui" required pattern="[0-9A-Fa-f]{16}" maxlength="16" placeholder="16 hex digits"></label>
-            <label>AppKey <input name="app_key" type="password" required pattern="[0-9A-Fa-f]{32}" maxlength="32" placeholder="32 hex digits: stored, never shown again" autocomplete="off"></label>
-            <label>LoRaWAN version <select name="mac"><option value="1.0.2">1.0.2 / 1.0.3</option><option value="1.0.4">1.0.4</option></select></label>
-            <button type="submit">Add device</button>
-          </form>
-        </details>
+      <div class="panel">
+        <div class="title-row">
+          <h2>Log</h2>
+          <div class="inline">
+            <label class="switch small"><input type="checkbox" id="prev"><span class="track" aria-hidden="true"></span><span>Previous boot</span></label>
+            <label class="switch small"><input type="checkbox" id="warn-only"><span class="track" aria-hidden="true"></span><span>Warnings only</span></label>
+            <button id="logs-refresh" class="ghost small">Refresh</button>
+          </div>
+        </div>
+        <pre id="logs"></pre>
       </div>
-      <p id="cfg-msg" class="msg"></p>
-    </div>
-    <div id="tab-logs" class="tab" hidden>
-      <p class="row">
-        <label><input type="checkbox" id="prev"> Previous boot</label>
-        <label><input type="checkbox" id="warn-only"> Warnings and errors only</label>
-        <button id="logs-refresh">Refresh</button>
-      </p>
-      <pre id="logs"></pre>
-    </div>
-    <div id="tab-firmware" class="tab" hidden>
-      <dl id="fw"></dl>
-      <p class="admin row">
-        <button id="ota-check">Install latest release</button>
-        <button id="reboot">Reboot</button>
-      </p>
-      <p class="admin row">Crash dump:
-        <a id="cd-get" href="/api/coredump" download>Download</a>
-        <button id="cd-del">Erase</button>
-      </p>
-      <p id="fw-msg" class="msg"></p>
     </div>
   </section>
 </main>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 </body>
 </html>
