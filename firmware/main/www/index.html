@@ -63,17 +63,21 @@
     <div id="tab-overview" class="tab">
       <ul id="notices" class="notices"></ul>
       <div id="health" class="health"></div>
-      <div class="split">
+      <div class="split three">
         <div class="panel">
-          <h2>Traffic since boot</h2>
-          <div id="traffic"></div>
+          <h2>Radio</h2>
+          <div id="ov-radio"></div>
         </div>
         <div class="panel">
-          <h2>Memory</h2>
-          <div id="memory"></div>
+          <h2>Network server link</h2>
+          <div id="ov-link"></div>
+        </div>
+        <div class="panel">
+          <h2>Local server</h2>
+          <div id="ov-local"></div>
         </div>
       </div>
-      <details class="more"><summary>All status values</summary><div id="groups"></div></details>
+      <p class="note">Counts are since the gateway started.</p>
     </div>
 
     <!-- Setup: the configuration sequence -->
@@ -261,23 +265,36 @@
     <!-- System -->
     <div id="tab-system" class="tab" hidden>
       <h1>System</h1>
-      <div class="split">
+      <div class="split two">
         <div class="panel">
           <h2>Firmware</h2>
-          <dl id="fw" class="facts"></dl>
+          <div id="sys-fw"></div>
           <div class="actions admin">
             <button id="ota-check" class="primary">Install latest release</button>
             <button id="reboot" class="ghost">Reboot</button>
           </div>
         </div>
         <div class="panel">
-          <h2>Crash dump</h2>
-          <p class="note">Written after a crash; send it with a bug report.</p>
+          <h2>Network</h2>
+          <div id="sys-net"></div>
+        </div>
+        <div class="panel">
+          <h2>Reliability</h2>
+          <div id="sys-rel"></div>
           <div class="actions admin">
-            <a id="cd-get" class="button ghost" href="/api/coredump" download>Download</a>
-            <button id="cd-del" class="ghost">Erase</button>
+            <a id="cd-get" class="button ghost small" href="/api/coredump" download>Download crash dump</a>
+            <button id="cd-del" class="ghost small">Erase crash dump</button>
           </div>
         </div>
+        <div class="panel">
+          <h2>Memory</h2>
+          <div id="sys-mem"></div>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Task stack headroom</h2>
+        <p class="note">Bytes never used on each task's stack. Below 1 KB a task is close to overflowing.</p>
+        <div id="sys-stack" class="stacks"></div>
       </div>
       <div class="panel">
         <div class="title-row">
