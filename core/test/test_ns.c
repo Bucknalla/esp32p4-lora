@@ -244,6 +244,69 @@ static void adr_flow(void)
     CHECK(lwc_ns_remove(&ns, eui) == LWC_NS_OK);
 }
 
+/* A device that accepts a data rate but keeps its own (seen on the desk: an
+ * application that fixes the rate) must not get a request on every uplink. */
+static void adr_fixed_dr(void)
+{
+    static const uint64_t eui = 0x78;
+    size_t idx = 0, alen = 0;
+    uint8_t jr[23], acc[40], nwk[16], app[16], f[64];
+    CHECK(lwc_ns_add(&ns, eui, JOIN_EUI, KEY, LWC_NS_MAC_1_0_4, "fixed", &idx) == LWC_NS_OK);
+    join_request(jr, KEY, eui, 1);
+    const uint32_t jn = ns.join_nonce;
+    CHECK(lwc_ns_join(&ns, jr, 23, acc, sizeof acc, &alen, NULL) == LWC_NS_JOIN_ACCEPT);
+    lwc_lw_session_keys(KEY, jn, 0, 1, nwk, app);
+    const uint32_t addr = ns.dev[idx].dev_addr;
+    lwc_ns_uplink_t up;
+    lwc_ns_dl_t dl;
+    lwc_ns_rx_t rx = {.snr10 = 50, .sf = 9, .bw_khz = 125, .now_s = 1};
+    uint32_t fc = 0;
+    static const uint8_t ok[] = {0x03, 0x07};
+
+    /* 5 dB at SF9 (DR3): 7.5 dB spare, two steps: DR5 */
+    size_t n = uplink_mac(f, nwk, addr, fc++, NULL, 0, LWC_LW_FCTRL_ADR, false);
+    CHECK(lwc_ns_answer(&ns, lwc_ns_uplink(&ns, f, n, &up), &up, &rx, &dl));
+    CHECK(dl.link_adr && dl.adr_dr == 5 && ns.link[idx].dr_cap == 0);
+    /* accepted, but the answer still comes at SF9: no cap yet, wait a full history */
+    n = uplink_mac(f, nwk, addr, fc++, ok, sizeof ok, LWC_LW_FCTRL_ADR, false);
+    CHECK(!lwc_ns_answer(&ns, lwc_ns_uplink(&ns, f, n, &up), &up, &rx, &dl));
+    CHECK(ns.link[idx].dr_cap == 0 && ns.link[idx].dr_kept == 1 && ns.link[idx].adr_wait == LWC_NS_ADR_HISTORY - 1U);
+    for (unsigned k = 0; k + 1U < LWC_NS_ADR_HISTORY; k++) {
+        n = uplink_mac(f, nwk, addr, fc++, NULL, 0, LWC_LW_FCTRL_ADR, false);
+        CHECK(!lwc_ns_answer(&ns, lwc_ns_uplink(&ns, f, n, &up), &up, &rx, &dl));
+    }
+    /* asked again, accepted again, still at SF9: now cap the rate at DR3 */
+    n = uplink_mac(f, nwk, addr, fc++, NULL, 0, LWC_LW_FCTRL_ADR, false);
+    CHECK(lwc_ns_answer(&ns, lwc_ns_uplink(&ns, f, n, &up), &up, &rx, &dl) && dl.link_adr && dl.adr_dr == 5);
+    n = uplink_mac(f, nwk, addr, fc++, ok, sizeof ok, LWC_LW_FCTRL_ADR, false);
+    const bool again = lwc_ns_answer(&ns, lwc_ns_uplink(&ns, f, n, &up), &up, &rx, &dl);
+    CHECK(ns.link[idx].dr_cap == 4);
+    CHECK(!again || (dl.link_adr && dl.adr_dr == 3)); /* power steps only, at the rate it uses */
+    /* from here on: never a higher rate; the power steps down, then it goes quiet */
+    unsigned late = 0;
+    for (unsigned k = 0; k < 2U * LWC_NS_ADR_HISTORY; k++) {
+        const bool ans = ns.link[idx].adr_pending;
+        n = uplink_mac(f, nwk, addr, fc++, ans ? ok : NULL, ans ? sizeof ok : 0, LWC_LW_FCTRL_ADR, false);
+        if (lwc_ns_answer(&ns, lwc_ns_uplink(&ns, f, n, &up), &up, &rx, &dl) && dl.link_adr) {
+            CHECK(dl.adr_dr == 3);
+            late += k >= LWC_NS_ADR_HISTORY ? 1U : 0U;
+        }
+    }
+    CHECK(late == 0U && ns.link[idx].tx_power == LWC_NS_ADR_MAX_POWER);
+    /* capped, the device later sends faster on its own: never asked to slow down */
+    rx.sf = 7;
+    rx.snr10 = 150; /* 12.5 dB spare: steps it cannot take (rate capped, power at the limit) */
+    for (unsigned k = 0; k < 2U * LWC_NS_ADR_HISTORY; k++) {
+        n = uplink_mac(f, nwk, addr, fc++, NULL, 0, LWC_LW_FCTRL_ADR, false);
+        CHECK(!lwc_ns_answer(&ns, lwc_ns_uplink(&ns, f, n, &up), &up, &rx, &dl));
+    }
+    /* a new join clears the cap */
+    join_request(jr, KEY, eui, 2);
+    CHECK(lwc_ns_join(&ns, jr, 23, acc, sizeof acc, &alen, NULL) == LWC_NS_JOIN_ACCEPT);
+    CHECK(ns.link[idx].dr_cap == 0);
+    CHECK(lwc_ns_remove(&ns, eui) == LWC_NS_OK);
+}
+
 int main(void)
 {
     lwc_ns_init(&ns);
@@ -349,6 +412,7 @@ int main(void)
 
     adr_step();
     adr_flow();
+    adr_fixed_dr();
 
     /* routing */
     CHECK(lwc_ns_forward(LWC_MODE_TTN, true) && lwc_ns_forward(LWC_MODE_TTN, false));
