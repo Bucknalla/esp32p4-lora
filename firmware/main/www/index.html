@@ -63,20 +63,7 @@
     <div id="tab-overview" class="tab">
       <ul id="notices" class="notices"></ul>
       <div id="health" class="health"></div>
-      <div class="panel" id="ov-gw-panel">
-        <div class="title-row">
-          <h2>Gateway</h2>
-          <div class="inline">
-            <label class="switch small" title="Replace EUIs and IP addresses before copying"><input type="checkbox" id="diag-redact" checked><span class="track" aria-hidden="true"></span><span>Hide EUIs and IP addresses</span></label>
-            <button type="button" class="ghost small" id="diag-copy">Copy diagnostics</button>
-          </div>
-        </div>
-        <div class="gw-grid">
-          <div id="ov-gw-id"></div>
-          <div id="ov-gw-health"></div>
-          <div id="ov-gw-res"></div>
-        </div>
-      </div>
+      <div class="panel gw-row" id="ov-gw"></div>
       <div class="split three">
         <div class="panel">
           <h2>Radio</h2>
@@ -278,7 +265,13 @@
 
     <!-- System -->
     <div id="tab-system" class="tab" hidden>
-      <h1>System</h1>
+      <div class="title-row">
+        <h1>System</h1>
+        <div class="inline">
+          <label class="switch small" title="Replace EUIs and IP addresses before copying"><input type="checkbox" id="diag-redact" checked><span class="track" aria-hidden="true"></span><span>Hide EUIs and IP addresses</span></label>
+          <button type="button" class="ghost small" id="diag-copy">Copy diagnostics</button>
+        </div>
+      </div>
       <div class="split two">
         <div class="panel">
           <h2>Firmware</h2>
