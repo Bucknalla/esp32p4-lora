@@ -1,6 +1,6 @@
 # ADR-0012: TTN reporting switch and registration help (no TTN QR claim)
 
-- Status: partly superseded by ADR-0015 (the on/off switch became the gateway mode; the registration card stays). Settings live on the Config tab; TTN is not a setup step (ADR-0014)
+- Status: partly superseded by ADR-0015 (the on/off switch became the gateway mode; the registration card stays) and ADR-0016 (Semtech UDP removed: the card now asks for a TTN API key for Basics Station). Settings live on the Config tab; TTN is not a setup step (ADR-0014)
 - Date: 2026-11-22
 
 ## Context

@@ -238,3 +238,15 @@ lgw_stop OK; HAL task stack: 15516 of 24576 bytes free
   sx1302_hal path needs its receive loop first).
 - The ADR-0015 desk tests (join, uplinks, ACK, ADR, DevStatus, hybrid,
   reboot) are listed in that ADR's Verification section.
+
+### Update: LoRa Basics Station to TTN, UDP removed (2026-11-23, ADR-0016)
+
+- TLS WebSocket to `eu1.cloud.thethings.network:8887/traffic/eui-<EUI>` with
+  a gateway API key: connected in under 1 s after boot; `router_config`
+  matched the radio plan (EU863, both radio frequencies, 8 channels). The TTN
+  console shows the gateway connected over `SEMTECHWS/LBSLNS`.
+- The FiPy joined through TTN; join-accepts, data downlinks and an ACK went
+  out in RX1 and RX2, each confirmed with `dntxed`. Details in ADR-0016
+  Verification.
+- The Semtech UDP forwarder is removed; the gateway connects with Basics
+  Station only. A TTN API key is now needed (Config tab).
