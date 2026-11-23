@@ -236,8 +236,8 @@ function stepState(id, cls, chipText, chipCls) {
   const li = $(id);
   li.classList.remove('done', 'todo', 'skip');
   li.classList.add(cls);
-  const st = $('.state', li);
-  st.replaceChildren(chipText ? el('span', { class: 'chip dot ' + (chipCls || ''), text: chipText }) : '');
+  /* the marker shows done / to do; only a skipped step says why, as plain text */
+  $('.state', li).textContent = cls === 'skip' ? chipText : '';
 }
 function renderSetup() {
   const g = S.ttn || {}, r = S.radio || {}, ln = S.lns || {};
