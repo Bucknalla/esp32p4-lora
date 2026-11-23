@@ -343,3 +343,5 @@ pre#logs { max-height: 60vh; overflow: auto; margin: 12px 0 0; padding: 12px 14p
 .stat code { justify-self: end; word-break: break-all; }
 .stat .copy { display: inline-flex; gap: 6px; align-items: center; justify-self: end; }
 .stat .copy button { padding: 2px 8px; font-size: 12px; }
+.gw-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 4px 32px; padding: 14px 20px; }
+.gw-row .stat { margin: 0; align-items: center; }

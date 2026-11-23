@@ -128,7 +128,6 @@ function renderOverview() {
   if ((o.last_check || '').startsWith('update available')) notes.push(notice('', 'info', 'A newer firmware release is available.', gotoBtn('system', 'Open System')));
   $('#notices').replaceChildren(...notes);
 
-  const crashes = n(f.panic) + n(f.wdt);
   $('#health').replaceChildren(
     !upNeeded ? gauge('cloud', 'off', 'Upstream off', 'Standalone mode: nothing leaves the gateway')
       : g.lns_key === 'none' ? gauge('cloud', 'warn', 'No API key', 'Add one in Setup')
@@ -136,7 +135,7 @@ function renderOverview() {
     gauge('antenna', n(r.starts) > 0 ? (restarts ? 'warn' : 'ok') : 'warn', n(r.starts) > 0 ? 'Receiving' : 'Radio not started', ok + ' valid frames'),
     mode === 'ttn' ? gauge('chip', 'off', 'Local server off', 'The network server serves every device')
       : gauge('chip', ln.tx === 'dry-run' ? 'warn' : 'ok', n(ln.joined) + ' of ' + n(ln.devices) + ' joined', ln.tx === 'dry-run' ? 'Local transmit is off' : n(ln.uplinks) + ' uplinks'),
-    gauge('clock', crashes ? 'warn' : 'ok', fmtUptime(r.uptime_s || 0), 'up · ' + (f.boots || '?') + ' boots, ' + crashes + ' crashes'),
+    gauge('clock', 'ok', 'Up ' + fmtUptime(r.uptime_s || 0), o.eth && o.eth !== '-' ? 'On Ethernet' : o.wifi && o.wifi !== '-' ? 'On Wi-Fi' : 'No network'),
   );
 
   $('#ov-radio').replaceChildren(
@@ -212,7 +211,7 @@ function renderSystem() {
   $('#sys-mem').replaceChildren(
     stat('Internal RAM free', fmtKB(ih)),
     stat('Lowest since boot', fmtKB(imin), null),
-    stat('PSRAM free', fmtKB(n(r.heap_psram))),
+    stat('PSRAM free', fmtKB(n(r.heap_psram)) + ' of 32 MB', n(r.heap_psram) / PSRAM_TOTAL),
   );
   const st = Object.entries(S.stack_free || {}).sort((a, b) => n(a[1]) - n(b[1]));
   $('#sys-stack').replaceChildren(...st.map(([task, free]) => {
@@ -231,31 +230,13 @@ function copyable(text) {
   return el('span', { class: 'copy' }, el('code', { text }), b);
 }
 function renderGateway() {
-  const o = S.ota || {}, r = S.radio || {}, f = S.faults || {}, g = S.ttn || {};
-  const ip = (v) => (v && v !== '-' ? v : 'Not connected');
-  $('#ov-gw-id').replaceChildren(
-    stat('Firmware', o.version || '–'),
-    stat('Image', '', IMAGE_STATE[o.state] || ['', o.state || '–']),
+  /* what you need while operating it: its identity, how it is connected, its firmware */
+  const o = S.ota || {}, g = S.ttn || {};
+  const net = o.eth && o.eth !== '-' ? 'Ethernet · ' + o.eth : o.wifi && o.wifi !== '-' ? 'Wi-Fi · ' + o.wifi : 'Not connected';
+  $('#ov-gw').replaceChildren(
     el('div', { class: 'stat' }, el('span', { text: 'Gateway EUI' }), g.eui ? copyable(g.eui) : el('b', { text: '–' })),
-    stat('Wi-Fi', ip(o.wifi)),
-    stat('Ethernet', ip(o.eth)),
-  );
-  const crashes = n(f.panic), wdt = n(f.wdt), brown = n(f.brownout);
-  $('#ov-gw-health').replaceChildren(
-    stat('Uptime', fmtUptime(r.uptime_s || 0)),
-    stat('Boots', String(n(f.boots))),
-    stat('Crashes', '', crashes ? ['warn', String(crashes)] : ['ok', 'None']),
-    stat('Watchdog resets', '', wdt ? ['warn', String(wdt)] : ['ok', 'None']),
-    stat('Brownouts', '', brown ? ['warn', String(brown)] : ['ok', 'None']),
-  );
-  const ih = n(r.heap_internal), imin = n(r.heap_internal_min), ps = n(r.heap_psram);
-  const stacks = Object.entries(S.stack_free || {}).sort((a, b) => n(a[1]) - n(b[1]));
-  const tight = stacks[0];
-  $('#ov-gw-res').replaceChildren(
-    stat('Internal RAM free', fmtKB(ih) + ' (lowest ' + fmtKB(imin) + ')', imin < 32768 ? ['warn', fmtKB(ih) + ', lowest ' + fmtKB(imin)] : null),
-    stat('PSRAM free', fmtKB(ps) + ' of 32 MB', ps / PSRAM_TOTAL),
-    ...(tight ? [stat('Tightest task stack', tight[0] + ' · ' + n(tight[1]) + ' B free', Math.min(1, n(tight[1]) / 8192), n(tight[1]) < 1024 ? 'bad' : n(tight[1]) < 2048 ? 'warn' : '')] : []),
-    stat('Status LED', r.led || '–'),
+    stat('Connection', net),
+    stat('Firmware', o.version || '–'), /* a newer release shows as a notice above */
   );
 }
 
