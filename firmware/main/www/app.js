@@ -572,7 +572,7 @@ async function waitRestart(title, opts = {}) {
   clearInterval(busyTimer);
   busyTimer = setInterval(() => { $('#busy-time').textContent = Math.round((Date.now() - t0) / 1000) + ' s'; }, 1000);
   $('#busy-time').textContent = '0 s';
-  busy(title, opts.first || 'Waiting for the gateway to stop…');
+  busy(title, opts.first || 'Restarting…');
   let down = false;
   while (Date.now() - t0 < downWithin) {
     if (!(await alive())) { down = true; break; }
@@ -583,7 +583,7 @@ async function waitRestart(title, opts = {}) {
     busy(title, opts.notDown || 'The gateway did not restart.', true);
     return;
   }
-  busy(title, 'Restarting. Waiting for the gateway to come back…');
+  busy(title, 'Restarting…');
   const t1 = Date.now();
   while (Date.now() - t1 < upWithin) {
     await sleep(1500);
