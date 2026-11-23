@@ -3,6 +3,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "esp_err.h"
 #include "lwc/ns.h"
@@ -35,14 +36,16 @@ esp_err_t gwmode_eui(char out[17]);
 
 /** Basics Station server host name (default CONFIG_GW_LBS_HOST). */
 void gwmode_lbs_host(char out[GW_LBS_HOST_MAX]);
+/** Basics Station server port (default CONFIG_GW_LBS_PORT; TTN uses 8887). */
+uint16_t gwmode_lbs_port(void);
 /** True when an LNS API key is stored (the key itself never leaves NVS except to the link). */
 bool gwmode_lbs_key_set(void);
 /** The stored LNS API key; for the Basics Station client only, never to be logged. */
 esp_err_t gwmode_lbs_key(char out[GW_LBS_KEY_MAX]);
 
 /**
- * Store the Basics Station server for the next boot. NULL leaves a value as it
- * is. `host`: a host name (letters, digits, '.', '-'); `key`: printable, no
- * spaces or quotes; an empty key erases it.
+ * Store the Basics Station server for the next boot. NULL (0 for the port)
+ * leaves a value as it is. `host`: a host name (letters, digits, '.', '-');
+ * `key`: printable, no spaces or quotes; an empty key erases it.
  */
-esp_err_t gwmode_set_lbs(const char *host, const char *key);
+esp_err_t gwmode_set_lbs(const char *host, uint16_t port, const char *key);

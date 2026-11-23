@@ -348,7 +348,7 @@ static esp_err_t api_status(httpd_req_t *req)
     char lbs_host[GW_LBS_HOST_MAX];
     gwmode_lbs_host(lbs_host);
     snprintf(line, sizeof line, "eui=%s report=%s mode=%s protocol=basicstation server=%s port=%d lns_key=%s", eui,
-             gwmode_forwards() ? "on" : "off", gwmode_name(gwmode()), lbs_host, CONFIG_GW_LBS_PORT,
+             gwmode_forwards() ? "on" : "off", gwmode_name(gwmode()), lbs_host, (int)gwmode_lbs_port(),
              gwmode_lbs_key_set() ? "set" : "none");
     json_str(out, STATUS_MAX, &o, "ttn", line);
     lns_status_line(line, sizeof line);
@@ -536,7 +536,7 @@ static esp_err_t api_ttn_qr(httpd_req_t *req)
 
 static bool read_body(httpd_req_t *req, char *body, size_t *got);
 
-/* Settings (admin): mode=ttn|standalone|hybrid, lns_host=<host>,
+/* Settings (admin): mode=ttn|standalone|hybrid, lns_host=<host>, lns_port=<1-65535>,
  * lns_key=<key> (write-only; empty erases it). Any change applies after a
  * restart. */
 static esp_err_t api_settings(httpd_req_t *req)
@@ -550,15 +550,18 @@ static esp_err_t api_settings(httpd_req_t *req)
     if (!read_body(req, body, &got)) {
         return send_status(req, "400 Bad Request", "bad body\n");
     }
-    char mode[16], host[GW_LBS_HOST_MAX], key[GW_LBS_KEY_MAX];
+    char mode[16], host[GW_LBS_HOST_MAX], key[GW_LBS_KEY_MAX], port_s[8];
     const int ml = lwc_form_get(body, got, "mode", mode, sizeof mode);
     const int hl = lwc_form_get(body, got, "lns_host", host, sizeof host);
+    const int pl = lwc_form_get(body, got, "lns_port", port_s, sizeof port_s);
+    const long port = pl > 0 ? strtol(port_s, NULL, 10) : 0;
     const int kl = lwc_form_get(body, got, "lns_key", key, sizeof key);
     memset(body, 0, sizeof body);
     lwc_mode_t m;
-    if ((ml < 0 && hl < 0 && kl < 0) || (ml >= 0 && !gwmode_parse(mode, &m))) {
+    if ((ml < 0 && hl < 0 && pl < 0 && kl < 0) || (ml >= 0 && !gwmode_parse(mode, &m)) ||
+        (pl >= 0 && (port < 1 || port > 65535))) {
         memset(key, 0, sizeof key);
-        return send_status(req, "400 Bad Request", "mode=ttn|standalone|hybrid, lns_host, lns_key\n");
+        return send_status(req, "400 Bad Request", "mode=ttn|standalone|hybrid, lns_host, lns_port (1-65535), lns_key\n");
     }
     bool changed = false;
     if (ml >= 0 && m != gwmode()) {
@@ -569,8 +572,8 @@ static esp_err_t api_settings(httpd_req_t *req)
         }
         changed = true;
     }
-    if (hl >= 0 || kl >= 0) {
-        r = gwmode_set_lbs(hl >= 0 ? host : NULL, kl >= 0 ? key : NULL);
+    if (hl >= 0 || pl >= 0 || kl >= 0) {
+        r = gwmode_set_lbs(hl >= 0 ? host : NULL, (uint16_t)port, kl >= 0 ? key : NULL);
         memset(key, 0, sizeof key);
         if (r == ESP_ERR_INVALID_ARG) {
             return send_status(req, "400 Bad Request", "lns_host: a host name; lns_key: no spaces or quotes\n");

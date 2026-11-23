@@ -404,7 +404,7 @@ static bool handle(const radio_pkt_t *p)
                 }
             } else {
                 /* Dry run: nothing is sent, so nothing is stored, and in hybrid
-                 * mode the join still goes to TTN, where the device may also be
+                 * mode the join still goes to the network server, where the device may also be
                  * registered. The session exists in RAM only. */
                 s_stat[idx].join_unanswered = true;
             }
