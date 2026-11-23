@@ -73,10 +73,11 @@ gateways.
     `DevEui` string of its `dnmsg` as it came.
   - Not used: class B (`dnsched`, beacons; no GPS), `timesync`, `runcmd`,
     `rmtsh` (remote commands are refused).
-- **Channel plan**: `router_config` is checked against the concentrator's
-  EU868 plan. A mismatch is logged and shown as `plan=differs` in the status
-  line (console `STATUS`, `/api/status` `lbs`); the gateway does not
-  reconfigure the radio from the server.
+- **Channel plan**: the server's plan in `router_config` (frequencies and
+  channels only) becomes the radio's when it passes the EU868 checks
+  (ADR-0017); the radio restarts only when the plan differs. An unusable
+  plan is logged and shown as `plan=differs` in the status line (console
+  `STATUS`, `/api/status` `lbs`), and the radio keeps its plan.
 - **Reconnect**: after a failure the client waits 10 s, doubling to 5 min; a
   refused key (HTTP 401/403) waits 5 min at once. A good `router_config`
   resets the wait.
