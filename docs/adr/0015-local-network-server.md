@@ -16,7 +16,7 @@ mode was the Semtech UDP forwarder (ADR-0012), switched on or off.
 
 - **Modes** (Config tab, admin; replaces the `pktfwd/ttn` on/off setting,
   which is migrated):
-  - **TTN**: every frame goes to TTN over Semtech UDP, as today.
+  - **TTN**: every frame goes to TTN (Semtech UDP at first; Basics Station since ADR-0016).
   - **Standalone**: frames are handled by the local server only; nothing is
     forwarded.
   - **Hybrid**: a frame is handled locally only when it belongs to a local
@@ -206,4 +206,4 @@ near the FiPy's limit (SNR -7 dB), so some were lost; SF9 was reliable.
 | Hybrid: local device not forwarded | FiPy frames handled locally, nothing of it sent to TTN | pass |
 | Wall clock in standalone mode | SNTP started only with the forwarder: no clock after a cold boot; now started in every mode | pass (fixed) |
 | RX2 fallback, DeviceTimeReq, LinkCheckReq | the FiPy firmware cannot send these, and RX1 was never refused | not yet |
-| TTN downlinks after the `conc_tx.c` change | no TTN downlink seen during the test | not yet |
+| TTN downlinks after the `conc_tx.c` change | TTN join-accepts, data downlinks and ACKs over Basics Station (ADR-0016 Verification) | pass |

@@ -194,9 +194,9 @@ We port Semtech's `sx1302_hal` to ESP-IDF and keep its logic intact; only the pl
 
 **Known quirk:** concentrators pulled from Helium miners sometimes fail the HAL's temperature-sensor check on start-up. Make that check optional in config.
 
-**First output: Semtech UDP protocol** to TTN or ChirpStack. It has no TLS but is the fastest way to prove the radio path end to end. In later phases the same receive path feeds the local network server, with UDP kept for hybrid forwarding.
+**First output: Semtech UDP protocol** to TTN or ChirpStack (phase 1). It had no TLS but was the fastest way to prove the radio path end to end. Removed once Basics Station passed its on-board test (ADR-0016).
 
-**TTN link: LoRa Basics Station** (ADR-0016, next after phase 3). The LNS protocol over a TLS WebSocket, authenticated with a TTN API key that can only connect this gateway, replaces UDP as the recommended way to reach TTN: encrypted, downlinks confirmed, and the TTN console shows the gateway as connected. UDP stays for ChirpStack and other servers that use it.
+**Upstream link: LoRa Basics Station** (ADR-0016, built and tested against TTN). The LNS protocol over a TLS WebSocket, authenticated with an API key that can only connect this gateway, is the only upstream link: encrypted, downlinks confirmed, and the TTN console shows the gateway as connected. ChirpStack v4 and AWS IoT Core for LoRaWAN speak it too; Semtech UDP is gone.
 
 ## Network server and join server
 
@@ -252,7 +252,7 @@ The gateway publishes standard formats so existing tools (Node-RED, Grafana, Hom
 **Hybrid forwarding**
 
 - A frame is local if its DevAddr is in our range (data uplinks) or its DevEUI is in our join table (join requests).
-- Everything else is forwarded unchanged to TTN (Basics Station, ADR-0016) or a central ChirpStack (Semtech UDP).
+- Everything else is forwarded unchanged to TTN or a central ChirpStack (Basics Station, ADR-0016).
 - Downlinks from upstream share the same scheduler and duty-cycle budget as local downlinks, with local traffic taking priority.
 
 ## Management, OTA and observability
@@ -295,7 +295,7 @@ Ethernet is primary, Wi-Fi is automatic fallback, LTE is an optional add-on; the
 | Wi-Fi 6 | ESP32-C6 over SDIO via ESP-Hosted | Fallback when Ethernet link drops; BLE setup through the C6 (ADR-0014) | 2 |
 | LTE | USB modem on the USB host port, PPP via `esp-modem` | Optional for sites with no wired network | 6 |
 
-**Failover:** the default route follows link state, Ethernet > Wi-Fi > LTE. MQTT and upstream UDP reconnect on route change; uplinks queue in PSRAM while all links are down.
+**Failover:** the default route follows link state, Ethernet > Wi-Fi > LTE. MQTT and the upstream WebSocket reconnect on route change; uplinks queue in PSRAM while all links are down.
 
 **Time:** SNTP sets wall-clock time for logs and TLS certificate checks. Downlink timing uses the concentrator's own counter, so losing NTP does not affect LoRaWAN timing.
 
