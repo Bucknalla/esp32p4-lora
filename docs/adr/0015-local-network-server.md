@@ -1,7 +1,8 @@
 # ADR-0015: Local network server and gateway modes (phase 3)
 
-- Status: accepted (slices 1–6 built; modes tested on the board; transmit off
-  until approved; see Verification)
+- Status: accepted (slices 1–6 built; modes and desk tests on the board with
+  a real device; transmit off by default, on only in a desk build; see
+  Verification)
 - Date: 2026-11-22
 
 ## Context
@@ -157,6 +158,11 @@ Then integrations (phase 4).
   - TXPower index 5 at most (MaxEIRP - 10 dB). RP002 allows 7; 5 is kept for
     devices on older regional parameter versions, and a device that refuses
     an index gets a lower cap.
+  - A device that accepts a data rate but sends its answer at a lower one
+    (its application fixes the rate): the first time, the server waits 20
+    uplinks; the second time in a row, it caps the data rate at the rate the
+    device uses, until it joins again. Without this, such a device got the
+    same request on every uplink (seen on the desk).
 - **Answers**: the next uplink must carry LinkADRAns. All three bits set: the
   new power is recorded. A refusal lowers the cap for what was refused (power
   or data rate). Downlinks set FCtrl.ADR. ChMask keeps channels 0-7 (the
@@ -171,6 +177,12 @@ Then integrations (phase 4).
 
 ## Verification
 
+Desk tests (2026-11-23) used the bench card, a MaxIIoT GL5712-UX: the US915
+variant, whose filters take about 60 dB off 868 MHz. The FiPy sat about 1 m
+away; local transmit was on in a desk-only build with the power cap at 0 dBm
+(`CONFIG_GW_LNS_TX=y`, `CONFIG_GW_TX_MAX_DBM=0`). Downlinks at SF7 arrived
+near the FiPy's limit (SNR -7 dB), so some were lost; SF9 was reliable.
+
 | What | How | Result |
 | --- | --- | --- |
 | AES, CMAC | FIPS-197, RFC 4493 vectors | pass |
@@ -184,5 +196,14 @@ Then integrations (phase 4).
 | Hybrid boot | device loaded from NVS, local server and TTN link up | pass |
 | TTN boot | device loaded, local server off, TTN link up | pass |
 | Remove a device | logged, record erased | pass |
-| Join, uplink, answers, RX2 fallback, ADR on air | needs an EU868 OTAA device and transmit approval | not yet |
+| Join on air | Pycom FiPy (LoRaWAN 1.0.0 stack), desk build at 0 dBm (below) | pass |
+| Uplinks, confirmed uplink and ACK, repeat after a lost ACK | FiPy | pass |
+| DevStatusReq/Ans | FiPy: battery shown. Margins seen: 26 and -30 dB at a downlink SNR near -7 to -9 dB (they look like SNR x 4, cut to 6 bits); shown as sent | pass |
+| ADR power on air | FiPy accepted LinkADRReq and lowered its power (RSSI -94 to -111 dBm); a lost answer waits 20 uplinks | pass |
+| ADR, device keeps its own rate | FiPy with a fixed DR: was one request per uplink; now a wait of 20 uplinks, and a cap at the rate it uses after the second time (desk run with the first form of the fix: 2 requests in 12 uplinks) | pass (fixed) |
+| ADR data-rate change on air | the FiPy either fixed its rate or already sent at DR5 | not yet |
+| Session after a gateway reboot | FiPy sent FCnt 4-6 with no new join; downlink counter skipped 16 | pass |
+| Hybrid: local device not forwarded | FiPy frames handled locally, nothing of it sent to TTN | pass |
+| Wall clock in standalone mode | SNTP started only with the forwarder: no clock after a cold boot; now started in every mode | pass (fixed) |
+| RX2 fallback, DeviceTimeReq, LinkCheckReq | the FiPy firmware cannot send these, and RX1 was never refused | not yet |
 | TTN downlinks after the `conc_tx.c` change | no TTN downlink seen during the test | not yet |
