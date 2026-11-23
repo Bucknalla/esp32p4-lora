@@ -310,3 +310,16 @@ pre#logs { max-height: 60vh; overflow: auto; margin: 12px 0 0; padding: 12px 14p
 #spectrum .band-label { fill: var(--muted); font-size: 11px; }
 .chart-tip { position: absolute; z-index: 5; pointer-events: none; max-width: 280px; padding: 6px 10px; border-radius: var(--r-ctl); background: var(--ink); color: var(--surface); font-size: 13px; }
 #spectrum .ch-label, #spectrum .tick { paint-order: stroke; stroke: var(--surface); stroke-width: 4px; stroke-linejoin: round; }
+
+/* ---- status panels -------------------------------------------------------- */
+.split.three { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+.stat .chip { justify-self: end; }
+.stat.dim { color: var(--muted); }
+.panel .empty-note { color: var(--muted); font-size: 14px; margin: 0; }
+.stacks { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 4px 24px; }
+.stacks .stat { margin-bottom: 8px; }
+.meter > span.bad { background: var(--bad); }
+.split.two { grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); }
+@media (max-width: 860px) { .split.two { grid-template-columns: 1fr; } }
+.inline .switch { display: flex; align-items: center; gap: 8px; color: var(--ink); font-size: 14px; }
+.button.small { padding: 4px 10px; font-size: 13px; }

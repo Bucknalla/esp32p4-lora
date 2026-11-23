@@ -88,80 +88,137 @@ const fmtUptime = (s) => { s = +s; const d = Math.floor(s / 86400), h = Math.flo
 const fmtKB = (b) => (+b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.round(b / 1024) + ' KB');
 const MHZ = (hz) => (hz / 1e6).toFixed(3) + ' MHz';
 const ago = (s) => (s < 0 ? 'Not seen since the gateway started' : s < 90 ? s + ' s ago' : s < 5400 ? Math.round(s / 60) + ' min ago' : Math.round(s / 3600) + ' h ago');
-const LABELS = {
-  ota: 'Firmware', faults: 'Resets and faults', stack_free: 'Least free stack (bytes)', radio: 'Radio and system', ttn: 'Network server', lns: 'Local server', lbs: 'Basics Station link',
-  version: 'Version', slot: 'Slot', state: 'Image state', wifi: 'Wi-Fi address', eth: 'Ethernet address', upstream: 'Upstream link',
-  last_check: 'Last update check', boots: 'Boots', panic: 'Panics', wdt: 'Watchdog resets', brownout: 'Brownouts',
-  sw: 'Software restarts', run: 'Abnormal resets in a row', rx: 'Frames received', crc_ok: 'With a valid CRC', dropped: 'Dropped (queue full)',
-  starts: 'Radio starts', led: 'Status LED', restarts: 'Radio restarts', uptime_s: 'Uptime', heap_internal: 'Internal RAM free',
-  heap_internal_min: 'Internal RAM free (lowest)', heap_psram: 'PSRAM free',
-};
 
 let S = {}; /* last /api/status, parsed */
 
-/* ---- overview -------------------------------------------------------------- */
+/* ---- overview ---------------------------------------------------------------- */
 function gauge(ic, cls, title, detail) {
   return el('div', { class: 'gauge ' + cls }, icon(ICONS[ic]), el('b', { text: title }), el('span', { text: detail }));
 }
-function stat(label, value, frac, warn) {
-  const m = frac == null ? null : el('div', { class: 'meter' }, el('span', { class: warn ? 'warn' : '' }));
-  if (m) m.firstChild.style.width = Math.max(0, Math.min(100, frac * 100)) + '%';
-  return el('div', { class: 'stat' }, el('span', { text: label }), el('b', { text: value }), m);
+/* One labelled value; `extra` is a meter fraction (number) or a chip ([class, text]). */
+function stat(label, value, extra, cls) {
+  let tail = null;
+  if (typeof extra === 'number') {
+    tail = el('div', { class: 'meter' }, el('span', { class: cls || '' }));
+    tail.firstChild.style.width = Math.max(0, Math.min(100, extra * 100)) + '%';
+  }
+  const v = Array.isArray(extra) ? el('span', { class: 'chip dot ' + extra[0], text: extra[1] }) : el('b', { text: value });
+  return el('div', { class: 'stat' }, el('span', { text: label }), v, tail);
 }
 function notice(cls, ic, text, action) {
   return el('li', { class: cls }, icon(ICONS[ic]), el('span', { text }), action || null);
 }
 const gotoBtn = (tab, text) => { const b = el('button', { type: 'button', class: 'ghost small', text }); b.addEventListener('click', () => openTab(tab)); return b; };
+const n = (v) => +v || 0;
 
 function renderOverview() {
-  const o = S.ota || {}, r = S.radio || {}, f = S.faults || {}, g = S.ttn || {}, ln = S.lns || {};
+  const o = S.ota || {}, r = S.radio || {}, f = S.faults || {}, g = S.ttn || {}, ln = S.lns || {}, lb = S.lbs || null;
   const mode = g.mode || 'ttn';
   const upNeeded = mode !== 'standalone';
   const up = r.upstream === 'up';
-  const rx = +r.rx || 0, ok = +r.crc_ok || 0, restarts = +r.restarts || 0, run = +f.run || 0;
+  const rx = n(r.rx), ok = n(r.crc_ok), restarts = n(r.restarts), run = n(f.run);
 
   const notes = [];
   if (upNeeded && g.lns_key === 'none') notes.push(notice('warn', 'alert', 'No API key: the gateway cannot connect to ' + srvName(g.server) + '.', gotoBtn('setup', 'Add the key')));
   else if (upNeeded && !up) notes.push(notice('warn', 'alert', 'Not connected to ' + srvName(g.server) + ': frames are not forwarded.', gotoBtn('setup', 'Check setup')));
+  if (lb && lb.plan === 'differs') notes.push(notice('warn', 'alert', 'The network server sent a channel plan this radio cannot use: the radio keeps its own.', gotoBtn('radio', 'Open Radio')));
   if (o.state && o.state !== 'valid') notes.push(notice('warn', 'alert', 'New firmware on trial: it rolls back unless its health check passes.'));
-  if (run > 0) notes.push(notice('warn', 'alert', run + ' crash or watchdog reset(s) in a row.', gotoBtn('system', 'Open the log')));
+  if (run > 0) notes.push(notice('warn', 'alert', run + ' crash or watchdog reset(s) in a row.', gotoBtn('system', 'Open System')));
   if (restarts > 0) notes.push(notice('warn', 'alert', 'The radio restarted ' + restarts + ' time(s) since the gateway started.'));
   if ((o.last_check || '').startsWith('update available')) notes.push(notice('', 'info', 'A newer firmware release is available.', gotoBtn('system', 'Open System')));
   $('#notices').replaceChildren(...notes);
 
-  const hb = (+f.panic || 0) + (+f.wdt || 0);
+  const crashes = n(f.panic) + n(f.wdt);
   $('#health').replaceChildren(
     !upNeeded ? gauge('cloud', 'off', 'Upstream off', 'Standalone mode: nothing leaves the gateway')
       : g.lns_key === 'none' ? gauge('cloud', 'warn', 'No API key', 'Add one in Setup')
       : gauge('cloud', up ? 'ok' : 'warn', up ? 'Connected' : 'Not connected', srvName(g.server) + ' · Basics Station'),
-    gauge('antenna', +r.starts > 0 ? (restarts ? 'warn' : 'ok') : 'warn', +r.starts > 0 ? 'Receiving' : 'Radio not started', ok + ' valid frames since boot'),
+    gauge('antenna', n(r.starts) > 0 ? (restarts ? 'warn' : 'ok') : 'warn', n(r.starts) > 0 ? 'Receiving' : 'Radio not started', ok + ' valid frames'),
     mode === 'ttn' ? gauge('chip', 'off', 'Local server off', 'The network server serves every device')
-      : gauge('chip', ln.tx === 'dry-run' ? 'warn' : 'ok', (ln.joined || 0) + ' of ' + (ln.devices || 0) + ' joined', ln.tx === 'dry-run' ? 'Local transmit is off' : (ln.uplinks || 0) + ' uplinks since boot'),
-    gauge('clock', hb ? 'warn' : 'ok', fmtUptime(r.uptime_s || 0), (f.boots || '?') + ' boots · ' + hb + ' crashes'),
-  );
-  $('#traffic').replaceChildren(
-    stat('Frames received', String(rx), null),
-    stat('With a valid CRC', ok + (rx ? ' (' + Math.round(ok * 100 / rx) + '%)' : ''), rx ? ok / rx : 0),
-    stat('Dropped (queue full)', String(+r.dropped || 0), null),
-    ...(S.lbs ? [stat('Sent upstream', String(+S.lbs.uplinks || 0), null), stat('Downlinks from the server', (+S.lbs.downlinks || 0) + ' (' + (+S.lbs.dntxed || 0) + ' sent)', null)] : []),
-  );
-  const ih = +r.heap_internal || 0, imin = +r.heap_internal_min || 0;
-  $('#memory').replaceChildren(
-    stat('Internal RAM free', fmtKB(ih), null),
-    stat('Lowest since boot', fmtKB(imin), null),
-    stat('PSRAM free', fmtKB(+r.heap_psram || 0), null),
+      : gauge('chip', ln.tx === 'dry-run' ? 'warn' : 'ok', n(ln.joined) + ' of ' + n(ln.devices) + ' joined', ln.tx === 'dry-run' ? 'Local transmit is off' : n(ln.uplinks) + ' uplinks'),
+    gauge('clock', crashes ? 'warn' : 'ok', fmtUptime(r.uptime_s || 0), 'up · ' + (f.boots || '?') + ' boots, ' + crashes + ' crashes'),
   );
 
-  const groups = $('#groups');
-  groups.replaceChildren();
-  for (const [k, vals] of Object.entries(S)) {
-    const dl = el('dl', { class: 'facts' });
-    for (const [key, v] of Object.entries(vals)) {
-      dl.append(el('dt', { text: k === 'stack_free' ? key : (LABELS[key] || key) }),
-        el('dd', { text: key === 'uptime_s' ? fmtUptime(v) : key.startsWith('heap_') ? fmtKB(v) : v }));
-    }
-    groups.append(el('h2', { text: LABELS[k] || k }), dl);
-  }
+  $('#ov-radio').replaceChildren(
+    stat('Frames received', String(rx)),
+    stat('With a valid CRC', ok + (rx ? ' (' + Math.round(ok * 100 / rx) + '%)' : ''), rx ? ok / rx : 0),
+    stat('Dropped, queue full', String(n(r.dropped))),
+    stat('Radio starts', String(n(r.starts))),
+    stat('Radio restarts', String(restarts), restarts ? ['warn', restarts + ' since boot'] : null),
+  );
+
+  if (!upNeeded) $('#ov-link').replaceChildren(el('p', { class: 'empty-note', text: 'Not used in standalone mode.' }));
+  else $('#ov-link').replaceChildren(
+    stat('Server', '', up ? ['ok', srvName(g.server)] : ['warn', srvName(g.server) + ': ' + (lb ? lb.link : 'down')]),
+    stat('Channel plan', '', !lb ? null : lb.plan === 'ok' ? ['ok', 'Matches this radio'] : ['warn', 'Not usable here']),
+    stat('Sent upstream', String(lb ? n(lb.uplinks) : 0)),
+    stat('Downlinks from the server', String(lb ? n(lb.downlinks) : 0)),
+    stat('Confirmed sent', String(lb ? n(lb.dntxed) : 0), lb && n(lb.downlinks) ? n(lb.dntxed) / n(lb.downlinks) : null),
+    stat('Refused (radio or format)', String(lb ? n(lb.refused) : 0)),
+    stat('Dropped while offline', String(lb ? n(lb.dropped) : 0)),
+  );
+
+  if (mode === 'ttn') $('#ov-local').replaceChildren(el('p', { class: 'empty-note', text: 'Off: the network server serves every device. Choose hybrid or standalone in Setup to serve your own.' }));
+  else $('#ov-local').replaceChildren(
+    stat('Devices joined', n(ln.joined) + ' of ' + n(ln.devices), n(ln.devices) ? n(ln.joined) / n(ln.devices) : 0),
+    stat('Joins', String(n(ln.joins))),
+    stat('Uplinks', String(n(ln.uplinks))),
+    stat('Downlinks', String(n(ln.downlinks))),
+    ...(mode === 'hybrid' ? [stat('Passed to the network server', String(n(ln.forwarded))), stat('Not passed on, queue full', String(n(ln.fwd_dropped)))] : []),
+    stat('Local transmit', '', ln.tx === 'on' ? ['ok', 'On'] : ['warn', 'Off (dry run)']),
+  );
+}
+
+/* ---- system ------------------------------------------------------------------- */
+/* esp_ota image states as ota.c reports them */
+const IMAGE_STATE = { valid: ['ok', 'Confirmed'], 'pending-verify': ['warn', 'On trial'], new: ['warn', 'New, not booted yet'],
+  invalid: ['bad', 'Invalid'], aborted: ['bad', 'Aborted'], undefined: ['', 'Not tracked (USB flash)'] };
+/* ota.c's last_check text as a state: "update available (...)", "up to date", "error: ...", ... */
+function updateChip(s) {
+  s = s || '';
+  if (s.startsWith('update available')) return ['warn', 'Newer release available'];
+  if (s.startsWith('up to date')) return ['ok', 'This is the latest'];
+  if (s.startsWith('error')) return ['bad', 'Check failed: ' + s.replace(/^error:\s*/, '')];
+  if (s.startsWith('install failed') || s === 'failed before' || s === 'rolled back before') return ['bad', s.charAt(0).toUpperCase() + s.slice(1)];
+  if (!s || s === 'never') return ['', 'Not checked yet'];
+  return ['', s.charAt(0).toUpperCase() + s.slice(1)];
+}
+function renderSystem() {
+  const o = S.ota || {}, r = S.radio || {}, f = S.faults || {}, g = S.ttn || {};
+  $('#sys-fw').replaceChildren(
+    stat('Version', o.version || '–'),
+    stat('Image', '', IMAGE_STATE[o.state] || ['', o.state || '–']),
+    stat('Slot', o.slot || '–'),
+    stat('Latest release', '', updateChip(o.last_check)),
+  );
+  const ip = (v) => (v && v !== '-' ? v : 'Not connected');
+  $('#sys-net').replaceChildren(
+    el('div', { class: 'stat' }, el('span', { text: 'Gateway EUI' }), el('code', { text: g.eui || '–' })),
+    stat('Wi-Fi', ip(o.wifi)),
+    stat('Ethernet', ip(o.eth)),
+    stat('Status LED', r.led || '–'),
+  );
+  const crashes = n(f.panic) + n(f.wdt) + n(f.brownout);
+  $('#sys-rel').replaceChildren(
+    stat('Uptime', fmtUptime(r.uptime_s || 0)),
+    stat('Boots', String(n(f.boots))),
+    stat('Crashes (panic)', String(n(f.panic)), n(f.panic) ? ['warn', String(n(f.panic))] : null),
+    stat('Watchdog resets', String(n(f.wdt)), n(f.wdt) ? ['warn', String(n(f.wdt))] : null),
+    stat('Brownouts', String(n(f.brownout)), n(f.brownout) ? ['warn', String(n(f.brownout))] : null),
+    stat('Software restarts', String(n(f.sw))),
+    stat('Abnormal resets in a row', '', n(f.run) ? ['bad', String(n(f.run))] : ['ok', crashes ? 'None now' : 'None']),
+  );
+  const ih = n(r.heap_internal), imin = n(r.heap_internal_min);
+  $('#sys-mem').replaceChildren(
+    stat('Internal RAM free', fmtKB(ih)),
+    stat('Lowest since boot', fmtKB(imin), null),
+    stat('PSRAM free', fmtKB(n(r.heap_psram))),
+  );
+  const st = Object.entries(S.stack_free || {}).sort((a, b) => n(a[1]) - n(b[1]));
+  $('#sys-stack').replaceChildren(...st.map(([task, free]) => {
+    const b = n(free);
+    return stat(task, b + ' B', Math.min(1, b / 8192), b < 1024 ? 'bad' : b < 2048 ? 'warn' : '');
+  }));
 }
 
 /* ---- header pill ------------------------------------------------------------ */
@@ -241,14 +298,6 @@ function showServerHelp() {
   $('#help-ttn').hidden = !ttn;
   $('#help-other').hidden = ttn;
   if (p && ttn) $('#ttn-console').href = 'https://' + p.host + '/console/gateways/add';
-}
-
-/* ---- system ----------------------------------------------------------------- */
-function renderSystem() {
-  const o = S.ota || {};
-  const dl = $('#fw');
-  dl.replaceChildren();
-  for (const k of ['version', 'state', 'slot', 'last_check', 'wifi', 'eth']) dl.append(el('dt', { text: LABELS[k] }), el('dd', { text: o[k] || '–' }));
 }
 
 async function refreshStatus() {
