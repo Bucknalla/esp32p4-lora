@@ -66,6 +66,8 @@ static const struct lgw_tx_gain_s k_nebra_lut[] = {
 
 QueueHandle_t g_radio_tx_req;
 QueueHandle_t g_radio_tx_res;
+atomic_uint g_radio_counter;
+atomic_bool g_radio_counter_ok;
 radio_tx_stats_t g_radio_tx_stats;
 
 static int8_t s_min_dbm, s_max_dbm;
@@ -74,6 +76,8 @@ static lwc_jit_t s_jit;
 static lwc_dutycycle_t s_dc;
 static struct lgw_pkt_tx_s s_frames[LWC_JIT_SLOTS];
 static bool s_trace[LWC_JIT_SLOTS];
+static uint8_t s_src[LWC_JIT_SLOTS];  /* radio_tx_src_t of each queued frame */
+static uint16_t s_tok[LWC_JIT_SLOTS];
 static radio_tx_req_t s_req;
 
 const char *radio_tx_result_str(radio_tx_result_t r)
@@ -129,6 +133,7 @@ static bool counter_now(uint32_t *us)
 int conc_tx_after_start(void)
 {
     s_counter_ok = false;
+    atomic_store(&g_radio_counter_ok, false);
     /* GPS_EN=0: TIMESTAMP reads the live counter instead of the PPS latch. */
     if (lgw_reg_w(LGW_GPS_EN, 0) != LGW_REG_SUCCESS) {
         return -1;
@@ -175,8 +180,10 @@ static void reply(const radio_tx_req_t *r, radio_tx_result_t res, int8_t pw, boo
                  capped ? " (power capped)" : "");
         return;
     }
-    const radio_tx_res_t out = {r->token, res, pw, capped};
-    (void)xQueueSend(g_radio_tx_res, &out, 0);
+    const radio_tx_res_t out = {r->token, res, pw, capped, false, 0};
+    if (g_radio_tx_res != NULL) {
+        (void)xQueueSend(g_radio_tx_res, &out, 0);
+    }
 }
 
 #if CONFIG_GW_TX_ENABLE
@@ -282,6 +289,8 @@ static void admit(const radio_tx_req_t *r)
     }
     s_frames[slot] = f;
     s_trace[slot] = r->test || CONFIG_GW_TX_TRACE;
+    s_src[slot] = r->source;
+    s_tok[slot] = r->token;
     ESP_LOGI(TAG, "downlink queued: %" PRIu32 " Hz SF%u %d dBm%s, %u B, %" PRIu32
                   " us airtime, start in %" PRId32 " us",
              f.freq_hz, p->sf, pw, capped ? " (capped)" : "", f.size, air_us,
@@ -352,6 +361,8 @@ bool conc_tx_service(void)
     if (!counter_now(&now)) {
         return false;
     }
+    atomic_store(&g_radio_counter, now);
+    atomic_store(&g_radio_counter_ok, true);
     /* A sent frame blocks new ones until it ends; then check the radio let go. */
     const int ended = lwc_jit_ended(&s_jit, now, TX_END_MARGIN_US);
     if (ended >= 0) {
@@ -398,6 +409,10 @@ bool conc_tx_service(void)
     }
     lwc_jit_sent(&s_jit, (size_t)due);
     atomic_fetch_add(&g_radio_tx_stats.txnb, 1U);
+    if (s_src[due] == RADIO_SRC_LBS && g_radio_tx_res != NULL) {
+        const radio_tx_res_t sent = {s_tok[due], RADIO_TX_OK, f->rf_power, false, true, f->count_us};
+        (void)xQueueSend(g_radio_tx_res, &sent, 0);
+    }
     ESP_LOGI(TAG, "TX handed over %" PRId32 " us before start; lgw_send took %" PRId64 " us",
              lead, send_us);
     return trace ? trace_frame(f, air_us) : true;

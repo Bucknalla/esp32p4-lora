@@ -12,3 +12,5 @@ dependencies:
   espressif/mdns: "^1.15.1"
   # BLE Wi-Fi provisioning (ESP BLE Provisioning app), NimBLE over ESP-Hosted HCI (ADR-0014)
   espressif/network_provisioning: "^1.0.0"
+  # LoRa Basics Station LNS link to TTN over a TLS WebSocket (ADR-0016)
+  espressif/esp_websocket_client: "^1.8.0"

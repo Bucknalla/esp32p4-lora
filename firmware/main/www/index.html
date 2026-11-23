@@ -67,8 +67,14 @@
               <dt>Gateway EUI</dt><dd><span id="ttn-eui"></span> <button id="ttn-copy" type="button">Copy</button></dd>
               <dt>Frequency plan</dt><dd>Europe 863-870 MHz (SF9 for RX2 - recommended)</dd>
               <dt>Server address</dt><dd id="ttn-server"></dd>
+              <dt>API key</dt><dd id="ttn-key"></dd>
             </dl>
-            <p class="hint">In the console choose <b>Register gateway</b>, enter the EUI (or scan the code with a phone) and the frequency plan above. Leave "Require authenticated connection" off: this gateway uses Semtech UDP.</p>
+            <p class="hint">In the console choose <b>Register gateway</b>, enter the EUI (or scan the code with a phone) and the frequency plan above. Then, on the gateway's page, open <b>API keys</b> → <b>Add API key</b> with only the right <i>Link as Gateway to a Gateway Server for traffic exchange</i>, and enter it below. The gateway connects with LoRa Basics Station over TLS.</p>
+            <form class="admin" id="lns-form" autocomplete="off">
+              <label>Server <input name="lns_host" id="lns-host" maxlength="63" pattern="[A-Za-z0-9.\-]+" placeholder="eu1.cloud.thethings.network"></label>
+              <label>API key <input name="lns_key" type="password" maxlength="159" placeholder="NNSXS...: stored, never shown again" autocomplete="off"></label>
+              <button type="submit">Save and restart</button>
+            </form>
             <p><a href="https://eu1.cloud.thethings.network/console/gateways/add" target="_blank" rel="noopener noreferrer">Open the TTN console (eu1) →</a></p>
           </div>
         </div>

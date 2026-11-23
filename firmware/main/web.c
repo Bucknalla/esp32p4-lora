@@ -27,7 +27,7 @@
 #include "lwc/session.h"
 #include "lwip/sockets.h"
 #include "ota.h"
-#include "pktfwd.h"
+#include "lbsfwd.h"
 #include "radio_pkt.h"
 #include "sdkconfig.h"
 #include "sv.h"
@@ -335,19 +335,25 @@ static esp_err_t api_status(httpd_req_t *req)
              " heap_internal=%u heap_internal_min=%u heap_psram=%u",
              atomic_load(&g_radio_stats.rxnb), atomic_load(&g_radio_stats.rxok),
              atomic_load(&g_radio_stats.dropped), atomic_load(&g_radio_stats.starts),
-             atomic_load(&g_radio_stats.restarts), pktfwd_link_up() ? "up" : "down", led_state(), now_s(),
+             atomic_load(&g_radio_stats.restarts), lbsfwd_link_up() ? "up" : "down", led_state(), now_s(),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     json_str(out, STATUS_MAX, &o, "radio", line);
     char eui[17] = "";
-    (void)pktfwd_eui(eui);
-    snprintf(line, sizeof line, "eui=%s report=%s mode=%s server=%s port=%d", eui,
-             gwmode_forwards() ? "on" : "off", gwmode_name(gwmode()), CONFIG_GW_PKTFWD_SERVER,
-             CONFIG_GW_PKTFWD_PORT);
+    (void)gwmode_eui(eui);
+    char lbs_host[GW_LBS_HOST_MAX];
+    gwmode_lbs_host(lbs_host);
+    snprintf(line, sizeof line, "eui=%s report=%s mode=%s protocol=basicstation server=%s port=%d lns_key=%s", eui,
+             gwmode_forwards() ? "on" : "off", gwmode_name(gwmode()), lbs_host, CONFIG_GW_LBS_PORT,
+             gwmode_lbs_key_set() ? "set" : "none");
     json_str(out, STATUS_MAX, &o, "ttn", line);
     lns_status_line(line, sizeof line);
     json_str(out, STATUS_MAX, &o, "lns", line);
+    lbsfwd_status(line, sizeof line);
+    if (line[0] != '\0') {
+        json_str(out, STATUS_MAX, &o, "lbs", strncmp(line, "LBS ", 4) == 0 ? line + 4 : line);
+    }
     if (o + 2U < STATUS_MAX) {
         out[o++] = '}';
         out[o++] = '\n';
@@ -504,7 +510,7 @@ static esp_err_t api_ttn_qr(httpd_req_t *req)
     char eui[17];
     svg_t v = {.cap = 12288};
     v.buf = heap_caps_malloc(v.cap, MALLOC_CAP_SPIRAM);
-    if (v.buf == NULL || pktfwd_eui(eui) != ESP_OK) {
+    if (v.buf == NULL || gwmode_eui(eui) != ESP_OK) {
         heap_caps_free(v.buf);
         return send_status(req, "500 Internal Server Error", "qr\n");
     }
@@ -525,30 +531,57 @@ static esp_err_t api_ttn_qr(httpd_req_t *req)
     return r;
 }
 
+static bool read_body(httpd_req_t *req, char *body, size_t *got);
+
+/* Settings (admin): mode=ttn|standalone|hybrid, lns_host=<host>,
+ * lns_key=<key> (write-only; empty erases it). Any change applies after a
+ * restart. */
 static esp_err_t api_settings(httpd_req_t *req)
 {
     esp_err_t r;
     if (!gate(req, LWC_ROLE_ADMIN, &r)) {
         return r;
     }
-    char body[64] = "", v[16];
-    const int n = req->content_len > 0 && req->content_len < sizeof body
-                      ? httpd_req_recv(req, body, req->content_len)
-                      : -1;
-    lwc_mode_t m;
-    if (n <= 0 || lwc_form_get(body, (size_t)n, "mode", v, sizeof v) < 0 || !gwmode_parse(v, &m)) {
-        return send_status(req, "400 Bad Request", "mode=ttn|standalone|hybrid\n");
+    char body[BODY_MAX + 1];
+    size_t got;
+    if (!read_body(req, body, &got)) {
+        return send_status(req, "400 Bad Request", "bad body\n");
     }
-    if (m == gwmode()) {
+    char mode[16], host[GW_LBS_HOST_MAX], key[GW_LBS_KEY_MAX];
+    const int ml = lwc_form_get(body, got, "mode", mode, sizeof mode);
+    const int hl = lwc_form_get(body, got, "lns_host", host, sizeof host);
+    const int kl = lwc_form_get(body, got, "lns_key", key, sizeof key);
+    memset(body, 0, sizeof body);
+    lwc_mode_t m;
+    if ((ml < 0 && hl < 0 && kl < 0) || (ml >= 0 && !gwmode_parse(mode, &m))) {
+        memset(key, 0, sizeof key);
+        return send_status(req, "400 Bad Request", "mode=ttn|standalone|hybrid, lns_host, lns_key\n");
+    }
+    bool changed = false;
+    if (ml >= 0 && m != gwmode()) {
+        r = gwmode_set(m);
+        if (r != ESP_OK) {
+            memset(key, 0, sizeof key);
+            return send_status(req, "500 Internal Server Error", esp_err_to_name(r));
+        }
+        changed = true;
+    }
+    if (hl >= 0 || kl >= 0) {
+        r = gwmode_set_lbs(hl >= 0 ? host : NULL, kl >= 0 ? key : NULL);
+        memset(key, 0, sizeof key);
+        if (r == ESP_ERR_INVALID_ARG) {
+            return send_status(req, "400 Bad Request", "lns_host: a host name; lns_key: no spaces or quotes\n");
+        }
+        if (r != ESP_OK) {
+            return send_status(req, "500 Internal Server Error", esp_err_to_name(r));
+        }
+        changed = true;
+        ESP_LOGW(TAG, "Basics Station settings changed%s", kl >= 0 ? " (LNS key replaced)" : "");
+    }
+    if (!changed) {
         return send_status(req, "200 OK", "unchanged\n");
     }
-    r = gwmode_set(m);
-    if (r != ESP_OK) {
-        return send_status(req, "500 Internal Server Error", esp_err_to_name(r));
-    }
-    static char msg[48];
-    snprintf(msg, sizeof msg, "mode %s: restarting\n", gwmode_name(m));
-    return reboot_soon(req, "web settings changed", msg);
+    return reboot_soon(req, "web settings changed", "saved: restarting\n");
 }
 
 /* ---- devices (ADR-0015) -----------------------------------------------------------
@@ -584,7 +617,6 @@ static const char *ns_err_text(lwc_ns_err_t e)
                                        : "Rejected.\n";
 }
 
-static bool read_body(httpd_req_t *req, char *body, size_t *got);
 
 static esp_err_t api_devices_post(httpd_req_t *req)
 {

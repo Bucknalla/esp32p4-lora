@@ -47,25 +47,19 @@ menu "LoRaWAN gateway board"
             lora_gateway reports lgw_start errors only through its debug
             macros. Keep on during bring-up.
 
-    menu "Packet forwarder (Semtech UDP)"
-        config GW_PKTFWD_SERVER
-            string "Server host"
-            default "eu1.cloud.thethings.network"
-        config GW_PKTFWD_PORT
-            int "Server UDP port (up and down)"
-            default 1700
-        config GW_PKTFWD_EUI
+    menu "Upstream: LoRa Basics Station (ADR-0016)"
+        config GW_EUI
             string "Gateway EUI (16 hex digits; empty = from the base MAC)"
             default ""
-        config GW_PKTFWD_KEEPALIVE_S
-            int "PULL_DATA keepalive interval (s)"
-            default 10
-        config GW_PKTFWD_STAT_S
-            int "Status report interval (s)"
-            default 30
-        config GW_PKTFWD_NTP_SERVER
-            string "SNTP server (wall clock for packet timestamps)"
+        config GW_NTP_SERVER
+            string "SNTP server (wall clock: timestamps, TLS, DeviceTimeAns)"
             default "pool.ntp.org"
+        config GW_LBS_HOST
+            string "LNS host (TTN cluster), when none is set in NVS"
+            default "eu1.cloud.thethings.network"
+        config GW_LBS_PORT
+            int "LNS port"
+            default 8887
     endmenu
 
     menu "Transmit"

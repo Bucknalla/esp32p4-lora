@@ -1,7 +1,7 @@
 /*
- * Downlink side of the Semtech UDP protocol: parse a PULL_RESP `txpk`, decide
- * when to send it (just-in-time queue), and keep the EU868 duty-cycle budget.
- * OS-independent, no allocation; the JSON is untrusted input.
+ * Downlinks to the radio: one frame to send (lwc_txpk_t, from the Basics
+ * Station client or the local network server), when to send it (just-in-time
+ * queue), and the EU868 duty-cycle budget. OS-independent, no allocation.
  */
 #ifndef LWC_TXPK_H
 #define LWC_TXPK_H
@@ -17,9 +17,9 @@ extern "C" {
 /* ---- txpk ---------------------------------------------------------------- */
 
 typedef enum {
-    LWC_TXPK_TIMED = 0, /**< "tmst": concentrator counter */
-    LWC_TXPK_IMMEDIATE, /**< "imme": true */
-    LWC_TXPK_GPS,       /**< "tmms": GPS time (not supported here) */
+    LWC_TXPK_TIMED = 0, /**< at a concentrator counter value */
+    LWC_TXPK_IMMEDIATE, /**< as soon as possible */
+    LWC_TXPK_GPS,       /**< at a GPS time (not supported here) */
 } lwc_txpk_mode_t;
 
 typedef struct {
@@ -37,20 +37,6 @@ typedef struct {
     uint16_t size;
     uint8_t payload[255];
 } lwc_txpk_t;
-
-typedef enum {
-    LWC_TXPK_OK = 0,
-    LWC_TXPK_ERR_ARG,
-    LWC_TXPK_ERR_JSON,    /**< malformed JSON or no "txpk" object */
-    LWC_TXPK_ERR_FIELD,   /**< missing or out-of-range field */
-    LWC_TXPK_ERR_MODU,    /**< not "LORA" */
-} lwc_txpk_err_t;
-
-/** Parse `{"txpk":{...}}`. Keys in any order, unknown keys skipped. */
-lwc_txpk_err_t lwc_txpk_parse(const char *json, size_t len, lwc_txpk_t *out);
-
-/** Decode base64 (padding optional). Returns bytes written, or -1. */
-int lwc_base64_decode(const char *in, size_t n, uint8_t *out, size_t cap);
 
 /** LoRa time on air in microseconds (Semtech AN1200.13), rounded up.
  *  Low-data-rate optimisation on when a symbol lasts 16 ms or more
