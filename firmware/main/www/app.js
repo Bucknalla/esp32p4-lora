@@ -124,7 +124,8 @@ async function refreshStatus() {
     const rx = +r.rx || 0, ok = +r.crc_ok || 0;
     const restarts = +r.restarts || 0, run = +f.run || 0;
     const notices = [];
-    if (ttnOn && r.upstream !== 'up') notices.push(['warn', 'Upstream (TTN) is down: uplinks are not forwarded. Check the registration under Config.']);
+    if (ttnOn && g.lns_key === 'none') notices.push(['warn', 'No TTN API key: the gateway cannot connect to TTN. Add one under Config.']);
+    else if (ttnOn && r.upstream !== 'up') notices.push(['warn', 'Upstream (TTN) is down: uplinks are not forwarded. Check the registration and API key under Config.']);
     if (o.state && o.state !== 'valid') notices.push(['warn', 'Firmware ' + o.state + ': it rolls back unless its health check passes.']);
     if (run > 0) notices.push(['warn', run + ' crash or watchdog reset(s) in a row. See Logs → Previous boot.']);
     if (restarts > 0) notices.push(['warn', 'The concentrator restarted ' + restarts + ' time(s) since boot.']);
@@ -136,7 +137,7 @@ async function refreshStatus() {
       return li;
     }));
     $('#tiles').replaceChildren(
-      ttnOn ? tile('Upstream', r.upstream === 'up' ? 'Connected' : 'Down', 'TTN, Semtech UDP', r.upstream === 'up' ? 'ok' : 'warn')
+      ttnOn ? tile('Upstream', r.upstream === 'up' ? 'Connected' : 'Down', 'TTN, Basics Station', r.upstream === 'up' ? 'ok' : 'warn')
             : tile('Upstream', 'Off', 'Standalone mode'),
       ...(mode !== 'ttn' ? [tile('Local devices', (ln.joined || 0) + ' / ' + (ln.devices || 0), 'joined, ' + (ln.uplinks || 0) + ' uplinks since boot')] : []),
       tile('Packets', String(rx), ok + ' with valid CRC'),
@@ -151,7 +152,9 @@ async function refreshStatus() {
       : 'Up to 32 OTAA devices. EU868, class A.';
     if (!$('#tab-config').hidden) refreshDevices();
     $('#ttn-eui').textContent = g.eui || '';
-    $('#ttn-server').textContent = (g.server || '') + (g.port ? ' : ' + g.port + ' (UDP)' : '');
+    $('#ttn-server').textContent = g.server ? 'wss://' + g.server + (g.port ? ':' + g.port : '') : '';
+    $('#ttn-key').textContent = g.lns_key === 'set' ? 'Stored' : 'Not set';
+    if (!$('#lns-host').value && g.server) $('#lns-host').value = g.server;
     if (ttnOn && !$('#ttn-qr').src) $('#ttn-qr').src = '/api/ttn/qr.svg';
     const fw = $('#fw');
     fw.replaceChildren();
@@ -246,6 +249,21 @@ document.addEventListener('DOMContentLoaded', () => {
       const r = await api('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'mode=' + m.value });
       el.textContent = (await r.text()).trim();
     } catch (e) { el.textContent = e.message; }
+  });
+  $('#lns-form').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const fd = new FormData(ev.target);
+    const body = new URLSearchParams();
+    if (fd.get('lns_host')) body.set('lns_host', fd.get('lns_host'));
+    if (fd.get('lns_key')) body.set('lns_key', fd.get('lns_key'));
+    if (![...body.keys()].length || !confirm('Save the TTN connection settings and restart the gateway?')) return;
+    const el = $('#cfg-msg');
+    el.classList.remove('bad');
+    try {
+      const r = await api('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
+      el.textContent = (await r.text()).trim();
+      ev.target.lns_key.value = '';
+    } catch (e) { el.textContent = e.message; el.classList.add('bad'); }
   });
   $('#dev-add').addEventListener('submit', async (ev) => {
     ev.preventDefault();

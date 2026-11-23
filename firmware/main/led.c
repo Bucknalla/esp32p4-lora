@@ -13,7 +13,7 @@
 #include "freertos/task.h"
 #include "lwc/led.h"
 #include "ota.h"
-#include "pktfwd.h"
+#include "lbsfwd.h"
 #include "radio_pkt.h"
 #include "radio_tx.h"
 #include "sdkconfig.h"
@@ -47,7 +47,7 @@ static lwc_led_state_t pick(uint32_t now)
     }
     const bool settled = now > GRACE_MS;
     const bool radio_missing = settled && atomic_load(&g_radio_stats.starts) == 0U;
-    const bool upstream_down = settled && s_fwd && !pktfwd_link_up();
+    const bool upstream_down = settled && s_fwd && !lbsfwd_link_up();
     if (ota_pending_verify() || radio_missing || upstream_down ||
         (int32_t)(fault_until - now) > 0) {
         return LWC_LED_FAULT;

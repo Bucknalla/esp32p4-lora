@@ -11,7 +11,7 @@
 #include "lns.h"
 #include "conc.h"
 #include "conc_hal.h"
-#include "pktfwd.h"
+#include "lbsfwd.h"
 #include "radio_pkt.h"
 #include "radio_tx.h"
 #include "esp_event.h"
@@ -194,7 +194,7 @@ void app_main(void)
 
     /* Wall clock in every mode: packet timestamps, DeviceTimeAns, TLS. Started
      * before the network is up; SNTP retries, and asks again on a new IP. */
-    esp_sntp_config_t sntp = ESP_NETIF_SNTP_DEFAULT_CONFIG(CONFIG_GW_PKTFWD_NTP_SERVER);
+    esp_sntp_config_t sntp = ESP_NETIF_SNTP_DEFAULT_CONFIG(CONFIG_GW_NTP_SERVER);
     sntp.renew_servers_after_new_IP = true;
     if (esp_netif_sntp_init(&sntp) != ESP_OK) {
         ESP_LOGW(TAG, "SNTP start failed: no wall clock");
@@ -208,10 +208,11 @@ void app_main(void)
         ESP_LOGE(TAG, "local network server: %s", esp_err_to_name(err));
     }
     QueueHandle_t up_q = gwmode() == LWC_MODE_TTN ? s_rx_queue : fwd_q;
+    /* Upstream link (ADR-0016): LoRa Basics Station. */
     if (up_q != NULL) {
-        err = pktfwd_start(up_q);
+        err = lbsfwd_start(up_q);
         if (err != ESP_OK) {
-            ESP_LOGE(TAG, "packet forwarder: %s", esp_err_to_name(err));
+            ESP_LOGE(TAG, "Basics Station client: %s", esp_err_to_name(err));
         }
     }
 

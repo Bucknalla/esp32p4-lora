@@ -1,4 +1,4 @@
-/* Radio -> forwarder queue item: one received packet in GWMP units. */
+/* Radio -> local server / Basics Station queue item: one received packet. */
 #pragma once
 
 #include <stdatomic.h>

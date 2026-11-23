@@ -1,7 +1,8 @@
-/* Downlink requests into the radio task, results back (forwarder, console). */
+/* Downlink requests into the radio task, results back (Basics Station client). */
 #pragma once
 
 #include <stdatomic.h>
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "freertos/FreeRTOS.h"
@@ -20,7 +21,7 @@ typedef enum {
 } radio_tx_result_t;
 
 typedef enum {
-    RADIO_SRC_UDP = 0, /* the Semtech UDP forwarder: result on g_radio_tx_res */
+    RADIO_SRC_LBS = 0, /* the Basics Station client: results and "on air" on g_radio_tx_res */
     RADIO_SRC_LNS = 1, /* the local network server: result logged only */
 } radio_tx_src_t;
 
@@ -35,9 +36,9 @@ typedef struct {
 } radio_tx_alt_t;
 
 typedef struct {
-    uint16_t token;   /* GWMP token, echoed in the result; 0 = console test */
+    uint16_t token;   /* echoed in the result; 0 = console test */
     bool test;        /* trace and log only, no result expected */
-    uint8_t source;   /* radio_tx_src_t: only the forwarder reads g_radio_tx_res */
+    uint8_t source;   /* radio_tx_src_t: only RADIO_SRC_LBS results go to g_radio_tx_res */
     lwc_txpk_t pk;
     radio_tx_alt_t alt;
 } radio_tx_req_t;
@@ -47,13 +48,21 @@ typedef struct {
     radio_tx_result_t result;
     int8_t power_dbm; /* power actually used (after the cap) */
     bool power_capped;
+    bool on_air;      /* the frame went to the radio (lgw_send): Basics Station dntxed */
+    uint32_t tmst;    /* with on_air: its start on the concentrator counter */
 } radio_tx_res_t;
 
 #define RADIO_TX_QUEUE_LEN 4
 
 /* Created by main before the radio and forwarder tasks start. */
 extern QueueHandle_t g_radio_tx_req;
+/* Results for RADIO_SRC_LBS: admission, then on_air when sent. */
 extern QueueHandle_t g_radio_tx_res;
+
+/* The concentrator counter, read by the radio task every loop (Basics Station
+ * xtime needs it at least every 35 minutes). Not valid while the radio restarts. */
+extern atomic_uint g_radio_counter;
+extern atomic_bool g_radio_counter_ok;
 
 typedef struct {
     atomic_uint txnb;    /* frames handed to lgw_send */

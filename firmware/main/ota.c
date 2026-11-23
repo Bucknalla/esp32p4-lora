@@ -41,7 +41,7 @@
 #include "fault.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "pktfwd.h"
+#include "lbsfwd.h"
 #include "radio_pkt.h"
 #include "sdkconfig.h"
 #include "sv.h"
@@ -364,7 +364,7 @@ static void health_task(void *arg)
             if (err == ESP_OK) {
                 atomic_store(&s_health_ok, true);
                 ESP_LOGW(TAG, "health check passed: image marked valid (upstream %s)",
-                         pktfwd_link_up() ? "up" : "down");
+                         lbsfwd_link_up() ? "up" : "down");
                 vTaskDelete(NULL);
             }
             ESP_LOGE(TAG, "mark valid: %s", esp_err_to_name(err));
@@ -420,5 +420,5 @@ void ota_status_line(char *buf, size_t len)
     ip_of("ETH_DEF", eip, sizeof eip);
     snprintf(buf, len, "version=%s slot=%s state=%s wifi=%s eth=%s upstream=%s last_check=\"%s\"",
              esp_app_get_description()->version, run->label, running_state_str(), wip, eip,
-             pktfwd_link_up() ? "up" : "down", s_last);
+             lbsfwd_link_up() ? "up" : "down", s_last);
 }

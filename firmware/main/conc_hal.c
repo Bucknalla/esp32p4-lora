@@ -2,8 +2,8 @@
  * Concentrator task (core 1, the radio core).
  *
  * SX1301 (lora_gateway): Nebra's EU868 config, lgw_start (firmware load +
- * radio calibration), then a receive loop that converts each packet to GWMP
- * units and queues it for the forwarder. Downlinks: conc_tx.c, same task.
+ * radio calibration), then a receive loop that queues each packet
+ * (radio_pkt_t) for the local server or the Basics Station client. Downlinks: conc_tx.c, same task.
  * Recovery: a failed lgw_start or lgw_receive stops the HAL, resets the
  * concentrator and starts again after a backoff.
  * SX1302 (sx1302_hal): one-shot util_chip_id check (lgw_start, EUI,
@@ -37,8 +37,8 @@ static const char *TAG = "conc_hal";
 #define HAL_TASK_PRIO 10
 #define HAL_TASK_CORE 1
 
-#define EU868_RADIO0_HZ 867500000U
-#define EU868_RADIO1_HZ 868500000U
+#define EU868_RADIO0_HZ CONC_EU868_RADIO0_HZ
+#define EU868_RADIO1_HZ CONC_EU868_RADIO1_HZ
 
 radio_stats_t g_radio_stats;
 

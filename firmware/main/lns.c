@@ -2,7 +2,7 @@
  * Local network server task (ADR-0015). Reads the radio queue in standalone
  * and hybrid modes, runs joins and uplinks through the core server
  * (core/src/ns.c), stores devices and counters in NVS, and in hybrid mode
- * hands every frame it does not handle to the Semtech UDP forwarder.
+ * hands every frame it does not handle to the Basics Station client.
  *
  * Transmit: join-accepts and class A answers (ACK, MAC commands) go through
  * the radio task's JIT queue, duty-cycle budget and power cap, tagged
