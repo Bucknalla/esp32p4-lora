@@ -307,6 +307,38 @@ static void adr_fixed_dr(void)
     CHECK(lwc_ns_remove(&ns, eui) == LWC_NS_OK);
 }
 
+/* Receive windows (ADR-0017 step 5): sent in the join-accept, kept per device. */
+static void rx_windows(void)
+{
+    static lwc_ns_t n2;
+    lwc_ns_init(&n2);
+    CHECK(n2.rx1_delay_s == 1 && n2.rx2_hz == LWC_NS_RX2_FREQ_HZ && n2.rx2_dr == 0);
+    CHECK(!lwc_ns_set_rx(&n2, 0, 869525000U, 0) && !lwc_ns_set_rx(&n2, 16, 869525000U, 0));
+    CHECK(!lwc_ns_set_rx(&n2, 1, 869525000U, 6) && !lwc_ns_set_rx(&n2, 1, 862900000U, 0));
+    CHECK(lwc_ns_set_rx(&n2, 3, 869525000U, 3));
+    static const uint64_t eui = 0x99;
+    size_t idx = 0, alen = 0;
+    uint8_t jr[23], acc[40];
+    CHECK(lwc_ns_add(&n2, eui, JOIN_EUI, KEY, LWC_NS_MAC_1_0_2, "rx", &idx) == LWC_NS_OK);
+    join_request(jr, KEY, eui, 7);
+    CHECK(lwc_ns_join(&n2, jr, 23, acc, sizeof acc, &alen, NULL) == LWC_NS_JOIN_ACCEPT && alen == 33);
+    CHECK(n2.dev[idx].rx1_delay_s == 3 && n2.dev[idx].rx2_dr == 3 && n2.dev[idx].rx2_hz == 869525000U);
+    CHECK(lwc_ns_rx1_delay_us(&n2.dev[idx]) == 3000000U);
+    /* the join-accept is AES-decrypted on the server side: encrypting gives the plain text */
+    lwc_aes128_t a;
+    lwc_aes128_init(&a, KEY);
+    uint8_t plain[32];
+    lwc_aes128_encrypt(&a, &acc[1], plain);
+    lwc_aes128_encrypt(&a, &acc[17], &plain[16]);
+    lwc_aes128_wipe(&a);
+    CHECK(plain[10] == 0x03 /* DLSettings: RX1DROffset 0, RX2 DR3 */ && plain[11] == 3 /* RxDelay */);
+    /* a later change applies to new joins only */
+    CHECK(lwc_ns_set_rx(&n2, 1, LWC_NS_RX2_FREQ_HZ, 0) && n2.dev[idx].rx1_delay_s == 3);
+    lwc_ns_dev_t none;
+    memset(&none, 0, sizeof none);
+    CHECK(lwc_ns_rx1_delay_us(&none) == 1000000U); /* an unset value reads as 1 s */
+}
+
 int main(void)
 {
     lwc_ns_init(&ns);
@@ -337,7 +369,7 @@ int main(void)
                           ((uint32_t)plain[10] << 24);
     CHECK(plain[4] == 0 && plain[5] == 0 && plain[6] == 0); /* NetID 000000 */
     CHECK(addr >= 1U && addr <= LWC_NS_ADDR_MAX && addr == ns.dev[idx].dev_addr);
-    CHECK(plain[11] == LWC_NS_DL_SETTINGS && plain[12] == LWC_NS_RX_DELAY);
+    CHECK(plain[11] == 0x00 && plain[12] == 1); /* defaults: RX2 DR0, RX1 delay 1 s */
     CHECK(plain[13] == 0x18 && plain[14] == 0x4F && plain[15] == 0x84 && plain[28] == 0); /* 867.1 MHz, type 0 */
 
     /* replays and strangers */
@@ -419,12 +451,16 @@ int main(void)
     CHECK(!lwc_ns_forward(LWC_MODE_STANDALONE, true) && !lwc_ns_forward(LWC_MODE_STANDALONE, false));
     CHECK(!lwc_ns_forward(LWC_MODE_HYBRID, true) && lwc_ns_forward(LWC_MODE_HYBRID, false));
 
+    rx_windows();
+
     /* downlink timing */
     lwc_txpk_t tx;
-    lwc_ns_downlink(false, 1000, 868100000, 9, 125, LWC_NS_JOIN_DELAY_US, 13, acc, 33, &tx);
+    lwc_ns_downlink(false, 1000, 868100000, 9, 125, LWC_NS_JOIN_DELAY_US, LWC_NS_RX2_FREQ_HZ, 0, 13, acc, 33, &tx);
     CHECK(tx.tmst == 5001000U && tx.freq_hz == 868100000U && tx.sf == 9 && tx.ipol && tx.ncrc && tx.size == 33);
-    lwc_ns_downlink(true, 0xFFFFFFFFU, 868100000, 9, 125, LWC_NS_RX1_DELAY_US, 13, NULL, 0, &tx);
+    lwc_ns_downlink(true, 0xFFFFFFFFU, 868100000, 9, 125, LWC_NS_RX1_DELAY_US, LWC_NS_RX2_FREQ_HZ, 0, 13, NULL, 0, &tx);
     CHECK(tx.tmst == 1999999U && tx.freq_hz == LWC_NS_RX2_FREQ_HZ && tx.sf == 12 && tx.bw_khz == 125);
+    lwc_ns_downlink(true, 0, 868100000, 9, 125, 3000000U, 869525000U, 3, 13, NULL, 0, &tx);
+    CHECK(tx.tmst == 4000000U && tx.freq_hz == 869525000U && tx.sf == 9); /* RX2 at DR3 */
 
     if (failures != 0) {
         fprintf(stderr, "test_ns: %d failure(s)\n", failures);

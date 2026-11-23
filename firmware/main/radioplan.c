@@ -9,6 +9,8 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "lwc/ns.h"
+#include "lwc/txpk.h"
 #include "nvs.h"
 #include "sdkconfig.h"
 
@@ -27,6 +29,9 @@ static const char *TAG = "radioplan";
 #define KEY_GAIN "gain"
 #define KEY_TX "tx"
 #define KEY_LNS_TX "lns_tx"
+#define KEY_RX1 "rx1"
+#define KEY_RX2_HZ "rx2hz"
+#define KEY_RX2_DR "rx2dr"
 #define EIRP_LIMIT_DB10 161 /* EU868 14 dBm ERP = 16.15 dBm EIRP (ADR-0007), rounded down */
 
 static SemaphoreHandle_t s_lock;
@@ -39,6 +44,7 @@ static radioplan_src_t s_prev_src;
 static lwc_plan_t s_bad;  /* the radio could not start with it */
 static bool s_have_bad;
 static radio_tx_cfg_t s_tx;
+static radio_rx_cfg_t s_rx;
 
 static void lock(void)
 {
@@ -65,6 +71,7 @@ static void load(void)
     s_prev = s_plan;
     s_prev_src = s_src;
     s_tx = (radio_tx_cfg_t){30, CONFIG_GW_TX_ENABLE != 0, CONFIG_GW_LNS_TX != 0};
+    s_rx = (radio_rx_cfg_t){1, LWC_NS_RX2_FREQ_HZ, 0};
     nvs_handle_t h;
     if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) {
         return;
@@ -91,6 +98,15 @@ static void load(void)
     }
     if (nvs_get_u8(h, KEY_LNS_TX, &v) == ESP_OK) {
         s_tx.lns_tx = v != 0U;
+    }
+    radio_rx_cfg_t rx = s_rx;
+    uint32_t hz;
+    if (nvs_get_u8(h, KEY_RX1, &rx.rx1_delay_s) == ESP_OK && nvs_get_u32(h, KEY_RX2_HZ, &hz) == ESP_OK &&
+        nvs_get_u8(h, KEY_RX2_DR, &rx.rx2_dr) == ESP_OK) {
+        rx.rx2_hz = hz;
+        if (lwc_ns_rx_ok(rx.rx1_delay_s, rx.rx2_hz, rx.rx2_dr)) {
+            s_rx = rx;
+        }
     }
     nvs_close(h);
 }
@@ -227,6 +243,46 @@ esp_err_t radioplan_set_tx(const radio_tx_cfg_t *c)
     return err;
 }
 
+void radioplan_rx(radio_rx_cfg_t *out)
+{
+    lock();
+    load();
+    *out = s_rx;
+    unlock();
+}
+
+esp_err_t radioplan_set_rx(const radio_rx_cfg_t *c)
+{
+    ESP_RETURN_ON_FALSE(c != NULL && lwc_ns_rx_ok(c->rx1_delay_s, c->rx2_hz, c->rx2_dr) && lwc_dc_band(c->rx2_hz) >= 0,
+                        ESP_ERR_INVALID_ARG, TAG, "receive windows");
+    lock();
+    load();
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(NVS_NS, NVS_READWRITE, &h);
+    if (err == ESP_OK) {
+        err = nvs_set_u8(h, KEY_RX1, c->rx1_delay_s);
+        if (err == ESP_OK) {
+            err = nvs_set_u32(h, KEY_RX2_HZ, c->rx2_hz);
+        }
+        if (err == ESP_OK) {
+            err = nvs_set_u8(h, KEY_RX2_DR, c->rx2_dr);
+        }
+        if (err == ESP_OK) {
+            err = nvs_commit(h);
+        }
+        nvs_close(h);
+    }
+    if (err == ESP_OK) {
+        s_rx = *c;
+    }
+    unlock();
+    if (err == ESP_OK) {
+        ESP_LOGW(TAG, "local receive windows for new joins: RX1 %u s, RX2 %" PRIu32 " Hz DR%u", (unsigned)c->rx1_delay_s,
+                 c->rx2_hz, (unsigned)c->rx2_dr);
+    }
+    return err;
+}
+
 int radioplan_tx_cap_dbm(void)
 {
     radio_tx_cfg_t c;
@@ -274,10 +330,14 @@ size_t radioplan_json(char *out, size_t cap)
     if (o < cap) {
         radio_tx_cfg_t tx;
         radioplan_tx(&tx);
+        radio_rx_cfg_t rx;
+        radioplan_rx(&rx);
         n = snprintf(out + o, cap - o,
-                     ",\"gain_db10\":%d,\"cap_dbm\":%d,\"ceiling_dbm\":%d,\"tx\":%s,\"lns_tx\":%s,\"tx_built\":%s}",
+                     ",\"gain_db10\":%d,\"cap_dbm\":%d,\"ceiling_dbm\":%d,\"tx\":%s,\"lns_tx\":%s,\"tx_built\":%s,"
+                     "\"rx1_delay_s\":%u,\"rx2_hz\":%" PRIu32 ",\"rx2_dr\":%u}",
                      tx.gain_db10, radioplan_tx_cap_dbm(), CONFIG_GW_TX_MAX_DBM, tx.tx_on ? "true" : "false",
-                     tx.lns_tx ? "true" : "false", CONFIG_GW_TX_ENABLE ? "true" : "false");
+                     tx.lns_tx ? "true" : "false", CONFIG_GW_TX_ENABLE ? "true" : "false", (unsigned)rx.rx1_delay_s,
+                     rx.rx2_hz, (unsigned)rx.rx2_dr);
         o = (n < 0 || (size_t)n >= cap - o) ? cap : o + (size_t)n;
     }
     return o < cap ? o : 0;

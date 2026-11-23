@@ -51,6 +51,10 @@ typedef struct {
     bool has_up;
     uint32_t fcnt_up;   /* last accepted uplink counter */
     uint32_t fcnt_down; /* next downlink counter */
+    /* receive windows sent in its join-accept (record version 2, ADR-0017) */
+    uint8_t rx1_delay_s; /* RX1 delay, 1..15 s */
+    uint8_t rx2_dr;      /* RX2 data rate, EU868 DR0..DR5 */
+    uint32_t rx2_hz;     /* RX2 frequency */
 } lwc_ns_dev_t;
 
 #define LWC_NS_RETRANS_MAX 7U        /* ACKs again for one repeated confirmed uplink */
@@ -94,6 +98,9 @@ typedef struct {
     uint32_t join_nonce; /* next JoinNonce: increases on every join (24 bit) */
     uint32_t next_addr;  /* DevAddr allocator */
     uint32_t cflist_hz[5]; /* join-accept CFList, from the radio plan (lwc_ns_set_plan) */
+    uint8_t rx1_delay_s;   /* receive windows for new joins (lwc_ns_set_rx) */
+    uint8_t rx2_dr;
+    uint32_t rx2_hz;
 } lwc_ns_t;
 
 /** Empty table; the CFList of the default EU868 plan. */
@@ -102,6 +109,13 @@ void lwc_ns_init(lwc_ns_t *ns);
 /** The CFList of new join-accepts follows `plan` (ADR-0017). Devices already
  *  joined keep the channels of their join-accept until they join again. */
 void lwc_ns_set_plan(lwc_ns_t *ns, const lwc_plan_t *plan);
+
+/** True for a usable setting: RX1 delay 1..15 s, RX2 DR0..DR5, RX2 in 863-870 MHz. */
+bool lwc_ns_rx_ok(uint8_t rx1_delay_s, uint32_t rx2_hz, uint8_t rx2_dr);
+
+/** Receive windows for new joins (default: RX1 1 s, RX2 869.525 MHz DR0).
+ *  Joined devices keep the ones of their join-accept. False if not usable. */
+bool lwc_ns_set_rx(lwc_ns_t *ns, uint8_t rx1_delay_s, uint32_t rx2_hz, uint8_t rx2_dr);
 
 typedef enum {
     LWC_NS_OK = 0,
@@ -246,16 +260,17 @@ bool lwc_ns_forward(lwc_mode_t mode, bool handled_locally);
 
 /**
  * A class A downlink in RX1 (same frequency and data rate as the uplink,
- * RX1DROffset 0) or RX2 (869.525 MHz, DR0), `delay_us` after the uplink's
- * concentrator timestamp (one more second for RX2). Inverted polarity, no CRC.
+ * RX1DROffset 0) or RX2 (`rx2_hz` at EU868 `rx2_dr`), `delay_us` after the
+ * uplink's concentrator timestamp (one more second for RX2). Inverted
+ * polarity, no CRC. A join-accept uses the default RX2 (LWC_NS_RX2_FREQ_HZ,
+ * DR0): the device does not know other values yet.
  */
 void lwc_ns_downlink(bool rx2, uint32_t up_tmst, uint32_t up_freq_hz, uint8_t up_sf, uint16_t up_bw_khz,
-                     uint32_t delay_us, int8_t power_dbm, const uint8_t *payload, size_t len,
-                     lwc_txpk_t *out);
+                     uint32_t delay_us, uint32_t rx2_hz, uint8_t rx2_dr, int8_t power_dbm, const uint8_t *payload,
+                     size_t len, lwc_txpk_t *out);
 
-/** EU868 join-accept settings: DLSettings (RX1DROffset 0, RX2 DR0), RxDelay 1 s, CFList 867.1-867.9 MHz. */
-#define LWC_NS_DL_SETTINGS 0x00U
-#define LWC_NS_RX_DELAY 1U
+/** RX1 delay of a joined device, microseconds. */
+uint32_t lwc_ns_rx1_delay_us(const lwc_ns_dev_t *d);
 
 #ifdef __cplusplus
 }

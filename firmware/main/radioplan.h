@@ -48,5 +48,17 @@ esp_err_t radioplan_set_tx(const radio_tx_cfg_t *c);
  *  antenna gain, never above CONFIG_GW_TX_MAX_DBM. */
 int radioplan_tx_cap_dbm(void);
 
+/* ---- local server receive windows (ADR-0017 step 5) -------------------------------- */
+
+typedef struct {
+    uint8_t rx1_delay_s; /* 1..15 */
+    uint32_t rx2_hz;     /* in an EU868 sub-band the radio may transmit in */
+    uint8_t rx2_dr;      /* DR0..DR5 */
+} radio_rx_cfg_t;
+
+void radioplan_rx(radio_rx_cfg_t *out);
+/** For new joins only; ESP_ERR_INVALID_ARG if not usable. */
+esp_err_t radioplan_set_rx(const radio_rx_cfg_t *c);
+
 /** The plan as JSON for /api/radio; returns the length (0 if it does not fit). */
 size_t radioplan_json(char *out, size_t cap);

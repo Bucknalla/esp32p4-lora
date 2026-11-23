@@ -21,6 +21,29 @@ void lwc_ns_init(lwc_ns_t *ns)
     lwc_plan_t p;
     lwc_plan_default_eu868(&p);
     lwc_ns_set_plan(ns, &p);
+    (void)lwc_ns_set_rx(ns, 1U, LWC_NS_RX2_FREQ_HZ, 0U);
+}
+
+bool lwc_ns_rx_ok(uint8_t rx1_delay_s, uint32_t rx2_hz, uint8_t rx2_dr)
+{
+    return rx1_delay_s >= 1U && rx1_delay_s <= 15U && rx2_dr <= 5U && rx2_hz >= 863000000U && rx2_hz <= 870000000U;
+}
+
+bool lwc_ns_set_rx(lwc_ns_t *ns, uint8_t rx1_delay_s, uint32_t rx2_hz, uint8_t rx2_dr)
+{
+    if (ns == NULL || !lwc_ns_rx_ok(rx1_delay_s, rx2_hz, rx2_dr)) {
+        return false;
+    }
+    ns->rx1_delay_s = rx1_delay_s;
+    ns->rx2_hz = rx2_hz;
+    ns->rx2_dr = rx2_dr;
+    return true;
+}
+
+uint32_t lwc_ns_rx1_delay_us(const lwc_ns_dev_t *d)
+{
+    const uint8_t s = (d != NULL && d->rx1_delay_s >= 1U && d->rx1_delay_s <= 15U) ? d->rx1_delay_s : 1U;
+    return (uint32_t)s * 1000000U;
 }
 
 void lwc_ns_set_plan(lwc_ns_t *ns, const lwc_plan_t *plan)
@@ -164,8 +187,12 @@ lwc_ns_join_res_t lwc_ns_join(lwc_ns_t *ns, const uint8_t *frame, size_t n, uint
     ns->join_nonce = (jn + 1U) & 0xFFFFFFU;
     uint8_t cflist[16];
     lwc_lw_cflist_freqs(ns->cflist_hz, cflist);
-    *accept_len = lwc_lw_join_accept(d->app_key, jn, LWC_NS_NET_ID, addr, LWC_NS_DL_SETTINGS,
-                                     LWC_NS_RX_DELAY, cflist, accept, cap);
+    /* DLSettings: RX1DROffset 0, RX2 data rate; RxDelay: RX1 delay in seconds */
+    *accept_len = lwc_lw_join_accept(d->app_key, jn, LWC_NS_NET_ID, addr, (uint8_t)(ns->rx2_dr & 0x0FU),
+                                     ns->rx1_delay_s, cflist, accept, cap);
+    d->rx1_delay_s = ns->rx1_delay_s;
+    d->rx2_dr = ns->rx2_dr;
+    d->rx2_hz = ns->rx2_hz;
     nonce_push(d, jr.dev_nonce);
     lwc_lw_session_keys(d->app_key, jn, LWC_NS_NET_ID, jr.dev_nonce, d->nwk_s_key, d->app_s_key);
     d->joined = true;
@@ -447,14 +474,14 @@ bool lwc_ns_forward(lwc_mode_t mode, bool handled_locally)
 }
 
 void lwc_ns_downlink(bool rx2, uint32_t up_tmst, uint32_t up_freq_hz, uint8_t up_sf, uint16_t up_bw_khz,
-                     uint32_t delay_us, int8_t power_dbm, const uint8_t *payload, size_t len,
-                     lwc_txpk_t *out)
+                     uint32_t delay_us, uint32_t rx2_hz, uint8_t rx2_dr, int8_t power_dbm, const uint8_t *payload,
+                     size_t len, lwc_txpk_t *out)
 {
     memset(out, 0, sizeof *out);
     out->mode = LWC_TXPK_TIMED;
     out->tmst = up_tmst + delay_us + (rx2 ? 1000000U : 0U);
-    out->freq_hz = rx2 ? LWC_NS_RX2_FREQ_HZ : up_freq_hz;
-    out->sf = rx2 ? LWC_NS_RX2_SF : up_sf;
+    out->freq_hz = rx2 ? rx2_hz : up_freq_hz;
+    out->sf = rx2 ? (uint8_t)(12U - (rx2_dr <= 5U ? rx2_dr : 0U)) : up_sf;
     out->bw_khz = rx2 ? 125U : up_bw_khz;
     out->cr_denom = 5;
     out->rfch = 0;
