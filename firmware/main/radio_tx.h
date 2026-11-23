@@ -18,6 +18,7 @@ typedef enum {
     RADIO_TX_GPS,      /* GPS-timed: no GPS on this gateway */
     RADIO_TX_DUTY,     /* sub-band duty-cycle budget used up */
     RADIO_TX_BUSY,     /* radio not running */
+    RADIO_TX_OFF,      /* transmit switched off (Config tab), or no gain step under the power cap */
 } radio_tx_result_t;
 
 typedef enum {

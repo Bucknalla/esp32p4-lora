@@ -64,6 +64,34 @@ function ago(s) {
   return Math.round(s / 3600) + ' h ago';
 }
 
+const MHZ = (hz) => (hz / 1e6).toFixed(3) + ' MHz';
+const PLAN_SRC = { default: 'Built-in EU868 (TTN)', local: 'Set on this page', server: 'From the network server' };
+
+async function refreshRadio() {
+  try {
+    const p = await (await api('/api/radio')).json();
+    $('#radio-src').textContent = PLAN_SRC[p.source] || p.source;
+    $('#radio-centres').textContent = 'radio 0 ' + MHZ(p.radios[0]) + ' · radio 1 ' + MHZ(p.radios[1]);
+    const cell = (text, cls) => { const td = document.createElement('td'); td.textContent = text; if (cls) td.className = cls; return td; };
+    const row = (name, c, mod) => {
+      const tr = document.createElement('tr');
+      if (!c.enable) tr.className = 'off';
+      tr.append(cell(name), cell(c.enable ? MHZ(c.hz) : 'off', 'mono'), cell(String(c.radio) + (c.if ? ' (' + (c.if > 0 ? '+' : '') + c.if / 1000 + ' kHz)' : '')), cell(mod));
+      return tr;
+    };
+    $('#radio-tx').textContent = (p.tx ? 'on' : 'off') + ' · local server ' + (p.lns_tx ? 'on' : 'off (dry run)')
+      + ' · cap ' + p.cap_dbm + ' dBm at the connector (ceiling ' + p.ceiling_dbm + ', antenna ' + (p.gain_db10 / 10).toFixed(1) + ' dBi)'
+      + (p.tx_built ? '' : ' · transmit not built in');
+    const f = $('#tx-form');
+    if (!f.dataset.dirty) { $('#tx-gain').value = (p.gain_db10 / 10).toFixed(1); $('#tx-on').checked = p.tx; $('#tx-lns').checked = p.lns_tx; }
+    $('#radio-rows').replaceChildren(
+      ...p.multisf.map((c, i) => row('Multi-SF ' + i, c, 'LoRa SF7–12, 125 kHz')),
+      row('LoRa std', p.std, 'LoRa SF' + p.std_sf + ', ' + p.std_bw_khz + ' kHz'),
+      row('FSK', p.fsk, 'FSK 50 kbit/s'),
+    );
+  } catch (e) { $('#radio-src').textContent = e.message; }
+}
+
 async function refreshDevices() {
   try {
     const list = await (await api('/api/devices')).json();
@@ -150,7 +178,7 @@ async function refreshStatus() {
     $('#dev-note').textContent = mode === 'ttn'
       ? 'These devices are used in hybrid and standalone modes. You can add them now and change the mode later.'
       : 'Up to 32 OTAA devices. EU868, class A.';
-    if (!$('#tab-config').hidden) refreshDevices();
+    if (!$('#tab-config').hidden) { refreshDevices(); refreshRadio(); }
     $('#ttn-eui').textContent = g.eui || '';
     $('#ttn-server').textContent = g.server ? 'wss://' + g.server + (g.port ? ':' + g.port : '') : '';
     $('#ttn-key').textContent = g.lns_key === 'set' ? 'Stored' : 'Not set';
@@ -249,6 +277,20 @@ document.addEventListener('DOMContentLoaded', () => {
       const r = await api('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'mode=' + m.value });
       el.textContent = (await r.text()).trim();
     } catch (e) { el.textContent = e.message; }
+  });
+  $('#tx-form').addEventListener('input', (ev) => { ev.currentTarget.dataset.dirty = '1'; });
+  $('#tx-form').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const body = new URLSearchParams({ gain: $('#tx-gain').value, tx: $('#tx-on').checked ? 'on' : 'off', lns_tx: $('#tx-lns').checked ? 'on' : 'off' });
+    if (!confirm('Save the transmit settings?')) return;
+    const el = $('#cfg-msg');
+    el.classList.remove('bad');
+    try {
+      const r = await api('/api/radio', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
+      el.textContent = (await r.text()).trim();
+      delete ev.target.dataset.dirty;
+      refreshRadio();
+    } catch (e) { el.textContent = e.message; el.classList.add('bad'); }
   });
   $('#lns-form').addEventListener('submit', async (ev) => {
     ev.preventDefault();

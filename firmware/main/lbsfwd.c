@@ -27,6 +27,7 @@
 #include <sys/time.h>
 
 #include "conc_hal.h"
+#include "radioplan.h"
 #include "eth.h"
 #include "esp_app_desc.h"
 #include "esp_check.h"
@@ -159,14 +160,30 @@ static void on_router_config(const char *json, size_t len)
         ESP_LOGW(TAG, "router_config not understood (%d)", (int)e);
         return;
     }
-    const bool radios = c.radio_hz[0] == CONC_EU868_RADIO0_HZ && c.radio_hz[1] == CONC_EU868_RADIO1_HZ;
-    ESP_LOGI(TAG, "router_config: region %s, %" PRIu32 "-%" PRIu32 " Hz, data rates %s, radios %s, channels 0x%02X",
+    ESP_LOGI(TAG, "router_config: region %s, %" PRIu32 "-%" PRIu32 " Hz, data rates %s, channels 0x%02X",
              c.region[0] != '\0' ? c.region : "-", c.freq_min, c.freq_max, c.drs_ok ? "EU868" : "NOT EU868",
-             radios ? "as ours" : "differ", (unsigned)c.multisf);
-    atomic_store(&s_plan_ok, c.drs_ok && radios);
-    if (!c.drs_ok || !radios) {
-        ESP_LOGW(TAG, "the server's channel plan differs from the radio's (EU868); the radio is not changed");
+             (unsigned)c.multisf);
+    /* ADR-0017: the server's channel plan (frequencies and channels only) becomes the
+     * radio's, if it is a valid EU868 plan; the radio restarts only when it differs. */
+    lwc_plan_t plan;
+    bool ok = c.drs_ok && lwc_lbs_router_plan(&c, &plan);
+    if (!ok) {
+        ESP_LOGW(TAG, "the server's channel plan is not usable here (EU868 checks): keeping the radio's");
+    } else {
+        bool changed = false;
+        const esp_err_t err = radioplan_store(&plan, RADIOPLAN_SERVER, &changed);
+        if (err == ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(TAG, "the server's channel plan failed on this radio before: keeping the radio's");
+            ok = false;
+        } else if (err != ESP_OK) {
+            ESP_LOGE(TAG, "storing the server's channel plan failed (%s)", esp_err_to_name(err));
+            ok = false;
+        } else if (changed) {
+            ESP_LOGW(TAG, "channel plan from the server: restarting the radio");
+            conc_hal_restart();
+        }
     }
+    atomic_store(&s_plan_ok, ok);
     if (s_retry_ms != RETRY_MIN_MS) {
         s_retry_ms = RETRY_MIN_MS;
         (void)esp_websocket_client_set_reconnect_timeout(s_ws, s_retry_ms);

@@ -14,6 +14,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "lwc/plan.h"
 #include "lwc/txpk.h"
 
 #ifdef __cplusplus
@@ -145,9 +146,22 @@ typedef struct {
     uint8_t multisf;       /**< bit i: chan_multiSF_i enabled */
     uint8_t chan_radio[8]; /**< chan_multiSF_i radio */
     int32_t chan_if[8];    /**< chan_multiSF_i IF offset, Hz */
+    bool have_sx1301;      /**< sx1301_conf[0] was present */
+    bool std_on;           /**< chan_Lora_std */
+    uint8_t std_radio;
+    int32_t std_if;
+    uint32_t std_bw_hz;
+    uint8_t std_sf;
+    bool fsk_on;           /**< chan_FSK */
+    uint8_t fsk_radio;
+    int32_t fsk_if;
 } lwc_lbs_router_config_t;
 
 lwc_lbs_err_t lwc_lbs_parse_router_config(const char *json, size_t len, lwc_lbs_router_config_t *out);
+
+/** The radio plan in a router_config (frequencies and channels only; ADR-0017).
+ *  False when it has no sx1301_conf or the plan fails lwc_plan_check. */
+bool lwc_lbs_router_plan(const lwc_lbs_router_config_t *c, lwc_plan_t *out);
 
 #ifdef __cplusplus
 }

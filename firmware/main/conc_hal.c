@@ -10,6 +10,8 @@
  * temperature, lgw_stop); not yet wired to the forwarder.
  */
 #include "conc_hal.h"
+#include <stdatomic.h>
+#include "radioplan.h"
 
 #include <inttypes.h>
 #include <string.h>
@@ -37,8 +39,6 @@ static const char *TAG = "conc_hal";
 #define HAL_TASK_PRIO 10
 #define HAL_TASK_CORE 1
 
-#define EU868_RADIO0_HZ CONC_EU868_RADIO0_HZ
-#define EU868_RADIO1_HZ CONC_EU868_RADIO1_HZ
 
 radio_stats_t g_radio_stats;
 
@@ -51,21 +51,27 @@ radio_stats_t g_radio_stats;
 #define BACKOFF_MAX_MS 60000U
 #define WALLCLOCK_VALID_S 1700000000LL /* after 2023-11: SNTP has set the clock */
 
-/* EU868 channel plan (Nebra global_conf.json.EU868): IF chains 0-7 multi-SF
- * 125 kHz, chain 8 LoRa std SF7 250 kHz, chain 9 FSK off. */
-static const struct {
-    uint8_t rf_chain;
-    int32_t if_hz;
-} k_multisf[8] = {
-    {1, -400000}, {1, -200000}, {1, 0},      {0, -400000},
-    {0, -200000}, {0, 0},       {0, 200000}, {0, 400000},
-};
+/* Channel plan (ADR-0017, radioplan.c): IF chains 0-7 multi-SF 125 kHz, chain
+ * 8 LoRa std, chain 9 FSK. Board settings (clock source, RSSI offset, radio
+ * type, TX chain) stay here. */
+static uint8_t bw_code_of(uint16_t khz)
+{
+    return khz == 500U ? BW_500KHZ : khz == 250U ? BW_250KHZ : BW_125KHZ;
+}
 
 static struct lgw_pkt_rx_s s_rx[RX_BATCH]; /* ~2.3 KB: static, not on the stack */
 static radio_pkt_t s_item;                 /* queue staging, copied by xQueueSend */
 static QueueHandle_t s_queue;
 
-static int configure_sx1301(void)
+static atomic_bool s_restart_req;
+static bool s_planned; /* radio task: the last stop was a requested restart */
+
+void conc_hal_restart(void)
+{
+    atomic_store(&s_restart_req, true);
+}
+
+static int configure_sx1301(const lwc_plan_t *pp)
 {
     struct lgw_conf_board_s board;
     memset(&board, 0, sizeof board);
@@ -76,12 +82,12 @@ static int configure_sx1301(void)
         return -1;
     }
 
-    const uint32_t rf_hz[2] = {EU868_RADIO0_HZ, EU868_RADIO1_HZ};
+    const lwc_plan_t plan = *pp;
     for (uint8_t chain = 0; chain < 2; chain++) {
         struct lgw_conf_rxrf_s rf;
         memset(&rf, 0, sizeof rf);
         rf.enable = true;
-        rf.freq_hz = rf_hz[chain];
+        rf.freq_hz = plan.radio_hz[chain];
         rf.rssi_offset = SX1257_RSSI_OFFSET;
         rf.type = LGW_RADIO_TYPE_SX1257;
         rf.tx_enable = (chain == 0) && CONFIG_GW_TX_ENABLE; /* Nebra: TX on radio_0 */
@@ -91,12 +97,12 @@ static int configure_sx1301(void)
         }
     }
 
-    for (uint8_t i = 0; i < 8; i++) {
+    for (uint8_t i = 0; i < LWC_PLAN_MULTISF; i++) {
         struct lgw_conf_rxif_s ifc;
         memset(&ifc, 0, sizeof ifc);
-        ifc.enable = true;
-        ifc.rf_chain = k_multisf[i].rf_chain;
-        ifc.freq_hz = k_multisf[i].if_hz;
+        ifc.enable = plan.multisf[i].enable;
+        ifc.rf_chain = plan.multisf[i].radio;
+        ifc.freq_hz = plan.multisf[i].if_hz;
         ifc.bandwidth = BW_125KHZ;
         ifc.datarate = DR_LORA_MULTI;
         if (lgw_rxif_setconf(i, ifc) != LGW_HAL_SUCCESS) {
@@ -107,15 +113,27 @@ static int configure_sx1301(void)
 
     struct lgw_conf_rxif_s std;
     memset(&std, 0, sizeof std);
-    std.enable = true;
-    std.rf_chain = 1;
-    std.freq_hz = -200000;
-    std.bandwidth = BW_250KHZ;
-    std.datarate = DR_LORA_SF7;
+    std.enable = plan.std.enable;
+    std.rf_chain = plan.std.radio;
+    std.freq_hz = plan.std.if_hz;
+    std.bandwidth = bw_code_of(plan.std_bw_khz);
+    std.datarate = (uint32_t)(1U << (plan.std_sf - 6U)); /* DR_LORA_SF7 = 0x02 ... SF12 = 0x40 */
     if (lgw_rxif_setconf(8, std) != LGW_HAL_SUCCESS) {
         ESP_LOGE(TAG, "lgw_rxif_setconf(8) failed");
         return -1;
     }
+    struct lgw_conf_rxif_s fsk;
+    memset(&fsk, 0, sizeof fsk);
+    fsk.enable = plan.fsk.enable;
+    fsk.rf_chain = plan.fsk.radio;
+    fsk.freq_hz = plan.fsk.if_hz;
+    fsk.bandwidth = BW_125KHZ;
+    fsk.datarate = 50000; /* EU868 DR7 */
+    if (lgw_rxif_setconf(9, fsk) != LGW_HAL_SUCCESS) {
+        ESP_LOGE(TAG, "lgw_rxif_setconf(9) failed");
+        return -1;
+    }
+    ESP_LOGI(TAG, "channel plan: radios %" PRIu32 "/%" PRIu32 " Hz", plan.radio_hz[0], plan.radio_hz[1]);
     return 0;
 }
 
@@ -203,6 +221,11 @@ static void receive_loop(void)
 {
     for (;;) {
         sv_beat(s_sv);
+        if (atomic_exchange(&s_restart_req, false)) {
+            ESP_LOGI(TAG, "restarting the radio for a new channel plan");
+            s_planned = true;
+            return;
+        }
         if (!conc_tx_service()) {
             ESP_LOGE(TAG, "TX path lost the concentrator: restarting it");
             return;
@@ -227,11 +250,24 @@ static void radio_task(void *arg)
     (void)arg;
     uint32_t backoff = BACKOFF_MIN_MS;
     s_sv = sv_register("radio", SV_BUDGET_MS);
+    static lwc_plan_t good; /* the last plan the radio started with */
+    bool have_good = false;
     for (;;) {
         sv_beat(s_sv);
-        if (conc_reset() == ESP_OK && configure_sx1301() == 0 && conc_tx_configure() == 0) {
+        lwc_plan_t plan;
+        radioplan_get(&plan);
+        if (lwc_plan_check(&plan) != LWC_PLAN_OK) {
+            ESP_LOGE(TAG, "channel plan rejected (%d): using the EU868 default", (int)lwc_plan_check(&plan));
+            lwc_plan_default_eu868(&plan);
+        }
+        bool started = false;
+        s_planned = false;
+        if (conc_reset() == ESP_OK && configure_sx1301(&plan) == 0 && conc_tx_configure() == 0) {
             const TickType_t t0 = xTaskGetTickCount();
             if (lgw_start() == LGW_HAL_SUCCESS) {
+                started = true;
+                good = plan;
+                have_good = true;
                 (void)conc_tx_after_start();
                 atomic_fetch_add(&g_radio_stats.starts, 1U);
                 ESP_LOGI(TAG, "lgw_start OK in %" PRIu32 " ms; receiving on EU868",
@@ -244,6 +280,13 @@ static void radio_task(void *arg)
             } else {
                 ESP_LOGE(TAG, "lgw_start failed; see DEBUG_HAL lines above");
             }
+        }
+        if (!started && have_good && !lwc_plan_equal(&plan, &good)) {
+            radioplan_reject_current(); /* a new plan the radio cannot use: the last good one, at once */
+            continue;
+        }
+        if (s_planned) {
+            continue; /* a requested restart: no backoff, not counted as a failure */
         }
         atomic_fetch_add(&g_radio_stats.restarts, 1U);
         ESP_LOGW(TAG, "concentrator restart in %u ms", (unsigned)backoff);
@@ -278,7 +321,9 @@ static void run_check(void)
         ESP_LOGE(TAG, "lgw_board_setconf failed");
         return;
     }
-    const uint32_t rf_hz[2] = {EU868_RADIO0_HZ, EU868_RADIO1_HZ};
+    lwc_plan_t plan;
+    radioplan_get(&plan);
+    const uint32_t rf_hz[2] = {plan.radio_hz[0], plan.radio_hz[1]};
     for (uint8_t chain = 0; chain < 2; chain++) {
         struct lgw_conf_rxrf_s rf;
         memset(&rf, 0, sizeof rf);

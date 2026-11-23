@@ -480,6 +480,48 @@ lwc_lbs_err_t lwc_lbs_dn_txpk(const lwc_lbs_dnmsg_t *d, uint8_t sess, lwc_txpk_t
 
 /* ---- router_config ---------------------------------------------------------- */
 
+typedef struct {
+    bool en;
+    int64_t radio, ifhz, freq, bw, sf;
+} chan_rd_t;
+
+static bool rd_chan2(lwc_jr_t *r, chan_rd_t *c)
+{
+    obj_t o;
+    const char *k;
+    size_t kn;
+    bool ok;
+    if (!obj_open(&o, r)) {
+        return false;
+    }
+    while (obj_next(&o, &k, &kn, &ok)) {
+        bool good = true;
+        if (lwc_jr_key_is(k, kn, "enable")) {
+            if (lwc_jr_word(r, "true")) {
+                c->en = true;
+            } else {
+                good = lwc_jr_word(r, "false");
+            }
+        } else if (lwc_jr_key_is(k, kn, "radio")) {
+            good = rd_range(r, 0, 1, &c->radio);
+        } else if (lwc_jr_key_is(k, kn, "if")) {
+            good = rd_range(r, -1000000, 1000000, &c->ifhz);
+        } else if (lwc_jr_key_is(k, kn, "freq")) {
+            good = rd_range(r, 0, UINT32_MAX, &c->freq);
+        } else if (lwc_jr_key_is(k, kn, "bandwidth")) {
+            good = rd_range(r, 0, 1000000, &c->bw);
+        } else if (lwc_jr_key_is(k, kn, "spread_factor")) {
+            good = rd_range(r, 0, 12, &c->sf);
+        } else {
+            good = lwc_jr_skip(r);
+        }
+        if (!good) {
+            return false;
+        }
+    }
+    return ok;
+}
+
 static bool rd_chan(lwc_jr_t *r, bool *en, int64_t *radio, int64_t *ifhz, int64_t *freq)
 {
     obj_t o;
@@ -532,6 +574,22 @@ static bool rd_sx1301(lwc_jr_t *r, lwc_lbs_router_config_t *c)
                 return false;
             }
             c->radio_hz[k[6] - '0'] = en ? (uint32_t)freq : 0U;
+        } else if (lwc_jr_key_is(k, kn, "chan_Lora_std") || lwc_jr_key_is(k, kn, "chan_FSK")) {
+            chan_rd_t ch = {0};
+            if (!rd_chan2(r, &ch)) {
+                return false;
+            }
+            if (k[5] == 'L') {
+                c->std_on = ch.en;
+                c->std_radio = (uint8_t)ch.radio;
+                c->std_if = (int32_t)ch.ifhz;
+                c->std_bw_hz = (uint32_t)ch.bw;
+                c->std_sf = (uint8_t)ch.sf;
+            } else {
+                c->fsk_on = ch.en;
+                c->fsk_radio = (uint8_t)ch.radio;
+                c->fsk_if = (int32_t)ch.ifhz;
+            }
         } else if (kn == 14U && memcmp(k, "chan_multiSF_", 13) == 0 && k[13] >= '0' && k[13] <= '7') {
             if (!rd_chan(r, &en, &radio, &ifhz, NULL)) {
                 return false;
@@ -635,6 +693,7 @@ lwc_lbs_err_t lwc_lbs_parse_router_config(const char *json, size_t len, lwc_lbs_
                 if (!rd_sx1301(&r, out)) {
                     return LWC_LBS_ERR_FIELD;
                 }
+                out->have_sx1301 = true;
                 while (lwc_jr_lit(&r, ',')) {
                     if (!lwc_jr_skip(&r)) {
                         return LWC_LBS_ERR_JSON;
@@ -653,3 +712,27 @@ lwc_lbs_err_t lwc_lbs_parse_router_config(const char *json, size_t len, lwc_lbs_
     }
     return is_rc ? LWC_LBS_OK : LWC_LBS_ERR_FIELD;
 }
+
+bool lwc_lbs_router_plan(const lwc_lbs_router_config_t *c, lwc_plan_t *out)
+{
+    if (c == NULL || out == NULL || !c->have_sx1301) {
+        return false;
+    }
+    lwc_plan_t p;
+    memset(&p, 0, sizeof p);
+    p.radio_hz[0] = c->radio_hz[0];
+    p.radio_hz[1] = c->radio_hz[1];
+    for (unsigned i = 0; i < LWC_PLAN_MULTISF; i++) {
+        p.multisf[i] = (lwc_plan_chan_t){(c->multisf & (1U << i)) != 0U, c->chan_radio[i], c->chan_if[i]};
+    }
+    p.std = (lwc_plan_chan_t){c->std_on, c->std_radio, c->std_if};
+    p.std_sf = c->std_on ? c->std_sf : 7U;
+    p.std_bw_khz = c->std_on ? (uint16_t)(c->std_bw_hz / 1000U) : 250U;
+    p.fsk = (lwc_plan_chan_t){c->fsk_on, c->fsk_radio, c->fsk_if};
+    if (lwc_plan_check(&p) != LWC_PLAN_OK) {
+        return false;
+    }
+    *out = p;
+    return true;
+}
+

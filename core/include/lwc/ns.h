@@ -11,6 +11,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "lwc/plan.h"
+
 #include "lwc/txpk.h"
 
 #ifdef __cplusplus
@@ -91,9 +93,15 @@ typedef struct {
     lwc_ns_link_t link[LWC_NS_MAX_DEVICES];
     uint32_t join_nonce; /* next JoinNonce: increases on every join (24 bit) */
     uint32_t next_addr;  /* DevAddr allocator */
+    uint32_t cflist_hz[5]; /* join-accept CFList, from the radio plan (lwc_ns_set_plan) */
 } lwc_ns_t;
 
+/** Empty table; the CFList of the default EU868 plan. */
 void lwc_ns_init(lwc_ns_t *ns);
+
+/** The CFList of new join-accepts follows `plan` (ADR-0017). Devices already
+ *  joined keep the channels of their join-accept until they join again. */
+void lwc_ns_set_plan(lwc_ns_t *ns, const lwc_plan_t *plan);
 
 typedef enum {
     LWC_NS_OK = 0,
