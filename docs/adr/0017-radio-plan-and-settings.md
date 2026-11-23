@@ -1,6 +1,6 @@
 # ADR-0017: One radio plan, from the server, with settings on the Config tab
 
-- Status: accepted (steps 1-4 built and tested on the board; step 5 next)
+- Status: accepted (steps 1-5 and the plan editor built and tested on the board)
 - Date: 2026-11-23
 
 ## Context
@@ -52,9 +52,20 @@ the plan coming from the server and stored for standalone and offline use.
     approval gate).
   - The Nebra gain table was made for EU868 cards: with another card the
     real output power is unknown. The card says so.
-- **Local RX1 delay and RX2** (frequency, data rate): stored per device at
-  its join (the device record gets a version and a migration); a change
-  applies to new joins only.
+- **Local RX1 delay and RX2** (frequency, data rate; `POST /api/radio`
+  rx1_delay, rx2_hz, rx2_dr; NVS `radio/rx1`, `radio/rx2hz`, `radio/rx2dr`):
+  sent in the join-accept (RxDelay, DLSettings RX2 data rate) and stored per
+  device, so a change applies to new joins only. The join-accept itself uses
+  the default RX2 (869.525 MHz, DR0): the device does not know the new values
+  yet. RX2 must be in an EU868 sub-band the radio may transmit in.
+  - Device record version 2 adds the three fields at the end; a version 1
+    record is converted at boot (field by field from a frozen copy of the
+    old layout, with the defaults) and written back. The `meta` record
+    (JoinNonce, DevAddr allocator) keeps its own version 1: bumping it would
+    reset the JoinNonce and reuse values.
+- **Plan editor** (Config tab, admin; `POST /api/radio/plan`: r0, r1,
+  m0..m7, std, fsk, or reset): stored as `local` and the radio restarts.
+  A connected network server's plan replaces it at the next connection.
 - **SX1301 only**: the SX1302 path is still a start-up check.
 
 ## Verification (2026-11-23, rev3 bench board)
@@ -73,6 +84,11 @@ the plan coming from the server and stored for standalone and offline use.
 | Gain 15 dBi: 16.1 - 15 = 1 dBm, held at the 0 dBm ceiling; radio restarts | pass |
 | Local transmit off: FiPy join logged as a dry run (in hybrid TTN answered it) | pass |
 | Gateway transmit off: local join-accepts refused (`TX_OFF`), no join | pass |
+| Step 5 migration: FiPy joined on version 1 firmware, new firmware flashed: "record version 1 -> 2"; FCnt 2-3 accepted without a new join; ACK at RX1 1 s received | pass |
+| RX1 2 s, RX2 DR3: join-accept carries them; ACK queued 1.98 s after the uplink and received; `/api/devices` shows them; kept after a reboot | pass |
+| RX settings out of range (delay 0): refused | pass |
+| Plan editor: 868.1 MHz removed, IF 450 kHz, std SF6: refused with the reason; FSK off: stored as local, radio restarted | pass |
+| In hybrid mode after a reboot TTN's plan replaces the local one (one restart); reset: built-in plan, radio restarted | pass |
 
 TTN's router_config (eu1, captured on the board) is in `test_lbs.c`.
 
@@ -85,4 +101,5 @@ TTN's router_config (eu1, captured on the board) is in `test_lbs.c`.
 3. Apply `router_config` (test vector: the real message captured from TTN);
    fallback to the last good plan; ADR-0016 updated.
 4. Transmit settings.
-5. Local RX1 delay and RX2 (device record version and migration).
+5. Local RX1 delay and RX2 (device record version and migration), and the
+   plan editor (built).
