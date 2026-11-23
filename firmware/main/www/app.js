@@ -221,6 +221,66 @@ function renderSystem() {
   }));
 }
 
+/* ---- overview: the gateway itself, and diagnostics to share ---------------- */
+const PSRAM_TOTAL = 32 * 1048576; /* ESP32-P4 module: 32 MB PSRAM */
+function copyable(text) {
+  const b = el('button', { type: 'button', class: 'ghost', text: 'Copy' });
+  b.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(text); b.textContent = 'Copied'; setTimeout(() => { b.textContent = 'Copy'; }, 2000); } catch (e) { toast('Copy failed: select the text instead.', true); }
+  });
+  return el('span', { class: 'copy' }, el('code', { text }), b);
+}
+function renderGateway() {
+  const o = S.ota || {}, r = S.radio || {}, f = S.faults || {}, g = S.ttn || {};
+  const ip = (v) => (v && v !== '-' ? v : 'Not connected');
+  $('#ov-gw-id').replaceChildren(
+    stat('Firmware', o.version || '–'),
+    stat('Image', '', IMAGE_STATE[o.state] || ['', o.state || '–']),
+    el('div', { class: 'stat' }, el('span', { text: 'Gateway EUI' }), g.eui ? copyable(g.eui) : el('b', { text: '–' })),
+    stat('Wi-Fi', ip(o.wifi)),
+    stat('Ethernet', ip(o.eth)),
+  );
+  const crashes = n(f.panic), wdt = n(f.wdt), brown = n(f.brownout);
+  $('#ov-gw-health').replaceChildren(
+    stat('Uptime', fmtUptime(r.uptime_s || 0)),
+    stat('Boots', String(n(f.boots))),
+    stat('Crashes', '', crashes ? ['warn', String(crashes)] : ['ok', 'None']),
+    stat('Watchdog resets', '', wdt ? ['warn', String(wdt)] : ['ok', 'None']),
+    stat('Brownouts', '', brown ? ['warn', String(brown)] : ['ok', 'None']),
+  );
+  const ih = n(r.heap_internal), imin = n(r.heap_internal_min), ps = n(r.heap_psram);
+  const stacks = Object.entries(S.stack_free || {}).sort((a, b) => n(a[1]) - n(b[1]));
+  const tight = stacks[0];
+  $('#ov-gw-res').replaceChildren(
+    stat('Internal RAM free', fmtKB(ih) + ' (lowest ' + fmtKB(imin) + ')', imin < 32768 ? ['warn', fmtKB(ih) + ', lowest ' + fmtKB(imin)] : null),
+    stat('PSRAM free', fmtKB(ps) + ' of 32 MB', ps / PSRAM_TOTAL),
+    ...(tight ? [stat('Tightest task stack', tight[0] + ' · ' + n(tight[1]) + ' B free', Math.min(1, n(tight[1]) / 8192), n(tight[1]) < 1024 ? 'bad' : n(tight[1]) < 2048 ? 'warn' : '')] : []),
+    stat('Status LED', r.led || '–'),
+  );
+}
+
+/* Everything the status, radio and device APIs report, as one JSON object. Numbers
+ * are numbers; with `redact`, EUIs and IPv4 addresses are replaced. No keys: the
+ * APIs never return them. */
+async function diagnostics(redact) {
+  const typed = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, v !== '' && !isNaN(+v) && !/^0[0-9]/.test(v) && !/^[0-9A-Fa-f]{16}$/.test(v) ? +v : v]));
+  const out = { generated: new Date().toISOString(), page: location.host, status: {} };
+  for (const [k, v] of Object.entries(S)) out.status[k] = typed(v);
+  try { out.radio = await (await api('/api/radio')).json(); } catch (e) { out.radio = 'unavailable: ' + e.message; }
+  try {
+    out.devices = (await (await api('/api/devices')).json()).map((d) => ({ name: d.name, dev_eui: d.dev_eui, mac: d.mac, joined: d.joined, answered: d.answered,
+      fcnt_up: d.fcnt_up, uplinks: d.uplinks, seen_s: d.seen_s, rssi: d.rssi, snr: d.snr, sf: d.sf, battery: d.battery, margin: d.margin,
+      tx_power: d.tx_power, adr: d.adr, rx1_delay_s: d.rx1_delay_s, rx2_hz: d.rx2_hz, rx2_dr: d.rx2_dr }));
+  } catch (e) { out.devices = 'unavailable: ' + e.message; }
+  let s = JSON.stringify(out, null, 2);
+  if (redact) {
+    s = s.replace(/\b[0-9A-Fa-f]{16}\b/g, 'XXXXXXXXXXXXXXXX')
+      .replace(/\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/g, 'x.x.x.x')
+      .replace(new RegExp(location.hostname.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), 'gateway.local');
+  }
+  return s;
+}
+
 /* ---- header pill ------------------------------------------------------------ */
 function renderPill() {
   const g = S.ttn || {}, r = S.radio || {};
@@ -307,6 +367,7 @@ async function refreshStatus() {
     for (const [g, line] of Object.entries(s)) S[g] = kv(line);
     renderPill();
     renderOverview();
+    renderGateway();
     renderSetup();
     renderSystem();
   } catch (e) { /* shown at the next login */ }
@@ -735,6 +796,15 @@ document.addEventListener('DOMContentLoaded', () => {
     try { await api('/api/reboot', { method: 'POST' }); waitRestart('Restarting the gateway'); } catch (e) { toast(e.message, true); }
   });
   $('#busy-close').addEventListener('click', () => { $('#busy').hidden = true; });
+  $('#diag-copy').addEventListener('click', async (ev) => {
+    const b = ev.currentTarget;
+    try {
+      await navigator.clipboard.writeText(await diagnostics($('#diag-redact').checked));
+      toast($('#diag-redact').checked ? 'Diagnostics copied, EUIs and IP addresses hidden.' : 'Diagnostics copied, including EUIs and IP addresses.');
+      b.textContent = 'Copied';
+      setTimeout(() => { b.textContent = 'Copy diagnostics'; }, 2000);
+    } catch (e) { toast('Copy failed: ' + e.message, true); }
+  });
   $('#busy-reload').addEventListener('click', () => location.reload());
   $('#cd-del').addEventListener('click', () => { if (confirm('Erase the stored crash dump?')) act('/api/coredump', 'DELETE'); });
 
