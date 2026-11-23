@@ -323,3 +323,15 @@ pre#logs { max-height: 60vh; overflow: auto; margin: 12px 0 0; padding: 12px 14p
 @media (max-width: 860px) { .split.two { grid-template-columns: 1fr; } }
 .inline .switch { display: flex; align-items: center; gap: 8px; color: var(--ink); font-size: 14px; }
 .button.small { padding: 4px 10px; font-size: 13px; }
+
+/* ---- restart overlay ------------------------------------------------------ */
+.busy { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 16px; background: color-mix(in srgb, var(--ground) 82%, transparent); backdrop-filter: blur(2px); }
+.busy-card { width: min(420px, 100%); text-align: center; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-box); padding: 28px 24px 22px; }
+.busy-card h2 { margin: 14px 0 6px; }
+.busy-card p { margin: 0 0 6px; }
+.busy-card .actions { justify-content: center; }
+.spinner { width: 40px; height: 40px; margin: 0 auto; border-radius: 50%; border: 3px solid var(--line); border-top-color: var(--signal); animation: spin .9s linear infinite; }
+.busy.stopped .spinner { animation: none; border-color: var(--line); }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: pulse 1.6s ease-in-out infinite; } }
+@keyframes pulse { 50% { opacity: .35; } }

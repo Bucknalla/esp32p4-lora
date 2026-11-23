@@ -540,6 +540,64 @@ async function refreshLogs() {
   } catch (e) { pre.textContent = e.message; }
 }
 
+/* ---- restart: wait for the gateway to go down and come back, then reload ---- */
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/* /api/claim needs no session, so it answers before anyone logs in again */
+async function alive() {
+  const c = new AbortController();
+  const t = setTimeout(() => c.abort(), 2500);
+  try {
+    const r = await fetch('/api/claim', { headers: H, signal: c.signal, cache: 'no-store' });
+    return r.ok;
+  } catch (e) {
+    return false;
+  } finally {
+    clearTimeout(t);
+  }
+}
+let busyTimer;
+function busy(title, status, done) {
+  const box = $('#busy');
+  $('#busy-title').textContent = title;
+  $('#busy-status').textContent = status;
+  box.classList.toggle('stopped', !!done);
+  $('#busy-actions').hidden = !done;
+  box.hidden = false;
+}
+/* opts.downWithin: how long a restart may take to start (an OTA install downloads first);
+ * opts.notDown: what to say when it never stopped. */
+async function waitRestart(title, opts = {}) {
+  const downWithin = opts.downWithin || 30000, upWithin = opts.upWithin || 120000;
+  const t0 = Date.now();
+  clearInterval(busyTimer);
+  busyTimer = setInterval(() => { $('#busy-time').textContent = Math.round((Date.now() - t0) / 1000) + ' s'; }, 1000);
+  $('#busy-time').textContent = '0 s';
+  busy(title, opts.first || 'Waiting for the gateway to stop…');
+  let down = false;
+  while (Date.now() - t0 < downWithin) {
+    if (!(await alive())) { down = true; break; }
+    await sleep(1000);
+  }
+  if (!down) {
+    clearInterval(busyTimer);
+    busy(title, opts.notDown || 'The gateway did not restart.', true);
+    return;
+  }
+  busy(title, 'Restarting. Waiting for the gateway to come back…');
+  const t1 = Date.now();
+  while (Date.now() - t1 < upWithin) {
+    await sleep(1500);
+    if (await alive()) {
+      busy(title, 'Back online. Reloading the page…');
+      await sleep(600);
+      location.reload();
+      return;
+    }
+  }
+  clearInterval(busyTimer);
+  busy(title, 'Not back after ' + Math.round(upWithin / 60000) + ' minutes. Check the gateway’s power and network, then reload.', true);
+}
+
 /* ---- tabs -------------------------------------------------------------------- */
 const TABS = ['overview', 'setup', 'devices', 'radio', 'system'];
 function openTab(name) {
@@ -591,7 +649,11 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#mode-save').addEventListener('click', async () => {
     const m = $('#mode-pick input:checked');
     if (!m || !confirm('Change to ' + MODES[m.value] + '? The gateway restarts (about 15 s).')) return;
-    try { toast(await post('/api/settings', 'mode=' + m.value)); delete $('#mode-pick').dataset.dirty; } catch (e) { toast(e.message, true); }
+    try {
+      const msg = await post('/api/settings', 'mode=' + m.value);
+      delete $('#mode-pick').dataset.dirty;
+      if (/restart/.test(msg)) waitRestart('Switching to ' + MODES[m.value]); else toast(msg);
+    } catch (e) { toast(e.message, true); }
   });
   $('#ttn-copy').addEventListener('click', async (ev) => {
     try { await navigator.clipboard.writeText($('#ttn-eui').textContent); ev.target.textContent = 'Copied'; setTimeout(() => { ev.target.textContent = 'Copy'; }, 2000); }
@@ -611,9 +673,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (![...body.keys()].length) { toast('Nothing changed: pick another server or enter a new key.'); return; }
     if (!confirm('Save the network server settings and restart the gateway?')) return;
     try {
-      toast(await post('/api/settings', body));
+      const msg = await post('/api/settings', body);
       ev.target.lns_key.value = '';
       delete $('#srv-pick').dataset.dirty;
+      if (/restart/.test(msg)) waitRestart('Connecting to ' + srvName(p ? p.host : (S.ttn || {}).server)); else toast(msg);
     } catch (e) { toast(e.message, true); }
   });
 
@@ -659,8 +722,20 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#prev').addEventListener('change', refreshLogs);
   $('#warn-only').addEventListener('change', refreshLogs);
   const act = async (path, method) => { try { toast((await (await api(path, { method })).text()).trim() || 'Done.'); } catch (e) { toast(e.message, true); } };
-  $('#ota-check').addEventListener('click', () => { if (confirm('Download and install the latest release if it differs from this one? The gateway restarts.')) act('/api/ota/check', 'POST'); });
-  $('#reboot').addEventListener('click', () => { if (confirm('Restart the gateway now?')) act('/api/reboot', 'POST'); });
+  $('#ota-check').addEventListener('click', async () => {
+    if (!confirm('Download and install the latest release if it differs from this one? The gateway restarts.')) return;
+    try {
+      await api('/api/ota/check', { method: 'POST' });
+      waitRestart('Installing the latest release', { downWithin: 180000, upWithin: 180000, first: 'Checking for a release and downloading it…',
+        notDown: 'No restart: this gateway already runs the latest release, or the download failed. The log says which.' });
+    } catch (e) { toast(e.message, true); }
+  });
+  $('#reboot').addEventListener('click', async () => {
+    if (!confirm('Restart the gateway now?')) return;
+    try { await api('/api/reboot', { method: 'POST' }); waitRestart('Restarting the gateway'); } catch (e) { toast(e.message, true); }
+  });
+  $('#busy-close').addEventListener('click', () => { $('#busy').hidden = true; });
+  $('#busy-reload').addEventListener('click', () => location.reload());
   $('#cd-del').addEventListener('click', () => { if (confirm('Erase the stored crash dump?')) act('/api/coredump', 'DELETE'); });
 
   /* claim: with no admin password yet, the first LAN visit sets it (ADR-0014) */
@@ -690,7 +765,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const role = sessionStorage.getItem('role');
   if (role) show(true, role); else show(false);
   setInterval(() => {
-    if ($('#app').hidden) return;
+    if ($('#app').hidden || !$('#busy').hidden) return; /* no polling while it restarts */
     const t = current();
     if (t !== 'system') refreshStatus();
     if (t === 'devices') refreshDevices();
