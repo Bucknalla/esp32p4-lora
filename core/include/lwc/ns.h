@@ -83,6 +83,7 @@ typedef struct {
     uint8_t pend_power;
     uint8_t adr_wait;    /* uplinks to wait before asking again */
     uint8_t adr_nacks;
+    uint8_t dr_kept;     /* accepted data-rate changes in a row that the device did not use */
 } lwc_ns_link_t;
 
 typedef struct {

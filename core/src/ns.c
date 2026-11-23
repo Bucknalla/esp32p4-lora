@@ -275,6 +275,22 @@ static void adr_rx(lwc_ns_link_t *l, const lwc_mac_up_t *m, const lwc_ns_uplink_
             }
             l->tx_power = l->pend_power;
             l->adr_nacks = 0;
+            /* The answer normally comes on an uplink sent at the new rate. A
+             * device that accepts a rate and keeps a lower one (its application
+             * fixes the rate) would get the same request on every uplink. The
+             * first time: wait a full history. The second time in a row: ask
+             * for no higher rate than it uses, until it joins again. */
+            if (rx->bw_khz == 125U && rx->sf >= 7U && rx->sf <= 12U) {
+                if ((uint8_t)(12U - rx->sf) < l->pend_dr) {
+                    if (++l->dr_kept >= 2U) {
+                        l->dr_cap = (uint8_t)(13U - rx->sf); /* 1 + the rate it uses */
+                    } else {
+                        l->adr_wait = LWC_NS_ADR_HISTORY;
+                    }
+                } else {
+                    l->dr_kept = 0;
+                }
+            }
         } else {
             /* Refused (the device applies none of it): ask for less next time. */
             if ((m->link_adr_status & LWC_MAC_ADR_POWER_ACK) == 0U && l->pend_power > l->tx_power) {
