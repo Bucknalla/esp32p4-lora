@@ -222,3 +222,19 @@ lgw_stop OK; HAL task stack: 15516 of 24576 bytes free
 - 31 min soak of the dev build: no abort or reset, every TTN stat
   acknowledged, three update checks (each "update available", not
   installed), least free stack 2.7 KB (main task).
+
+### Update: first valid frames, card variant, desk tests (2026-11-23)
+
+- A Pycom FiPy on the desk (raw LoRa, SF7, 2 dBm, about 1 m) gave the first
+  CRC-ok frames: all three on radio B (868.1/.3/.5 MHz) and on radio A
+  (867.1/.5/.9 MHz). The receive chain works.
+- The signal was about 60 dB too weak: RSSI -118 dBm, SNR -3 dB at 2 dBm;
+  -95 dBm, SNR +9 dB at 14 dBm. Both radios alike, so the loss was in the
+  common path. The card label shows **GL5712-UX**: the US915 variant. Its
+  filters pass 902-928 MHz and cut 868 MHz. This also explains the earlier
+  CRC-bad frames at about -119 dBm.
+- Kept for desk tests (a few metres at most). For range: a GL5712-EX or
+  another EU868 SX1301 card (no software change), or an SX1302 card (the
+  sx1302_hal path needs its receive loop first).
+- The ADR-0015 desk tests (join, uplinks, ACK, ADR, DevStatus, hybrid,
+  reboot) are listed in that ADR's Verification section.
