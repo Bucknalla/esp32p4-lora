@@ -84,6 +84,7 @@ esp_err_t gwmode_set(lwc_mode_t m)
 
 #define KEY_LBS_HOST "lbs_host"
 #define KEY_LBS_KEY "lbs_key"
+#define KEY_LBS_PORT "lbs_port"
 
 esp_err_t gwmode_eui(char out[17])
 {
@@ -128,6 +129,17 @@ void gwmode_lbs_host(char out[GW_LBS_HOST_MAX])
     }
 }
 
+uint16_t gwmode_lbs_port(void)
+{
+    uint16_t p = 0;
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
+        (void)nvs_get_u16(h, KEY_LBS_PORT, &p);
+        nvs_close(h);
+    }
+    return p != 0U ? p : (uint16_t)CONFIG_GW_LBS_PORT;
+}
+
 bool gwmode_lbs_key_set(void)
 {
     char k[GW_LBS_KEY_MAX];
@@ -170,7 +182,7 @@ static bool key_ok(const char *s)
     return true;
 }
 
-esp_err_t gwmode_set_lbs(const char *host, const char *key)
+esp_err_t gwmode_set_lbs(const char *host, uint16_t port, const char *key)
 {
     ESP_RETURN_ON_FALSE(host == NULL || host_ok(host), ESP_ERR_INVALID_ARG, TAG, "host");
     ESP_RETURN_ON_FALSE(key == NULL || key_ok(key), ESP_ERR_INVALID_ARG, TAG, "key");
@@ -179,6 +191,9 @@ esp_err_t gwmode_set_lbs(const char *host, const char *key)
     esp_err_t err = ESP_OK;
     if (host != NULL) {
         err = nvs_set_str(h, KEY_LBS_HOST, host);
+    }
+    if (err == ESP_OK && port != 0U) {
+        err = nvs_set_u16(h, KEY_LBS_PORT, port);
     }
     if (err == ESP_OK && key != NULL) {
         if (key[0] == '\0') {

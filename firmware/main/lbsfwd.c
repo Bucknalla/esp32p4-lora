@@ -458,7 +458,8 @@ static void lbs_task(void *arg)
             }
         }
     }
-    snprintf(uri, sizeof uri, "wss://%s:%d/traffic/eui-%s", s_host, CONFIG_GW_LBS_PORT, eui);
+    const uint16_t port = gwmode_lbs_port();
+    snprintf(uri, sizeof uri, "wss://%s:%u/traffic/eui-%s", s_host, (unsigned)port, eui);
     snprintf(hdr, sizeof hdr, "Authorization: %s%s\r\n", strncmp(key, "Bearer ", 7) == 0 ? "" : "Bearer ", key);
     memset(key, 0, sizeof key);
 
@@ -485,7 +486,7 @@ static void lbs_task(void *arg)
         esp_websocket_client_start(s_ws) != ESP_OK) {
         ESP_LOGE(TAG, "WebSocket client start failed");
     } else {
-        ESP_LOGI(TAG, "connecting to wss://%s:%d (gateway EUI from the base MAC)", s_host, CONFIG_GW_LBS_PORT);
+        ESP_LOGI(TAG, "connecting to wss://%s:%u (gateway EUI from the base MAC)", s_host, (unsigned)port);
     }
 
     int64_t next_feed = 0;
