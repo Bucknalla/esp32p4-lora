@@ -336,3 +336,10 @@ pre#logs { max-height: 60vh; overflow: auto; margin: 12px 0 0; padding: 12px 14p
 @media (prefers-reduced-motion: reduce) { .spinner { animation: pulse 1.6s ease-in-out infinite; } }
 @keyframes pulse { 50% { opacity: .35; } }
 .step-head .state { color: var(--muted); font-size: 14px; }
+
+/* ---- overview: the gateway itself ---------------------------------------- */
+.gw-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 4px 32px; }
+.gw-grid > div { min-width: 0; }
+.stat code { justify-self: end; word-break: break-all; }
+.stat .copy { display: inline-flex; gap: 6px; align-items: center; justify-self: end; }
+.stat .copy button { padding: 2px 8px; font-size: 12px; }
