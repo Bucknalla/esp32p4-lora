@@ -15,6 +15,12 @@ CONFIG_SPIRAM_SPEED_200M=y
 
 # RTOS
 CONFIG_FREERTOS_HZ=1000
+# Per-task run time and stack size for the System tab (/api/tasks). Run time
+# in esp_timer microseconds, 64-bit so it does not wrap.
+CONFIG_FREERTOS_USE_TRACE_FACILITY=y
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
+CONFIG_FREERTOS_RUN_TIME_COUNTER_TYPE_U64=y
+CONFIG_FREERTOS_RUN_TIME_STATS_USING_ESP_TIMER=y
 
 # Recovery and diagnostics (ADR-0009)
 # Log ring in PSRAM .noinit: kept across software resets and panics.

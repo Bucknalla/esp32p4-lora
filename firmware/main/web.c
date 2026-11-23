@@ -30,6 +30,7 @@
 #include "ota.h"
 #include "lbsfwd.h"
 #include "radioplan.h"
+#include "tasks.h"
 #include "conc_hal.h"
 #include "radio_pkt.h"
 #include "sdkconfig.h"
@@ -615,6 +616,31 @@ static esp_err_t api_radio_get(httpd_req_t *req)
     return httpd_resp_send(req, out, (ssize_t)n);
 }
 
+/* Every task: stack size and least free stack, core, priority, run time. */
+static esp_err_t api_tasks(httpd_req_t *req)
+{
+    esp_err_t r;
+    if (!gate(req, LWC_ROLE_VIEWER, &r)) {
+        return r;
+    }
+    enum { TASKS_JSON_MAX = 8192 };
+    char *out = heap_caps_malloc(TASKS_JSON_MAX, MALLOC_CAP_DEFAULT);
+    if (out == NULL) {
+        return send_status(req, "500 Internal Server Error", "no memory\n");
+    }
+    const size_t n = tasks_json(out, TASKS_JSON_MAX);
+    if (n == 0U) {
+        free(out);
+        return send_status(req, "500 Internal Server Error", "tasks\n");
+    }
+    common_headers(req);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    r = httpd_resp_send(req, out, (ssize_t)n);
+    free(out);
+    return r;
+}
+
 /* gain=<dBi, one decimal>, tx=on|off, lns_tx=on|off (admin). A gain change
  * restarts the radio (the gain table is cut at start). */
 static bool parse_db10(const char *s, int16_t *out)
@@ -1031,6 +1057,7 @@ esp_err_t web_start(void)
         {.uri = "/api/radio", .method = HTTP_GET, .handler = api_radio_get},
         {.uri = "/api/radio", .method = HTTP_POST, .handler = api_radio_post},
         {.uri = "/api/radio/plan", .method = HTTP_POST, .handler = api_radio_plan},
+        {.uri = "/api/tasks", .method = HTTP_GET, .handler = api_tasks},
         {.uri = "/api/devices", .method = HTTP_POST, .handler = api_devices_post},
         {.uri = "/api/devices/delete", .method = HTTP_POST, .handler = api_devices_delete},
     };

@@ -32,6 +32,18 @@ check, `lgw_start` (~3.2 s) and the concentrator recovery backoff (up to
   the fault path. Counters per reset category (boots, panic, watchdog,
   brownout, software, other) live in NVS, one write per boot. The console
   `STATUS` command prints them.
+- **Task view (`tasks.c`, `GET /api/tasks`, System tab).** Every FreeRTOS
+  task, including the ESP-IDF and ESP-Hosted ones: core, priority, stack
+  size, least free stack, and run time in esp_timer microseconds
+  (`configGENERATE_RUN_TIME_STATS`, 64-bit counter). The stack size comes from
+  the task snapshot's `pxEndOfStack` minus `pxStackBase`, as `TaskStatus_t`
+  has no size when stacks grow down. The page takes the difference between
+  two reads for CPU %, and 100 % minus each idle task's share for the core
+  load. Headroom is Low at 75 % used or under 512 B free, Critical at 90 % or
+  under 256 B.
+  A task that has used the FPU shows about 128 B less: the RISC-V port takes
+  the FPU save area from the low end of its stack, so the figure stays the
+  usable stack.
 - **Log ring (`logbuf.c`, core `lwc_logring_*`).** An `esp_log` hook copies
   every log line into a 64 KB ring in PSRAM `.noinit` memory and pushes the
   written bytes from cache to PSRAM (`esp_cache_msync`). At boot the
@@ -72,3 +84,5 @@ check, `lgw_start` (~3.2 s) and the concentrator recovery backoff (up to
 | Soak, normal dev build, 31 min (two OTA poll cycles) | no abort, no reset; 60/60 TTN stats acknowledged; internal heap 348 KB free (min 298 KB); abnormal-reset run cleared after 10 min |
 | Least free stack with the log hook | console 2884 B (of 4096), main 2708 B, pktfwd 5132 B, ota 7108 B, radio 7288 B |
 | Reboot-loop guard: `TEST_STALL` six times in a row | stalls 1–5 aborted (coredump, reboot); the 6th logged "abnormal run 5: not aborting" and the gateway kept running; a web UI reboot cleared it. Coredump downloaded over HTTPS decodes (`esp-coredump info_corefile -t raw`) |
+| `/api/tasks` (2026-11-23, standalone mode) | 25 tasks, 2.7 KB of JSON. Stack sizes match the code (radio 16384, ota 10240, lns 6144, led 3072). Over 8.7 s: core 0 about 10 % busy, core 1 about 2 %; httpd 6 %, sdio_read 2 %, radio 1 % |
+| `/api/tasks` in hybrid mode after a FiPy join, 6 uplinks and a confirmed downlink (2026-11-23) | 27 tasks, all OK. Both cores about 1.4 % busy. websocket_task 2.5 of 7 KB, lbs 1.6 of 6 KB, lns 1.5 of 5.9 KB, radio 9.0 of 15.9 KB (radio and lns lost 128 B to the FPU save area). Lowest internal RAM 188 KB |

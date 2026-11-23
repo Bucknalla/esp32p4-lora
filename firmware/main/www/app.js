@@ -213,11 +213,69 @@ function renderSystem() {
     stat('Lowest since boot', fmtKB(imin), null),
     stat('PSRAM free', fmtKB(n(r.heap_psram)) + ' of 32 MB', n(r.heap_psram) / PSRAM_TOTAL),
   );
-  const st = Object.entries(S.stack_free || {}).sort((a, b) => n(a[1]) - n(b[1]));
-  $('#sys-stack').replaceChildren(...st.map(([task, free]) => {
-    const b = n(free);
-    return stat(task, b + ' B', Math.min(1, b / 8192), b < 1024 ? 'bad' : b < 2048 ? 'warn' : '');
-  }));
+}
+
+/* ---- system: every task, its stack and CPU (/api/tasks) ---------------------- */
+let tasksPrev = null, tasksSort = 'cpu', tasksAll = false;
+const TASKS_SHORT = 8; /* rows before "Show all" */
+/* Headroom from the share of its own stack a task has used, with a floor in
+ * bytes (an interrupt on top of the deepest call still needs some). */
+function headroom(t) {
+  const used = t.stack ? 1 - t.free / t.stack : 0;
+  return used >= 0.9 || t.free < 256 ? ['bad', 'Critical'] : used >= 0.75 || t.free < 512 ? ['warn', 'Low'] : ['ok', 'OK'];
+}
+const fmtCPU = (v) => (v == null ? '–' : v >= 9.95 ? Math.round(v) + ' %' : v >= 0.05 ? v.toFixed(1) + ' %' : '0 %');
+const fmtKiB = (b) => (b / 1024).toFixed(b % 1024 ? 1 : 0);
+async function refreshTasks() {
+  let d;
+  try { d = await (await api('/api/tasks')).json(); } catch (e) { return; }
+  const prev = tasksPrev;
+  tasksPrev = d;
+  const dt = prev ? d.now - prev.now : 0;
+  const before = new Map(prev ? prev.tasks.map((t) => [t.name, t.run]) : []);
+  /* CPU: share of one core since the last read, so it needs two reads */
+  for (const t of d.tasks) t.cpu = dt > 0 && before.has(t.name) ? Math.max(0, (t.run - before.get(t.name)) / dt * 100) : null;
+  const cores = [];
+  for (let c = 0; c < d.cores; c++) {
+    const idle = d.tasks.find((t) => t.idle && t.core === c);
+    const load = idle && idle.cpu != null ? Math.max(0, Math.min(100, 100 - idle.cpu)) : null;
+    const m = el('div', { class: 'meter' }, el('span', { class: load >= 90 ? 'bad' : load >= 70 ? 'warn' : '' }));
+    m.firstChild.style.width = (load || 0) + '%';
+    cores.push(el('div', { class: 'core' }, el('span', { text: 'Core ' + c }), el('b', { text: load == null ? 'Measuring…' : Math.round(load) + ' % busy' }), m));
+  }
+  $('#sys-cores').replaceChildren(...cores);
+  if (!prev) setTimeout(refreshTasks, 1500); /* a quick second read for the first CPU figures */
+  renderTasks();
+}
+function renderTasks() {
+  if (!tasksPrev) return;
+  const used = (t) => (t.stack ? 1 - t.free / t.stack : 0);
+  const by = {
+    name: (a, b) => a.name.localeCompare(b.name),
+    cpu: (a, b) => (b.cpu || 0) - (a.cpu || 0) || a.name.localeCompare(b.name),
+    stack: (a, b) => used(b) - used(a) || a.free - b.free,
+  };
+  for (const b of $$('#sys-tasks .sort')) b.classList.toggle('on', b.dataset.sort === tasksSort);
+  /* the idle tasks are the core meters */
+  const all = tasksPrev.tasks.filter((t) => !t.idle).sort(by[tasksSort]);
+  const more = $('#tasks-more');
+  more.hidden = all.length <= TASKS_SHORT;
+  more.textContent = tasksAll ? 'Show fewer' : 'Show all ' + all.length + ' tasks';
+  const rows = (tasksAll ? all : all.slice(0, TASKS_SHORT)).map((t) => {
+    const h = headroom(t);
+    const m = el('div', { class: 'meter' }, el('span', { class: h[0] === 'ok' ? '' : h[0] }));
+    m.firstChild.style.width = used(t) * 100 + '%';
+    return el('tr', {},
+      el('td', {}, el('b', { text: t.name })),
+      el('td', { class: 'num', text: fmtCPU(t.cpu) }),
+      el('td', { class: 'use' }, el('div', {}, t.stack ? m : null,
+        el('span', { class: 'sub', text: t.stack ? fmtKiB(t.stack - t.free) + ' of ' + fmtKiB(t.stack) + ' KB' : t.free + ' B never used' }))),
+      /* only a problem gets a chip */
+      el('td', {}, h[0] === 'ok' ? el('span', { class: 'sub', text: h[1] }) : el('span', { class: 'chip dot ' + h[0], text: h[1] })),
+      el('td', { class: 'num', text: t.core < 0 ? 'Any' : String(t.core) }),
+      el('td', { class: 'num', text: String(t.prio) }));
+  });
+  $('#sys-tasks tbody').replaceChildren(...rows);
 }
 
 /* ---- overview: the gateway itself, and diagnostics to share ---------------- */
@@ -247,6 +305,7 @@ async function diagnostics(redact) {
   const typed = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, v !== '' && !isNaN(+v) && !/^0[0-9]/.test(v) && !/^[0-9A-Fa-f]{16}$/.test(v) ? +v : v]));
   const out = { generated: new Date().toISOString(), page: location.host, status: {} };
   for (const [k, v] of Object.entries(S)) out.status[k] = typed(v);
+  try { out.tasks = await (await api('/api/tasks')).json(); } catch (e) { out.tasks = 'unavailable: ' + e.message; }
   try { out.radio = await (await api('/api/radio')).json(); } catch (e) { out.radio = 'unavailable: ' + e.message; }
   try {
     out.devices = (await (await api('/api/devices')).json()).map((d) => ({ name: d.name, dev_eui: d.dev_eui, mac: d.mac, joined: d.joined, answered: d.answered,
@@ -650,7 +709,7 @@ function openTab(name) {
   refreshStatus();
   if (name === 'devices' || name === 'setup') refreshDevices();
   if (name === 'radio') refreshRadio();
-  if (name === 'system') refreshLogs();
+  if (name === 'system') { refreshLogs(); tasksPrev = null; refreshTasks(); }
 }
 const current = () => (TABS.find((t) => !$('#tab-' + t).hidden) || 'overview');
 
@@ -821,4 +880,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (t !== 'system') refreshStatus();
     if (t === 'devices') refreshDevices();
   }, 10000);
+  setInterval(() => { if (!$('#app').hidden && $('#busy').hidden && current() === 'system') refreshTasks(); }, 5000);
+  for (const b of $$('#sys-tasks .sort')) b.addEventListener('click', () => { tasksSort = b.dataset.sort; renderTasks(); });
+  $('#tasks-more').addEventListener('click', () => { tasksAll = !tasksAll; renderTasks(); });
 });

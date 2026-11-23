@@ -316,8 +316,22 @@ pre#logs { max-height: 60vh; overflow: auto; margin: 12px 0 0; padding: 12px 14p
 .stat .chip { justify-self: end; }
 .stat.dim { color: var(--muted); }
 .panel .empty-note { color: var(--muted); font-size: 14px; margin: 0; }
-.stacks { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 4px 24px; }
-.stacks .stat { margin-bottom: 8px; }
+.cores { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 4px 24px; margin-bottom: 4px; }
+.core { display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: 0 12px; }
+.core > span { color: var(--muted); font-size: 13px; }
+.core .meter { grid-column: 1 / -1; height: 10px; }
+th.num, td.num { text-align: right; }
+th .sort { all: unset; cursor: pointer; border-radius: 4px; }
+th .sort:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+th .sort.on { color: var(--ink); }
+th .sort.on::after { content: " \2193"; }
+#sys-tasks th, #sys-tasks td { white-space: nowrap; }
+#sys-tasks td { padding-top: 7px; padding-bottom: 7px; }
+@media (max-width: 600px) { #sys-tasks td.use .meter { flex-basis: 64px; } }
+#sys-tasks td.use > div { display: flex; align-items: center; gap: 10px; }
+#sys-tasks td.use .meter { flex: 0 0 110px; margin: 0; height: 6px; }
+#sys-tasks .sub { color: var(--muted); font-size: 13px; }
+#tasks-more { margin: -6px 0 8px; }
 .meter > span.bad { background: var(--bad); }
 .split.two { grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); }
 @media (max-width: 860px) { .split.two { grid-template-columns: 1fr; } }
