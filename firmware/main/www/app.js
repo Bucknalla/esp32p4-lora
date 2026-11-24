@@ -121,6 +121,9 @@ function renderOverview() {
   const notes = [];
   if (upNeeded && g.lns_key === 'none') notes.push(notice('warn', 'alert', 'No API key: the gateway cannot connect to ' + srvName(g.server) + '.', gotoBtn('setup', 'Add the key')));
   else if (upNeeded && !up) notes.push(notice('warn', 'alert', 'Not connected to ' + srvName(g.server) + ': frames are not forwarded.', gotoBtn('setup', 'Check setup')));
+  const mq = S.mqtt || {};
+  if (mq.state === 'refused') notes.push(notice('warn', 'alert', 'The MQTT broker refused the user or password: nothing reaches Home Assistant.', gotoBtn('setup', 'Check setup')));
+  else if (mq.state === 'connecting' || mq.state === 'no_host') notes.push(notice('warn', 'alert', 'Not connected to the MQTT broker: uplinks are not published.', gotoBtn('setup', 'Check setup')));
   if (lb && lb.plan === 'differs') notes.push(notice('warn', 'alert', 'The network server sent a channel plan this radio cannot use: the radio keeps its own.', gotoBtn('radio', 'Open Radio')));
   if (o.state && o.state !== 'valid') notes.push(notice('warn', 'alert', 'New firmware on trial: it rolls back unless its health check passes.'));
   if (run > 0) notes.push(notice('warn', 'alert', run + ' crash or watchdog reset(s) in a row.', gotoBtn('system', 'Open System')));
@@ -379,6 +382,37 @@ function renderSetup() {
   $('#dev-note').textContent = mode === 'ttn'
     ? 'These devices are served in hybrid and standalone modes. You can add them now and change the mode later.'
     : 'Up to 32 OTAA devices, EU868, class A.';
+  renderMqtt();
+}
+
+/* MQTT step (ADR-0018). The form shows the stored settings until edited. */
+function renderMqtt() {
+  const q = S.mqtt || {};
+  const st = q.state || 'off';
+  if (st === 'connected') stepState('#step-mqtt', 'done', 'Connected to ' + q.host, 'ok');
+  else if (st === 'refused') stepState('#step-mqtt', 'todo', 'Broker refused the user or password', 'bad');
+  else if (st === 'connecting') stepState('#step-mqtt', 'todo', 'Connecting to ' + q.host, 'warn');
+  else if (st === 'no_host') stepState('#step-mqtt', 'todo', 'No broker set', 'warn');
+  else if (q.on === 'on') stepState('#step-mqtt', 'todo', 'Restart to connect', 'warn');
+  else stepState('#step-mqtt', 'skip', 'Optional');
+  const chip = $('#mqtt-state');
+  const C = { connected: ['ok', 'Connected to ' + q.host], refused: ['bad', 'Refused: check the user and password'],
+    connecting: ['warn', 'Connecting to ' + q.host + '…'], no_host: ['warn', 'No broker set'] };
+  const [cc, ct] = C[st] || (q.on === 'on' ? ['warn', 'Saved: restart to connect'] : ['', 'Off']);
+  chip.className = 'chip dot ' + cc;
+  chip.textContent = ct + (st === 'connected' ? ', ' + n(q.published) + ' published' + (n(q.dropped) ? ', ' + n(q.dropped) + ' dropped' : '') : '');
+  const f = $('#mqtt-form');
+  if (!f.dataset.dirty && q.state) {
+    $('#mqtt-on').checked = q.on === 'on';
+    $('#mqtt-host').value = q.host && q.host !== '-' ? q.host : '';
+    $('#mqtt-port').value = q.port || 1883;
+    $('#mqtt-user').value = q.user && q.user !== '-' ? q.user : '';
+    $('#mqtt-gwid').value = q.gw_id || '';
+    $('#mqtt-expire').value = q.expire_s != null ? q.expire_s : 3600;
+    f.mqtt_pass.placeholder = q.pass === 'set' ? 'Leave empty to keep the stored password' : 'Not set';
+  }
+  const id = $('#mqtt-gwid').value || q.gw_id || '<gateway id>';
+  $('#mqtt-topics').textContent = 'lora/' + id + '/status, lora/' + id + '/<DevEUI>/up';
 }
 
 /* The server picker: TTN presets (port 8887) or another host and port; the
@@ -778,6 +812,30 @@ document.addEventListener('DOMContentLoaded', () => {
       ev.target.lns_key.value = '';
       delete $('#srv-pick').dataset.dirty;
       if (/restart/.test(msg)) waitRestart('Connecting to ' + srvName(p ? p.host : (S.ttn || {}).server)); else toast(msg);
+    } catch (e) { toast(e.message, true); }
+  });
+
+  $('#mqtt-form').addEventListener('input', (ev) => { ev.currentTarget.dataset.dirty = '1'; renderMqtt(); });
+  $('#mqtt-form').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const f = ev.target, q = S.mqtt || {};
+    const body = new URLSearchParams();
+    const on = $('#mqtt-on').checked;
+    if (on && !f.mqtt_host.value.trim()) { toast('Enter the broker address.', true); return; }
+    if (!f.checkValidity()) { f.reportValidity(); return; }
+    body.set('mqtt', on ? 'on' : 'off');
+    body.set('mqtt_host', f.mqtt_host.value.trim());
+    body.set('mqtt_port', f.mqtt_port.value || '1883');
+    body.set('mqtt_user', f.mqtt_user.value.trim());
+    if (f.mqtt_pass.value) body.set('mqtt_pass', f.mqtt_pass.value);
+    if (f.mqtt_gw_id.value !== q.gw_id) body.set('mqtt_gw_id', f.mqtt_gw_id.value);
+    body.set('mqtt_expire', f.mqtt_expire.value || '0');
+    if (!confirm('Save the MQTT settings and restart the gateway?')) return;
+    try {
+      const msg = await post('/api/settings', body);
+      f.mqtt_pass.value = '';
+      delete f.dataset.dirty;
+      if (/restart/.test(msg)) waitRestart(on ? 'Connecting to the MQTT broker' : 'Restarting'); else toast(msg);
     } catch (e) { toast(e.message, true); }
   });
 
