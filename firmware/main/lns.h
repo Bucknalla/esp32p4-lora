@@ -25,6 +25,9 @@ lwc_ns_err_t lns_add(uint64_t dev_eui, uint64_t join_eui, const uint8_t app_key[
                      const char *name);
 lwc_ns_err_t lns_remove(uint64_t dev_eui);
 
+/** DevEUIs and names of the local devices (for MQTT discovery); returns the count. */
+size_t lns_device_names(uint64_t *euis, char (*names)[LWC_NS_NAME_MAX + 1U], size_t max);
+
 /** JSON array of devices (no keys) into `out`; returns its length. */
 size_t lns_devices_json(char *out, size_t cap);
 

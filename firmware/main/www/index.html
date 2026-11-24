@@ -84,7 +84,7 @@
     <!-- Setup: the configuration sequence -->
     <div id="tab-setup" class="tab" hidden>
       <h1>Set up the gateway</h1>
-      <p class="lead">Three steps. Each one shows whether it is done.</p>
+      <p class="lead">Each step shows whether it is done. The last step, Home Assistant, is optional.</p>
       <ol class="steps">
         <li class="step" id="step-mode">
           <div class="step-head"><span class="marker" aria-hidden="true"></span><h2>Choose how the gateway works</h2><span class="state"></span></div>
@@ -164,6 +164,32 @@
           <div class="step-body">
             <p id="dev-summary"></p>
             <button type="button" class="ghost" data-goto="devices">Open Devices</button>
+          </div>
+        </li>
+
+        <li class="step" id="step-mqtt">
+          <div class="step-head"><span class="marker" aria-hidden="true"></span><h2>Send data to Home Assistant</h2><span class="state"></span></div>
+          <div class="step-body">
+            <p>The gateway publishes each uplink of your devices to an MQTT broker, such as the Mosquitto app in Home Assistant. Home Assistant finds the gateway and each device by itself (MQTT discovery).</p>
+            <p><span id="mqtt-state" class="chip dot"></span></p>
+            <form class="admin" id="mqtt-form" autocomplete="off">
+              <label class="switch"><input type="checkbox" id="mqtt-on" name="on"><span class="track" aria-hidden="true"></span><span>Publish to MQTT<small>Uplinks and joins of your own devices, and the gateway's online state</small></span></label>
+              <div class="grid-form">
+                <label>Broker <input name="mqtt_host" id="mqtt-host" maxlength="63" pattern="[A-Za-z0-9.\-]+" placeholder="homeassistant.local"></label>
+                <label>Port <input name="mqtt_port" id="mqtt-port" type="number" min="1" max="65535" placeholder="1883"></label>
+                <label>User <input name="mqtt_user" id="mqtt-user" maxlength="63" pattern="[!-~]+" autocomplete="off"></label>
+                <label>Password <input name="mqtt_pass" type="password" maxlength="63" placeholder="Leave empty to keep the stored password" autocomplete="new-password"></label>
+              </div>
+              <details class="more"><summary>Topics and timing</summary>
+                <div class="grid-form">
+                  <label>Gateway id <input name="mqtt_gw_id" id="mqtt-gwid" maxlength="31" pattern="[a-z0-9_]+"></label>
+                  <label>Sensor timeout <span class="unit"><input name="mqtt_expire" id="mqtt-expire" type="number" min="0" max="604800" step="60"> s</span></label>
+                </div>
+                <p class="note">Topics: <code id="mqtt-topics"></code>. Do not change the gateway id once Home Assistant has the gateway: it would add it again as a new device. Sensor timeout: Home Assistant shows a device's values as unavailable after this long without an uplink (about twice its uplink interval; 0 = never).</p>
+              </details>
+              <p class="note">Plain MQTT (no TLS): use it on your own network only. The password is stored on the gateway and never shown again.</p>
+              <div class="actions"><button type="submit" class="primary">Save and restart</button></div>
+            </form>
           </div>
         </li>
       </ol>

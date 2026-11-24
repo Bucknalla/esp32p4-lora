@@ -39,6 +39,7 @@
 #include "radio_pkt.h"
 #include "radio_tx.h"
 #include "sdkconfig.h"
+#include "mqttha.h"
 #include "sv.h"
 
 static bool lns_tx(void)
@@ -367,12 +368,31 @@ static void describe(const lwc_ns_dl_t *dl, char *out, size_t cap)
 }
 
 /* Returns true when the frame was handled here (not to be forwarded). */
+/* Radio fields of an MQTT event (ADR-0018). */
+static void ev_radio(mqttha_ev_t *ev, const radio_pkt_t *p, const lwc_ns_dev_t *d)
+{
+    memset(ev, 0, sizeof *ev);
+    ev->dev_eui = d->dev_eui;
+    memcpy(ev->name, d->name, sizeof ev->name);
+    ev->name[sizeof ev->name - 1U] = '\0';
+    ev->dev_addr = d->dev_addr;
+    ev->rssi = p->rssi;
+    ev->snr = p->lsnr;
+    ev->sf = p->sf;
+    ev->bw_khz = p->bw_khz;
+    ev->freq_hz = p->freq_hz;
+    ev->time_unix_s = p->time_unix_us >= 0 ? p->time_unix_us / 1000000 : -1;
+    ev->port = -1;
+}
+
 static bool handle(const radio_pkt_t *p)
 {
     if (p->stat != 1) {
         return false;
     }
     static uint8_t acc[40];
+    static mqttha_ev_t ev;
+    bool post = false;
     static lwc_ns_uplink_t up;
     static lwc_ns_dl_t dl;
     char e[17];
@@ -411,10 +431,18 @@ static bool handle(const radio_pkt_t *p)
             atomic_fetch_add(&s_joins, 1U);
             ESP_LOGI(TAG, "join: %s (%s) DevAddr %08" PRIX32 ", RSSI %d SNR %.1f", eui_str(eui, e),
                      s_ns.dev[idx].name, s_ns.dev[idx].dev_addr, p->rssi, (double)p->lsnr);
+            if (handled && err == ESP_OK) {
+                ev_radio(&ev, p, &s_ns.dev[idx]);
+                ev.kind = MQTTHA_JOIN;
+                post = true;
+            }
             xSemaphoreGive(s_lock);
             if (err == ESP_OK) {
                 /* the device learns its windows from this frame: it uses the defaults for it */
                 send_down(p, acc, alen, LWC_NS_JOIN_DELAY_US, LWC_NS_RX2_FREQ_HZ, 0, "join-accept", eui);
+                if (post) {
+                    mqttha_post(&ev);
+                }
             } else {
                 ESP_LOGE(TAG, "join not answered: storing the device failed (%s)", esp_err_to_name(err));
             }
@@ -461,6 +489,17 @@ static bool handle(const radio_pkt_t *p)
                     send = false;
                 }
             }
+            if (r == LWC_NS_UP_OK) {
+                /* copied now: `up` is wiped below */
+                ev_radio(&ev, p, &s_ns.dev[up.idx]);
+                ev.kind = MQTTHA_UP;
+                ev.fcnt = up.fcnt;
+                ev.confirmed = up.confirmed;
+                ev.port = up.has_port ? (int16_t)up.port : -1;
+                ev.len = (uint8_t)(up.len <= sizeof ev.data ? up.len : sizeof ev.data);
+                memcpy(ev.data, up.payload, ev.len);
+                post = true;
+            }
             const uint64_t eui = s_ns.dev[up.idx].dev_eui;
             const uint32_t rx1_us = lwc_ns_rx1_delay_us(&s_ns.dev[up.idx]);
             const uint32_t rx2_hz = s_ns.dev[up.idx].rx2_hz != 0U ? s_ns.dev[up.idx].rx2_hz : LWC_NS_RX2_FREQ_HZ;
@@ -471,6 +510,10 @@ static bool handle(const radio_pkt_t *p)
                 char what[128];
                 describe(&dl, what, sizeof what);
                 send_down(p, dl.frame, dl.len, rx1_us, rx2_hz, rx2_dr, what, eui);
+            }
+            if (post) {
+                mqttha_post(&ev); /* after the answer is queued: never delays it */
+                memset(ev.data, 0, sizeof ev.data);
             }
             return handled;
         } else if (r == LWC_NS_UP_REPLAY) {
@@ -585,8 +628,32 @@ lwc_ns_err_t lns_remove(uint64_t dev_eui)
     char e[17];
     if (r == LWC_NS_OK) {
         ESP_LOGI(TAG, "device %s removed", eui_str(dev_eui, e));
+        static mqttha_ev_t ev; /* web server task; one request at a time */
+        memset(&ev, 0, sizeof ev);
+        ev.kind = MQTTHA_REMOVED;
+        ev.dev_eui = dev_eui;
+        mqttha_post(&ev);
     }
     return r;
+}
+
+size_t lns_device_names(uint64_t *euis, char (*names)[LWC_NS_NAME_MAX + 1U], size_t max)
+{
+    if (s_lock == NULL) {
+        return 0;
+    }
+    size_t n = 0;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    for (size_t i = 0; i < LWC_NS_MAX_DEVICES && n < max; i++) {
+        if (s_ns.dev[i].used) {
+            euis[n] = s_ns.dev[i].dev_eui;
+            memcpy(names[n], s_ns.dev[i].name, LWC_NS_NAME_MAX + 1U);
+            names[n][LWC_NS_NAME_MAX] = '\0';
+            n++;
+        }
+    }
+    xSemaphoreGive(s_lock);
+    return n;
 }
 
 static size_t put(char *out, size_t cap, size_t o, const char *fmt, ...) __attribute__((format(printf, 4, 5)));

@@ -9,6 +9,7 @@
 #include "board.h"
 #include "gwmode.h"
 #include "lns.h"
+#include "mqttha.h"
 #include "conc.h"
 #include "conc_hal.h"
 #include "lbsfwd.h"
@@ -206,6 +207,11 @@ void app_main(void)
     err = lns_start(s_rx_queue, &fwd_q);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "local network server: %s", esp_err_to_name(err));
+    }
+    /* MQTT to Home Assistant (ADR-0018): events from the local server. */
+    err = mqttha_start();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "MQTT: %s", esp_err_to_name(err));
     }
     QueueHandle_t up_q = gwmode() == LWC_MODE_TTN ? s_rx_queue : fwd_q;
     /* Upstream link (ADR-0016): LoRa Basics Station. */
