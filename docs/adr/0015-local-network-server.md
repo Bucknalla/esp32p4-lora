@@ -196,14 +196,15 @@ near the FiPy's limit (SNR -7 dB), so some were lost; SF9 was reliable.
 | Hybrid boot | device loaded from NVS, local server and TTN link up | pass |
 | TTN boot | device loaded, local server off, TTN link up | pass |
 | Remove a device | logged, record erased | pass |
-| Join on air | Pycom FiPy (LoRaWAN 1.0.0 stack), desk build at 0 dBm (below) | pass |
+| Join on air | Pycom FiPy (firmware 1.20.1.r2, LoRaWAN 1.0.2 stack when checked on 2026-11-24), desk build at 0 dBm (below) | pass |
 | Uplinks, confirmed uplink and ACK, repeat after a lost ACK | FiPy | pass |
 | DevStatusReq/Ans | FiPy: battery shown. Margins seen: 26 and -30 dB at a downlink SNR near -7 to -9 dB (they look like SNR x 4, cut to 6 bits); shown as sent | pass |
 | ADR power on air | FiPy accepted LinkADRReq and lowered its power (RSSI -94 to -111 dBm); a lost answer waits 20 uplinks | pass |
 | ADR, device keeps its own rate | FiPy with a fixed DR: was one request per uplink; now a wait of 20 uplinks, and a cap at the rate it uses after the second time (desk run with the first form of the fix: 2 requests in 12 uplinks) | pass (fixed) |
-| ADR data-rate change on air | the FiPy either fixed its rate or already sent at DR5 | not yet |
+| ADR data-rate change on air | FiPy (firmware 1.20.1.r2) joined at DR0 with ADR on: first uplink SF12 at SNR 7.2 dB, LinkADRReq for DR5 in its downlink, next uplink at SF7 (2026-11-24) | pass |
 | Session after a gateway reboot | FiPy sent FCnt 4-6 with no new join; downlink counter skipped 16 | pass |
 | Hybrid: local device not forwarded | FiPy frames handled locally, nothing of it sent to TTN | pass |
 | Wall clock in standalone mode | SNTP started only with the forwarder: no clock after a cold boot; now started in every mode | pass (fixed) |
-| RX2 fallback, DeviceTimeReq, LinkCheckReq | the FiPy firmware cannot send these, and RX1 was never refused | not yet |
+| RX2 fallback, DeviceTimeReq, LinkCheckReq | the FiPy firmware (1.20.1.r2) has no call to send these, and RX1 was never refused | not yet |
 | TTN downlinks after the `conc_tx.c` change | TTN join-accepts, data downlinks and ACKs over Basics Station (ADR-0016 Verification) | pass |
+| 5 h run, hybrid (2026-11-24) | FiPy uplink every 5 min, ADR on, every 6th confirmed: 60 uplinks, 17 downlinks. Free internal RAM 225,059 B at the start, 224,935 B at the end, level for the last 4 h; PSRAM unchanged; lowest 172 KB (one dip near 2 h, with a new `ota` stack peak: probably the update check's TLS handshake). No reset, TTN link up throughout; largest stack use `radio` 9.0 of 15.9 KB | pass |
