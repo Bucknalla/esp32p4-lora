@@ -17,8 +17,16 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     (void)lwc_lbs_msgtype(json, size, &t);
     static lwc_lbs_dnmsg_t d;
     if (lwc_lbs_parse_dnmsg(json, size, &d) == LWC_LBS_OK) {
-        if (d.len == 0U || d.len > sizeof d.pdu || (!d.rx1 && !d.rx2) || d.xtime <= 0 || d.rx_delay > 15U) {
+        if (d.len == 0U || d.len > sizeof d.pdu || (!d.rx1 && !d.rx2) || (!d.asap && d.xtime <= 0) || d.rx_delay > 15U ||
+            (d.asap && (d.dclass != 2U || d.rx1 || !d.rx2))) {
             __builtin_trap();
+        }
+        if (d.asap) {
+            static lwc_txpk_t na, nb;
+            if (lwc_lbs_dn_txpk_now(&d, 0xFFFFF000U, &na, &nb) == LWC_LBS_OK &&
+                (na.size != d.len || nb.size != d.len || nb.tmst - na.tmst != LWC_LBS_ASAP_RETRY_US)) {
+                __builtin_trap();
+            }
         }
         static lwc_txpk_t a, b;
         const uint8_t sess = (uint8_t)((uint64_t)d.xtime >> 48);

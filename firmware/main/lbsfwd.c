@@ -204,7 +204,7 @@ static void on_dnmsg(const char *json, size_t len)
     static lwc_lbs_dnmsg_t d;
     lwc_lbs_err_t e = lwc_lbs_parse_dnmsg(json, len, &d);
     if (e != LWC_LBS_OK) {
-        ESP_LOGW(TAG, "dnmsg refused: %s", e == LWC_LBS_ERR_UNSUPPORTED ? "class B or unsolicited class C" : "malformed");
+        ESP_LOGW(TAG, "dnmsg refused: %s", e == LWC_LBS_ERR_UNSUPPORTED ? "class B (no GPS) or no time to answer" : "malformed");
         atomic_fetch_add(&s_refused, 1U);
         return;
     }
@@ -212,7 +212,14 @@ static void on_dnmsg(const char *json, size_t len)
     memset(&s_req, 0, sizeof s_req);
     xSemaphoreTake(s_lock, portMAX_DELAY);
     check_session();
-    e = lwc_lbs_dn_txpk(&d, s_sess, &s_req.pk, &alt);
+    if (d.asap) {
+        /* class C "immediately" (ChirpStack): the next free time on RX2, from the counter */
+        e = atomic_load(&g_radio_counter_ok)
+                ? lwc_lbs_dn_txpk_now(&d, (uint32_t)atomic_load(&g_radio_counter), &s_req.pk, &alt)
+                : LWC_LBS_ERR_SESSION;
+    } else {
+        e = lwc_lbs_dn_txpk(&d, s_sess, &s_req.pk, &alt);
+    }
     size_t slot = PENDING;
     if (e == LWC_LBS_OK) {
         for (size_t i = 0; i < PENDING; i++) {
@@ -231,7 +238,8 @@ static void on_dnmsg(const char *json, size_t len)
     xSemaphoreGive(s_lock);
     if (e != LWC_LBS_OK) {
         ESP_LOGW(TAG, "dnmsg diid %" PRId64 " refused: %s", d.diid,
-                 e == LWC_LBS_ERR_SESSION ? "xtime from an earlier radio session" : "bad window");
+                 e == LWC_LBS_ERR_SESSION ? (d.asap ? "the radio is restarting" : "xtime from an earlier radio session")
+                                          : "bad window");
         atomic_fetch_add(&s_refused, 1U);
         return;
     }
@@ -249,7 +257,8 @@ static void on_dnmsg(const char *json, size_t len)
     }
     atomic_fetch_add(&s_downs, 1U);
     ESP_LOGI(TAG, "downlink diid %" PRId64 " (token %u): %" PRIu32 " Hz SF%u, %u B%s", d.diid, (unsigned)s_req.token,
-             s_req.pk.freq_hz, s_req.pk.sf, s_req.pk.size, s_req.alt.on ? ", RX2 as fallback" : "");
+             s_req.pk.freq_hz, s_req.pk.sf, s_req.pk.size,
+             d.asap ? ", class C now (second try 1 s later)" : s_req.alt.on ? ", RX2 as fallback" : "");
 }
 
 static void on_message(const char *json, size_t len)
