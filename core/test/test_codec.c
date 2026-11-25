@@ -1,3 +1,8 @@
+/* clock_gettime under -std=c11 on glibc (on macOS it would hide Darwin types) */
+#if !defined(__APPLE__)
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "lwc/codec.h"
 
 #include <stdio.h>
