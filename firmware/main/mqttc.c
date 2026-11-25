@@ -11,6 +11,12 @@
  * On every connect: lora/<gw>/status "online" (the last will is "offline"),
  * and a subscription to lora/<gw>/+/down (clean session).
  *
+ * Downlink results (lora/<gw>/<node>/down/result, QoS 1, not retained) come
+ * through a second, smaller queue, so a flood of bad downlinks never takes
+ * room from uplink events; refusals may fill only half of it, so results of
+ * real downlinks keep room. Like events, they are dropped while the broker is
+ * away.
+ *
  * The password is kept in NVS and given only to the client; it is never
  * logged or returned by the API.
  */
@@ -19,10 +25,12 @@
 #include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/time.h>
 
 #include "esp_check.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
 #include "freertos/queue.h"
@@ -46,6 +54,7 @@ static const char *TAG = "mqtt";
 
 #define DEFAULT_PORT 1883U
 #define QUEUE_LEN 16
+#define RES_QUEUE_LEN 8
 #define TASK_STACK 4096
 #define TASK_PRIO 2
 #define TASK_CORE 0
@@ -60,12 +69,14 @@ typedef enum {
 } state_t;
 
 static QueueHandle_t s_q;
+static QueueHandle_t s_rq; /* downlink results */
+static QueueSetHandle_t s_qs;
 static esp_mqtt_client_handle_t s_client;
 static mqttc_cfg_t s_cfg;
 static char s_pass[MQTTC_PASS_MAX];
 static char s_status_topic[LWC_MQTT_TOPIC_MAX];
 static char s_down_sub[LWC_MQTT_TOPIC_MAX]; /* lora/<gw_id>/+/down */
-static atomic_uint s_down_ok, s_down_bad;
+static atomic_uint s_down_ok, s_down_bad, s_results, s_res_dropped;
 static atomic_int s_state = ST_OFF;
 static atomic_bool s_connected_ev;
 static atomic_uint s_published, s_dropped, s_failed, s_connects;
@@ -251,11 +262,41 @@ static void handle(const mqttc_ev_t *ev)
     (void)publish(topic, json, n, 0, false);
 }
 
+static void handle_result(const mqttc_res_t *r)
+{
+    static char topic[LWC_MQTT_TOPIC_MAX], json[384];
+    char node[17];
+    lwc_mqtt_node_id(r->dev_eui, node);
+    struct timeval tv;
+    const bool clock = gettimeofday(&tv, NULL) == 0 && tv.tv_sec > 1700000000; /* set by SNTP */
+    const lwc_mqtt_result_t m = {.node = node,
+                                 .dev_eui = r->dev_eui,
+                                 .id = r->id,
+                                 .state = (lwc_mqtt_dl_state_t)r->state,
+                                 .reason = r->reason,
+                                 .port = r->port,
+                                 .len = r->len,
+                                 .confirmed = r->confirmed,
+                                 .has_fcnt = r->has_fcnt,
+                                 .fcnt_down = r->fcnt_down,
+                                 .tx = r->tx,
+                                 .time_unix_s = clock ? (int64_t)tv.tv_sec : -1};
+    const size_t n = lwc_mqtt_result_json(&m, json, sizeof json);
+    if (n == 0U || !lwc_mqtt_topic(topic, sizeof topic, s_cfg.gw_id, node, "down/result")) {
+        atomic_fetch_add(&s_failed, 1U);
+        return;
+    }
+    if (publish(topic, json, n, 1, false)) {
+        atomic_fetch_add(&s_results, 1U);
+    }
+}
+
 static void mqtt_task(void *arg)
 {
     (void)arg;
     const sv_id_t sv = sv_register("mqtt", 30000);
     static mqttc_ev_t ev;
+    static mqttc_res_t res;
     for (;;) {
         sv_beat(sv);
         if (atomic_exchange(&s_connected_ev, false)) {
@@ -265,8 +306,11 @@ static void mqtt_task(void *arg)
                 ESP_LOGW(TAG, "downlinks: subscribe failed");
             }
         }
-        if (xQueueReceive(s_q, &ev, pdMS_TO_TICKS(1000)) == pdTRUE) {
+        const QueueSetMemberHandle_t m = xQueueSelectFromSet(s_qs, pdMS_TO_TICKS(1000));
+        if (m == s_q && xQueueReceive(s_q, &ev, 0) == pdTRUE) {
             handle(&ev);
+        } else if (m == s_rq && xQueueReceive(s_rq, &res, 0) == pdTRUE) {
+            handle_result(&res);
         }
     }
 }
@@ -285,11 +329,9 @@ static void down_in(const esp_mqtt_event_t *e)
     char node[17];
     lwc_mqtt_node_id(eui, node);
     const char *why = lwc_mqtt_down_parse(e->data, (size_t)e->data_len, &d);
-    if (why == NULL && d.confirmed) {
-        why = "confirmed downlinks are not supported yet";
-    }
+    const bool parsed = why == NULL;
     if (why == NULL) {
-        const esp_err_t err = lns_queue_down(eui, d.port, d.data, d.len);
+        const esp_err_t err = lns_queue_down(eui, d.port, d.data, d.len, d.confirmed, d.id);
         why = err == ESP_OK                  ? NULL
               : err == ESP_ERR_NOT_FOUND     ? "no such local device"
               : err == ESP_ERR_NOT_SUPPORTED ? "local transmit is off"
@@ -298,13 +340,33 @@ static void down_in(const esp_mqtt_event_t *e)
               : err == ESP_ERR_NO_MEM        ? "the device's queue is full (4)"
                                              : "busy";
     }
+    mqttc_res_t r = {.dev_eui = eui,
+                     .state = why != NULL ? LWC_MQTT_DL_REFUSED : LWC_MQTT_DL_QUEUED,
+                     .reason = why, /* a string literal (core or above) */
+                     .port = parsed ? (int16_t)d.port : -1,
+                     .len = parsed ? (int16_t)d.len : -1,
+                     .confirmed = d.confirmed};
+    memcpy(r.id, d.id, sizeof r.id);
     if (why != NULL) {
         atomic_fetch_add(&s_down_bad, 1U);
-        ESP_LOGW(TAG, "downlink for %s refused: %s", node, why);
+        /* at most one line a second: a flood of bad messages must not push
+         * everything else out of the log ring */
+        static int64_t last_us = -1000000;
+        static unsigned quiet;
+        const int64_t now = esp_timer_get_time();
+        if (now - last_us >= 1000000) {
+            ESP_LOGW(TAG, "downlink for %s refused: %s (%u more refused since the last line)", node, why, quiet);
+            last_us = now;
+            quiet = 0;
+        } else {
+            quiet++;
+        }
     } else {
         atomic_fetch_add(&s_down_ok, 1U);
-        ESP_LOGI(TAG, "downlink for %s queued: port %u, %u B", node, d.port, (unsigned)d.len);
+        ESP_LOGI(TAG, "downlink for %s queued: port %u, %u B%s", node, d.port, (unsigned)d.len,
+                 d.confirmed ? ", confirmed" : "");
     }
+    mqttc_result(&r);
     memset(&d, 0, sizeof d);
 }
 
@@ -378,7 +440,11 @@ esp_err_t mqttc_start(void)
                         ESP_ERR_INVALID_ARG, TAG, "gateway id");
     (void)snprintf(s_down_sub, sizeof s_down_sub, "lora/%s/+/down", s_cfg.gw_id); /* gw_id checked above */
     s_q = xQueueCreateWithCaps(QUEUE_LEN, sizeof(mqttc_ev_t), MALLOC_CAP_SPIRAM);
-    ESP_RETURN_ON_FALSE(s_q != NULL, ESP_ERR_NO_MEM, TAG, "queue");
+    s_rq = xQueueCreateWithCaps(RES_QUEUE_LEN, sizeof(mqttc_res_t), MALLOC_CAP_SPIRAM);
+    s_qs = xQueueCreateSet(QUEUE_LEN + RES_QUEUE_LEN);
+    ESP_RETURN_ON_FALSE(s_q != NULL && s_rq != NULL && s_qs != NULL, ESP_ERR_NO_MEM, TAG, "queue");
+    ESP_RETURN_ON_FALSE(xQueueAddToSet(s_q, s_qs) == pdPASS && xQueueAddToSet(s_rq, s_qs) == pdPASS, ESP_ERR_NO_MEM,
+                        TAG, "queue set");
     static char client_id[24];
     char eui[17] = "";
     (void)gwmode_eui(eui);
@@ -424,6 +490,19 @@ void mqttc_post(const mqttc_ev_t *ev)
     }
 }
 
+void mqttc_result(const mqttc_res_t *r)
+{
+    if (s_rq == NULL || r == NULL) {
+        return;
+    }
+    /* refusals come from anyone who can publish: they may fill only half the
+     * queue, so results of real downlinks (sent, acked, ...) keep room */
+    const bool flood = r->state == LWC_MQTT_DL_REFUSED && uxQueueMessagesWaiting(s_rq) >= RES_QUEUE_LEN / 2U;
+    if (flood || atomic_load(&s_state) != ST_CONNECTED || xQueueSend(s_rq, r, 0) != pdTRUE) {
+        atomic_fetch_add(&s_res_dropped, 1U);
+    }
+}
+
 void mqttc_status_line(char *buf, size_t len)
 {
     static const char *const NAMES[] = {"off", "no_host", "connecting", "connected", "refused"};
@@ -436,9 +515,11 @@ void mqttc_status_line(char *buf, size_t len)
     const int st = atomic_load(&s_state);
     snprintf(buf, len,
              "state=%s on=%s host=%s port=%u user=%s pass=%s gw_id=%s"
-             " published=%u dropped=%u failed=%u connects=%u down_queued=%u down_refused=%u",
+             " published=%u dropped=%u failed=%u connects=%u down_queued=%u down_refused=%u results=%u"
+             " results_dropped=%u",
              NAMES[st >= 0 && st <= ST_REFUSED ? st : 0], c.on ? "on" : "off", c.host[0] ? c.host : "-",
              (unsigned)c.port, c.user[0] ? c.user : "-", c.pass_set ? "set" : "none", c.gw_id,
              atomic_load(&s_published), atomic_load(&s_dropped), atomic_load(&s_failed), atomic_load(&s_connects),
-             atomic_load(&s_down_ok), atomic_load(&s_down_bad));
+             atomic_load(&s_down_ok), atomic_load(&s_down_bad), atomic_load(&s_results),
+             atomic_load(&s_res_dropped));
 }

@@ -185,7 +185,8 @@
                   <label>Gateway id <input name="mqtt_gw_id" id="mqtt-gwid" maxlength="31" pattern="[a-z0-9_]+"></label>
                 </div>
                 <p class="note">Topics: <code id="mqtt-topics"></code>. The gateway id is part of every topic.</p>
-                <p class="note">Downlinks: publish <code>{"port":1,"payload_hex":"0102"}</code> (not retained) to <code>…/&lt;DevEUI&gt;/down</code>. The gateway sends it after the device's next uplink, up to 4 per device. Needs "Local server transmit" on (Radio tab).</p>
+                <p class="note">Downlinks: publish <code>{"id":"job-1","port":1,"payload_hex":"0102","confirmed":true}</code> (not retained) to <code>…/&lt;DevEUI&gt;/down</code>; <code>confirmed</code> and <code>id</code> are optional. The gateway sends it after the device's next uplink, up to 4 per device. Needs "Local server transmit" on (Radio tab).</p>
+                <p class="note">Results on <code>…/&lt;DevEUI&gt;/down/result</code>, with your <code>id</code>: <code>queued</code> or <code>refused</code>, then <code>sent</code> for each transmission, then <code>acked</code> or <code>nacked</code> for a confirmed downlink. <code>dropped</code> if it could not be delivered. A nacked downlink is not sent again: publish it again if needed.</p>
               </details>
               <p class="note">Plain MQTT (no TLS): use it on your own network only. Anyone who can publish on the broker can send downlinks to your devices. The password is stored on the gateway and never shown again.</p>
               <div class="actions"><button type="submit" class="primary">Save and restart</button></div>

@@ -321,7 +321,7 @@ static esp_err_t api_status(httpd_req_t *req)
     if (!gate(req, LWC_ROLE_VIEWER, &r)) {
         return r;
     }
-    char line[384]; /* the longest: mqtt with a 63-character host and user, ~350 */
+    char line[448]; /* the longest: mqtt with a 63-character host and user and full counters, 391 */
     char *out = heap_caps_malloc(STATUS_MAX, MALLOC_CAP_DEFAULT);
     if (out == NULL) {
         return send_status(req, "500 Internal Server Error", "no memory\n");

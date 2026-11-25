@@ -168,6 +168,7 @@ const char *lwc_mqtt_down_parse(const char *json, size_t n, lwc_mqtt_down_t *out
     memset(out, 0, sizeof *out);
     lwc_jr_t r = {.p = json, .end = json + n};
     bool has_port = false, has_data = false;
+    const char *err = NULL; /* the first wrong field; reading goes on, so a later "id" is still kept */
     if (!lwc_jr_lit(&r, '{')) {
         return "not a JSON object";
     }
@@ -178,30 +179,63 @@ const char *lwc_mqtt_down_parse(const char *json, size_t n, lwc_mqtt_down_t *out
             if (!lwc_jr_str(&r, &k, &kn) || !lwc_jr_lit(&r, ':')) {
                 return "bad JSON";
             }
+            const char *bad = NULL;
             if (lwc_jr_key_is(k, kn, "port")) {
                 int64_t port;
-                if (!lwc_jr_num(&r, &v, &vn) || !lwc_jr_i64(v, vn, &port) || port < 1 || port > 223) {
-                    return "port: 1 to 223";
+                if (lwc_jr_num(&r, &v, &vn)) {
+                    if (lwc_jr_i64(v, vn, &port) && port >= 1 && port <= 223) {
+                        out->port = (uint8_t)port;
+                        has_port = true;
+                    } else {
+                        bad = "port: 1 to 223";
+                    }
+                } else if (lwc_jr_skip(&r)) {
+                    bad = "port: 1 to 223";
+                } else {
+                    return "bad JSON";
                 }
-                out->port = (uint8_t)port;
-                has_port = true;
             } else if (lwc_jr_key_is(k, kn, "payload_hex")) {
-                if (!lwc_jr_str(&r, &v, &vn) || vn % 2U != 0U || vn / 2U > sizeof out->data ||
-                    (vn > 0U && !lwc_hex_decode(v, vn, out->data, vn / 2U))) {
-                    return "payload_hex: an even number of hex digits, at most 242 bytes";
+                if (lwc_jr_str(&r, &v, &vn)) {
+                    if (vn % 2U == 0U && vn / 2U <= sizeof out->data &&
+                        (vn == 0U || lwc_hex_decode(v, vn, out->data, vn / 2U))) {
+                        out->len = vn / 2U;
+                        has_data = true;
+                    } else {
+                        bad = "payload_hex: an even number of hex digits, at most 242 bytes";
+                    }
+                } else if (lwc_jr_skip(&r)) {
+                    bad = "payload_hex: an even number of hex digits, at most 242 bytes";
+                } else {
+                    return "bad JSON";
                 }
-                out->len = vn / 2U;
-                has_data = true;
+            } else if (lwc_jr_key_is(k, kn, "id")) {
+                if (lwc_jr_str(&r, &v, &vn)) {
+                    if (lwc_dlq_id_ok(v, vn)) {
+                        memcpy(out->id, v, vn);
+                        out->id[vn] = '\0';
+                    } else {
+                        bad = "id: 1 to 36 of A-Z a-z 0-9 _ . : -";
+                    }
+                } else if (lwc_jr_skip(&r)) {
+                    bad = "id: 1 to 36 of A-Z a-z 0-9 _ . : -";
+                } else {
+                    return "bad JSON";
+                }
             } else if (lwc_jr_key_is(k, kn, "confirmed")) {
                 if (lwc_jr_word(&r, "true")) {
                     out->confirmed = true;
                 } else if (lwc_jr_word(&r, "false")) {
                     out->confirmed = false;
+                } else if (lwc_jr_skip(&r)) {
+                    bad = "confirmed: true or false";
                 } else {
-                    return "confirmed: true or false";
+                    return "bad JSON";
                 }
             } else if (!lwc_jr_skip(&r)) {
                 return "bad JSON";
+            }
+            if (err == NULL) {
+                err = bad;
             }
         } while (lwc_jr_lit(&r, ','));
         if (!lwc_jr_lit(&r, '}')) {
@@ -212,5 +246,49 @@ const char *lwc_mqtt_down_parse(const char *json, size_t n, lwc_mqtt_down_t *out
     if (r.p != r.end) {
         return "bad JSON";
     }
-    return !has_port ? "port: required" : !has_data ? "payload_hex: required" : NULL;
+    return err != NULL ? err : !has_port ? "port: required" : !has_data ? "payload_hex: required" : NULL;
+}
+
+size_t lwc_mqtt_result_json(const lwc_mqtt_result_t *r, char *out, size_t cap)
+{
+    static const char *const STATES[LWC_MQTT_DL_STATES] = {"queued", "refused", "sent", "acked", "nacked", "dropped"};
+    if (r == NULL || out == NULL || cap == 0U || !lwc_mqtt_id_ok(r->node) || (unsigned)r->state >= LWC_MQTT_DL_STATES ||
+        (r->id != NULL && r->id[0] != '\0' && !lwc_dlq_id_ok(r->id, strlen(r->id)))) {
+        return 0;
+    }
+    lwc_sb_t b = {.p = out, .cap = cap};
+    out[0] = '\0';
+    lwc_sb_printf(&b, "{\"node_id\":");
+    jstr(&b, r->node);
+    lwc_sb_printf(&b, ",\"dev_eui\":\"%016" PRIX64 "\"", r->dev_eui);
+    if (r->id != NULL && r->id[0] != '\0') {
+        lwc_sb_printf(&b, ",\"id\":\"%s\"", r->id); /* checked: nothing to escape */
+    }
+    lwc_sb_printf(&b, ",\"status\":\"%s\"", STATES[r->state]);
+    if (r->reason != NULL) {
+        lwc_sb_printf(&b, ",\"reason\":");
+        jstr(&b, r->reason);
+    }
+    if (r->port >= 0) {
+        lwc_sb_printf(&b, ",\"port\":%d", r->port);
+    }
+    if (r->len >= 0) {
+        lwc_sb_printf(&b, ",\"len\":%d", r->len);
+    }
+    if (r->port >= 0) {
+        lwc_sb_printf(&b, ",\"confirmed\":%s", r->confirmed ? "true" : "false");
+    }
+    if (r->has_fcnt) {
+        lwc_sb_printf(&b, ",\"fcnt_down\":%" PRIu32, r->fcnt_down);
+    }
+    if (r->tx != 0U) {
+        lwc_sb_printf(&b, ",\"tx\":%u", r->tx);
+    }
+    if (r->time_unix_s >= 0) {
+        char ts[21];
+        lwc_mqtt_iso8601(r->time_unix_s, ts);
+        lwc_sb_printf(&b, ",\"ts\":\"%s\"", ts);
+    }
+    lwc_sb_printf(&b, "}");
+    return done(&b);
 }

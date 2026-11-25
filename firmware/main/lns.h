@@ -27,13 +27,16 @@ lwc_ns_err_t lns_remove(uint64_t dev_eui);
 
 /**
  * Queue an application downlink for a local device (MQTT, ADR-0018); it goes
- * out with the device's next class A answer. Never waits long (200 ms at most
- * for the lock). ESP_ERR_INVALID_STATE: the local server is not running;
+ * out with the device's next class A answer. `confirmed`: the device must
+ * acknowledge it in its next uplink. `id`: "" or the caller's id, echoed in
+ * the results. Never waits long (200 ms at most for the lock).
+ * ESP_ERR_INVALID_STATE: the local server is not running;
  * ESP_ERR_NOT_SUPPORTED: local transmit is off; ESP_ERR_NOT_FOUND: no such
  * device; ESP_ERR_INVALID_SIZE: larger than the device's RX2 window allows;
  * ESP_ERR_NO_MEM: its queue is full.
  */
-esp_err_t lns_queue_down(uint64_t dev_eui, uint8_t port, const uint8_t *data, size_t len);
+esp_err_t lns_queue_down(uint64_t dev_eui, uint8_t port, const uint8_t *data, size_t len, bool confirmed,
+                         const char *id);
 
 /** The radio's answer to a local server request (from the TX task; never waits). */
 void lns_tx_result(uint16_t token, bool ok);

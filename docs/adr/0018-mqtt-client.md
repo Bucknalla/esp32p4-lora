@@ -56,19 +56,30 @@ today.
   logs or a URI.
 - **Downlinks in:** the gateway subscribes to `lora/<gateway_id>/+/down`
   (QoS 1) after every connect. A message is
-  `{"port":1..223,"payload_hex":"..","confirmed":false}` (parsed in core,
-  host-tested and fuzzed). It is queued for that local device and sent with
-  its next class A answer, unconfirmed.
+  `{"id":"..","port":1..223,"payload_hex":"..","confirmed":false}` (parsed
+  in core, host-tested and fuzzed; `confirmed` and `id` optional; a wrong
+  field does not stop the reading, so the `id` is in the `refused` result
+  wherever it is). It is
+  queued for that local device and sent with its next class A answer. The
+  queue rules are in core (`lwc/dlq.h`, host-tested).
   - Retained and empty messages are ignored: a retained downlink would be
     sent again after every reconnect. (A broker delivers a new retained
     message once, live, to current subscribers; that copy is used.)
   - Up to 4 per device, in PSRAM, lost on restart. Keyed by DevEUI too, so a
     reused device slot never sends an old payload; removing a device empties
     its queue. FPending is set while more are waiting.
-  - The head is released by the device's next new uplink. A repeated uplink
+  - The head is settled by the device's next new uplink. A repeated uplink
     (the device missed the answer) gets it again with a new FCntDown. If the
-    radio refused the frame (duty-cycle budget, too late, a clash), the TX
-    task reports it without waiting and the payload is offered again.
+    radio refused the frame or could not hand it over (duty-cycle budget,
+    too late, a clash, a missed start), the TX task reports it without
+    waiting and the payload is offered again.
+  - **Confirmed downlinks** (`"confirmed":true`) go out as Confirmed Data
+    Down. The device's next new uplink settles it: FCtrl.ACK set is `acked`,
+    not set is `nacked`. A nacked downlink is never sent again on its own:
+    if only the device's ACK uplink was lost, a resend would run the command
+    twice (a valve, a relay). The application decides about a retry and can
+    match it by `id`. A downlink is never repeated with the same counter. The ACK bit of a repeated
+    uplink belongs to the earlier frame and is ignored.
   - Switching local transmit off drops what is waiting (counted), so nothing
     goes out late when it is switched on again.
   - Clean session: a downlink published while the gateway is not connected
@@ -79,13 +90,30 @@ today.
     refused at once. Too large at this uplink's data rate: dropped and
     counted, or it would block the queue. The daily DevStatusReq is left out
     when it would crowd out the payload.
-  - Refused at once (one log line each, counted in the status): bad JSON,
-    port 0 or above 223, odd or non-hex payload, unknown device, queue full,
-    local transmit off (the release default), and `confirmed: true`
-    (confirmed downlinks need FCtrl.ACK tracking and a retry policy: later).
-  - There is no result topic yet: counters `down_queued`, `down_refused`
-    (mqtt) and `app_waiting`, `app_queued`, `app_sent`, `app_dropped` (lns)
-    show what happened.
+  - Refused at once (counted in the status; logged at most once a second,
+    so a flood cannot empty the log ring): bad JSON, port 0 or above 223,
+    odd or non-hex payload, a bad `id`, unknown device, queue full, local
+    transmit off (the release default).
+- **Downlink results** on `lora/<gateway_id>/<node_id>/down/result`, QoS 1,
+  not retained, with the caller's `id`, port, length, `confirmed`,
+  `fcnt_down` and `tx` (transmissions) where known, and `ts`:
+  - `queued`, or `refused` with a `reason`;
+  - `sent` each time the frame is handed to the concentrator for its receive
+    window (the last word for an unconfirmed downlink);
+  - `acked` or `nacked` for a confirmed downlink;
+  - `dropped` with a `reason`: too big for the uplink's data rate, local
+    transmit switched off, device removed.
+  - They have their own 8-entry queue, so a flood of bad downlinks never
+    takes room from uplink events; `refused` results may fill only half of
+    it, so results of queued downlinks keep room. Like events, results are
+    best-effort:
+    lost while the broker is away, and dropped (counted:
+    `results_dropped`) when the queue is full.
+  - The topic does not match the `+/down` subscription, so the gateway
+    never reads its own results.
+  - Counters: `down_queued`, `down_refused`, `results`, `results_dropped`
+    (mqtt) and `app_waiting`, `app_queued`, `app_sent`, `app_acked`,
+    `app_nacked`, `app_dropped` (lns).
 - **Plain MQTT only.** The Setup tab says to use it on the local network.
   TLS and the design plan's central-broker mTLS stay open.
 
@@ -150,9 +178,20 @@ them. The stack figure is from that build.
 | Settings and status | no discovery or expiry fields left |
 | FiPy join + 3 uplinks (third confirmed) | `join` and 3 `up` messages, fcnt 0-2, `confirmed` true on the third; `published=5`, `dropped=0` |
 
+## Verification: confirmed downlinks and results (2026-11-25, rev3 bench board, desk build)
+
+| Test | Result |
+| --- | --- |
+| Host tests (`test_dlq`: release, repeat, radio refusal, ACK and NACK, stray ACK, a burst of 7 repeats, slot reuse, full queue, ids; `test_ns`: MType 5 decoded as the device reads it, the uplink's ACK bit; `test_mqtt`: `id`, result JSON, the `down/result` topic) | pass, with ASan/UBSan |
+| Confirmed `c1` (3 B, port 21) and unconfirmed `u1` (2 B, port 22) published after the FiPy joined; FiPy sends 4 uplinks | FiPy received both in order; first with FPending. Results: `c1` queued, sent (fcnt_down 0, tx 1), acked; `u1` queued, sent; nothing on the last two uplinks |
+| 350 bad downlinks published during the run | all 4 uplinks published, `dropped=0`; `results_dropped=285` (the result queue's cap); 2 log lines |
+| Stacks after the tests | `radio` 7060, `lns` 4312, `mqttc` 3048, `mqtt_task` 4888 B free |
+
+`nacked` is host-tested only: the FiPy always acknowledges.
+
 ## Plan
 
 1. Events out (done).
 2. Downlinks: `lora/<gateway_id>/<node_id>/down` into the local downlink
-   queue (done; confirmed downlinks later).
+   queue (done), confirmed downlinks and results (done).
 3. Payload codecs, then decoded fields in the JSON.

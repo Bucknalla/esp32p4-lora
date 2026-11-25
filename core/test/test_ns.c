@@ -141,7 +141,8 @@ static bool app_ok(const lwc_ns_dl_t *dl, const uint8_t nwk[16], const uint8_t a
 {
     lwc_lw_data_t d;
     uint8_t plain[LWC_NS_DL_MAX];
-    if (lwc_lw_data_parse(dl->frame, dl->len, &d) != LWC_LW_OK || d.mtype != LWC_LW_UNCONFIRMED_DOWN ||
+    if (lwc_lw_data_parse(dl->frame, dl->len, &d) != LWC_LW_OK ||
+        d.mtype != (dl->confirmed ? LWC_LW_CONFIRMED_DOWN : LWC_LW_UNCONFIRMED_DOWN) ||
         d.dev_addr != addr || !d.has_port || d.fport != port || d.frm_len != len ||
         ((d.fctrl & LWC_LW_FCTRL_FPENDING) != 0U) != fpending ||
         !lwc_lw_data_mic_ok(nwk, true, addr, dl->fcnt, dl->frame, dl->len)) {
@@ -238,6 +239,25 @@ static void app_downlinks(size_t idx, uint32_t addr, const uint8_t nwk[16], cons
     a.port = 224;
     CHECK(!lwc_ns_answer_app(&ns, r, &up, &rx, &a, &dl) && dl.app_too_big);
     CHECK(!lwc_ns_answer_app(&ns, LWC_NS_UP_REPLAY, &up, &rx, &a, &dl));
+
+    /* confirmed downlink: MType 5, read by the device as such; its ACK comes back in FCtrl */
+    n = uplink_mac(f, nwk, addr, ++fcnt, NULL, 0, 0, false);
+    r = lwc_ns_uplink(&ns, f, n, &up);
+    CHECK(r == LWC_NS_UP_OK && !up.ack);
+    a = (lwc_ns_app_t){.port = 7, .data = big, .len = 3, .confirmed = true};
+    CHECK(lwc_ns_answer_app(&ns, r, &up, &rx, &a, &dl) && dl.app && dl.confirmed && !dl.ack);
+    CHECK(lwc_lw_mtype(dl.frame, dl.len) == LWC_LW_CONFIRMED_DOWN && app_ok(&dl, nwk, app, addr, 7, big, 3, false));
+    n = uplink_mac(f, nwk, addr, ++fcnt, NULL, 0, LWC_LW_FCTRL_ACK, false);
+    r = lwc_ns_uplink(&ns, f, n, &up);
+    CHECK(r == LWC_NS_UP_OK && up.ack);
+    r = lwc_ns_uplink(&ns, f, n, &up); /* the repeat carries the same bit; the queue ignores it there */
+    CHECK(r == LWC_NS_UP_RETRANS && up.ack);
+    /* no room for the payload: nothing confirmed goes out */
+    n = uplink_mac(f, nwk, addr, ++fcnt, lcr, 1, 0, false);
+    r = lwc_ns_uplink(&ns, f, n, &up);
+    a = (lwc_ns_app_t){.port = 7, .data = big, .len = 51, .confirmed = true};
+    CHECK(r == LWC_NS_UP_OK && lwc_ns_answer_app(&ns, r, &up, &rx, &a, &dl) && dl.link_check && !dl.app &&
+          !dl.confirmed && lwc_lw_mtype(dl.frame, dl.len) == LWC_LW_UNCONFIRMED_DOWN);
 }
 
 static void adr_step(void)

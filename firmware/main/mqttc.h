@@ -7,6 +7,7 @@
 #include <stdint.h>
 
 #include "esp_err.h"
+#include "lwc/dlq.h"
 #include "lwc/ns.h"
 
 #define MQTTC_HOST_MAX 64 /* with the NUL */
@@ -38,6 +39,21 @@ typedef struct {
     uint8_t data[242];
 } mqttc_ev_t;
 
+/** What became of a downlink (lora/<gw>/<node>/down/result). Copied into its
+ *  own queue, so results never take room from uplink events. */
+typedef struct {
+    uint64_t dev_eui;
+    uint8_t state;      /* lwc_mqtt_dl_state_t */
+    const char *reason; /* a string literal, or NULL */
+    int16_t port;       /* -1: unknown */
+    int16_t len;        /* -1: unknown */
+    bool confirmed;
+    bool has_fcnt;
+    uint32_t fcnt_down;
+    uint8_t tx;
+    char id[LWC_DLQ_ID_MAX + 1U];
+} mqttc_res_t;
+
 /** Settings for display (no password). */
 typedef struct {
     bool on;
@@ -66,6 +82,10 @@ esp_err_t mqttc_start(void);
  *  connected, or the queue is full. */
 void mqttc_post(const mqttc_ev_t *ev);
 
+/** Queue a downlink result; never blocks. Dropped (and counted) when MQTT is
+ *  off, not connected, or the result queue is full. */
+void mqttc_result(const mqttc_res_t *r);
+
 /** state=off|no_host|connecting|connected|refused host=.. port=.. user=.. pass=set|none
- *  gw_id=.. published=N dropped=N failed=N connects=N down_queued=N down_refused=N */
+ *  gw_id=.. published=N dropped=N failed=N connects=N down_queued=N down_refused=N results=N results_dropped=N */
 void mqttc_status_line(char *buf, size_t len);

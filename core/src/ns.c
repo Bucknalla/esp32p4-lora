@@ -234,6 +234,7 @@ lwc_ns_up_res_t lwc_ns_uplink(lwc_ns_t *ns, const uint8_t *frame, size_t n, lwc_
         out->confirmed = f.mtype == LWC_LW_CONFIRMED_UP;
         out->adr = (f.fctrl & LWC_LW_FCTRL_ADR) != 0U;
         out->adr_ack_req = (f.fctrl & LWC_LW_FCTRL_ADR_ACK_REQ) != 0U;
+        out->ack = (f.fctrl & LWC_LW_FCTRL_ACK) != 0U;
         if (d->has_up && fcnt <= d->fcnt_up) {
             /* The same counter again: a device that missed its ACK repeats the
              * frame. Answer a few times, then treat it as a replay. */
@@ -475,11 +476,12 @@ bool lwc_ns_answer_app(lwc_ns_t *ns, lwc_ns_up_res_t res, const lwc_ns_uplink_t 
         }
     }
     dl->ack = up->confirmed;
+    dl->confirmed = dl->app && app->confirmed;
     dl->fcnt = d->fcnt_down;
     /* FCtrl.ADR: this network controls the data rate (when the device lets it) */
     const uint8_t fctrl = (uint8_t)(LWC_LW_FCTRL_ADR | (dl->ack ? LWC_LW_FCTRL_ACK : 0U) |
                                     (dl->app && app->more ? LWC_LW_FCTRL_FPENDING : 0U));
-    dl->len = dl->app ? lwc_lw_data_build(LWC_LW_UNCONFIRMED_DOWN, d->dev_addr, fctrl, dl->fcnt, fopts, fo, true,
+    dl->len = dl->app ? lwc_lw_data_build(dl->confirmed ? LWC_LW_CONFIRMED_DOWN : LWC_LW_UNCONFIRMED_DOWN, d->dev_addr, fctrl, dl->fcnt, fopts, fo, true,
                                           app->port, app->data, app->len, d->nwk_s_key, d->app_s_key, dl->frame,
                                           sizeof dl->frame)
                       : lwc_lw_data_build(LWC_LW_UNCONFIRMED_DOWN, d->dev_addr, fctrl, dl->fcnt, fopts, fo, false, 0,

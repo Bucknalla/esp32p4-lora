@@ -179,6 +179,67 @@ static void test_down(void)
     CHECK(down("{\"port\":1,\"payload_hex\":\"00\",}", &d) != NULL);
     CHECK(down("[1]", &d) != NULL && down("", &d) != NULL && lwc_mqtt_down_parse(NULL, 0, &d) != NULL);
     CHECK(lwc_mqtt_down_parse("{\"port\":1,\"payload_hex\":\"00\"}", 10, &d) != NULL); /* cut short */
+
+    /* id: optional, echoed in results; kept when a later field is wrong */
+    CHECK(down("{\"id\":\"3f2504e0-4f89-11d3-9a0c-0305e82c3301\",\"port\":4,\"payload_hex\":\"01\",\"confirmed\":true}",
+               &d) == NULL &&
+          strcmp(d.id, "3f2504e0-4f89-11d3-9a0c-0305e82c3301") == 0 && d.confirmed && d.port == 4U);
+    CHECK(down("{\"port\":4,\"payload_hex\":\"01\"}", &d) == NULL && d.id[0] == '\0');
+    CHECK(down("{\"id\":\"job.7\",\"port\":0,\"payload_hex\":\"01\"}", &d) != NULL && strcmp(d.id, "job.7") == 0);
+    /* id after the wrong field is still read; the first wrong field is reported */
+    CHECK(down("{\"port\":0,\"payload_hex\":\"0\",\"id\":\"late\"}", &d) != NULL && strcmp(d.id, "late") == 0);
+    CHECK(strcmp(down("{\"port\":0,\"payload_hex\":\"0\",\"id\":\"late\"}", &d), "port: 1 to 223") == 0);
+    CHECK(down("{\"port\":\"x\",\"confirmed\":\"no\",\"payload_hex\":7,\"id\":\"k\"}", &d) != NULL &&
+          strcmp(d.id, "k") == 0);
+    /* broken JSON still stops at once */
+    CHECK(down("{\"port\":0,\"id\":\"late\"", &d) != NULL);
+    CHECK(down("{\"id\":\"\",\"port\":4,\"payload_hex\":\"01\"}", &d) != NULL);
+    CHECK(down("{\"id\":\"a b\",\"port\":4,\"payload_hex\":\"01\"}", &d) != NULL && d.id[0] == '\0');
+    CHECK(down("{\"id\":\"a\\\"b\",\"port\":4,\"payload_hex\":\"01\"}", &d) != NULL);
+    CHECK(down("{\"id\":7,\"port\":4,\"payload_hex\":\"01\"}", &d) != NULL);
+    CHECK(down("{\"id\":\"0123456789012345678901234567890123456\",\"port\":4,\"payload_hex\":\"01\"}", &d) != NULL);
+}
+
+static void test_result(void)
+{
+    char out[512], t[LWC_MQTT_TOPIC_MAX];
+    CHECK(lwc_mqtt_topic(t, sizeof t, "gw1", "70b3d57ed0001234", "down/result") &&
+          strcmp(t, "lora/gw1/70b3d57ed0001234/down/result") == 0);
+    uint64_t eui;
+    CHECK(!lwc_mqtt_down_topic(t, strlen(t), "gw1", &eui)); /* never read back as a downlink */
+    lwc_mqtt_result_t r = {.node = "70b3d57ed0001234", .dev_eui = 0x70B3D57ED0001234ULL, .id = "valve-1",
+                           .state = LWC_MQTT_DL_ACKED, .port = 3, .len = 2, .confirmed = true, .has_fcnt = true,
+                           .fcnt_down = 103, .tx = 2, .time_unix_s = 0};
+    size_t n = lwc_mqtt_result_json(&r, out, sizeof out);
+    CHECK(n > 0 && valid_json(out, n));
+    CHECK(strcmp(out, "{\"node_id\":\"70b3d57ed0001234\",\"dev_eui\":\"70B3D57ED0001234\",\"id\":\"valve-1\","
+                      "\"status\":\"acked\",\"port\":3,\"len\":2,\"confirmed\":true,\"fcnt_down\":103,\"tx\":2,"
+                      "\"ts\":\"1970-01-01T00:00:00Z\"}") == 0);
+    /* a refusal of a message that did not parse: no port, a reason with quotes escaped */
+    r = (lwc_mqtt_result_t){.node = "70b3d57ed0001234", .dev_eui = 1, .state = LWC_MQTT_DL_REFUSED,
+                            .reason = "bad \"JSON\"", .port = -1, .len = -1, .time_unix_s = -1};
+    n = lwc_mqtt_result_json(&r, out, sizeof out);
+    CHECK(n > 0 && valid_json(out, n) && strstr(out, "\"port\"") == NULL && strstr(out, "\"id\"") == NULL);
+    CHECK(strstr(out, "\"status\":\"refused\",\"reason\":\"bad \\\"JSON\\\"\"") != NULL);
+    static const char *const names[] = {"queued", "refused", "sent", "acked", "nacked", "dropped"};
+    for (int s = 0; s < (int)LWC_MQTT_DL_STATES; s++) {
+        r.state = (lwc_mqtt_dl_state_t)s;
+        char want[32];
+        (void)snprintf(want, sizeof want, "\"status\":\"%s\"", names[s]);
+        n = lwc_mqtt_result_json(&r, out, sizeof out);
+        CHECK(n > 0 && strstr(out, want) != NULL);
+    }
+    /* refused */
+    r.state = LWC_MQTT_DL_STATES;
+    CHECK(lwc_mqtt_result_json(&r, out, sizeof out) == 0);
+    r.state = LWC_MQTT_DL_SENT;
+    r.id = "a b";
+    CHECK(lwc_mqtt_result_json(&r, out, sizeof out) == 0);
+    r.id = NULL;
+    r.node = "A";
+    CHECK(lwc_mqtt_result_json(&r, out, sizeof out) == 0);
+    r.node = "70b3d57ed0001234";
+    CHECK(lwc_mqtt_result_json(&r, out, 20) == 0);
 }
 
 int main(void)
@@ -189,6 +250,7 @@ int main(void)
     test_up();
     test_long_ids();
     test_down();
+    test_result();
     if (failures != 0) {
         fprintf(stderr, "test_mqtt: %d failure(s)\n", failures);
         return 1;

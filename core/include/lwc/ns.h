@@ -169,6 +169,7 @@ typedef struct {
     bool confirmed;
     bool adr;
     bool adr_ack_req;
+    bool ack;         /* FCtrl.ACK: the device acknowledges the last confirmed downlink */
     bool has_port;
     uint8_t port;
     uint8_t payload[242]; /* decrypted FRMPayload */
@@ -209,6 +210,7 @@ typedef struct {
     bool dev_status;
     bool link_adr;   /* LinkADRReq to adr_dr / adr_power */
     bool app;        /* the application payload is in it */
+    bool confirmed;  /* sent as Confirmed Data Down (with the payload) */
     bool app_too_big; /* it was offered, but does not fit at these data rates */
     uint8_t adr_dr;
     uint8_t adr_power;
@@ -230,7 +232,8 @@ typedef struct {
     uint8_t port; /* 1..223 */
     const uint8_t *data;
     size_t len;
-    bool more; /* more are queued: sets FPending */
+    bool more;      /* more are queued: sets FPending */
+    bool confirmed; /* Confirmed Data Down: the device sets ACK in its next uplink */
 } lwc_ns_app_t;
 
 /**

@@ -8,6 +8,7 @@
  *   lora/<gw>/<node>/up         uplink JSON
  *   lora/<gw>/<node>/join       join JSON
  *   lora/<gw>/<node>/down       downlink JSON (in)
+ *   lora/<gw>/<node>/down/result  what became of a downlink (out)
  */
 #ifndef LWC_MQTT_H
 #define LWC_MQTT_H
@@ -15,6 +16,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+
+#include "lwc/dlq.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -69,6 +72,7 @@ size_t lwc_mqtt_join_json(const lwc_mqtt_up_t *u, char *out, size_t cap);
 typedef struct {
     uint8_t port; /* 1..223 */
     bool confirmed;
+    char id[LWC_DLQ_ID_MAX + 1U]; /* optional; "" if not given */
     uint8_t data[LWC_MQTT_DOWN_MAX];
     size_t len;
 } lwc_mqtt_down_t;
@@ -81,11 +85,44 @@ bool lwc_mqtt_down_topic(const char *topic, size_t n, const char *gw, uint64_t *
 
 /**
  * Parse a downlink message (untrusted): {"port":1..223,"payload_hex":"..",
- * "confirmed":false}. `port` and `payload_hex` are required (hex may be empty);
- * `confirmed` is optional; other keys are skipped. Returns NULL, or what is
- * wrong (for the log).
+ * "confirmed":false,"id":".."}. `port` and `payload_hex` are required (hex may
+ * be empty); `confirmed` and `id` (1-36 of [A-Za-z0-9_.:-], echoed in results)
+ * are optional; other keys are skipped. Returns NULL, or what is wrong (for
+ * the log and the result). A wrong field does not stop the reading while the
+ * JSON itself is sound, so a valid `id` is kept wherever it is (for the
+ * `refused` result); the first wrong field is reported.
  */
 const char *lwc_mqtt_down_parse(const char *json, size_t n, lwc_mqtt_down_t *out);
+
+/* ---- downlink results: lora/<gw>/<node>/down/result ---------------------- */
+
+typedef enum {
+    LWC_MQTT_DL_QUEUED = 0, /* accepted into the device's queue */
+    LWC_MQTT_DL_REFUSED,    /* not queued: `reason` */
+    LWC_MQTT_DL_SENT,       /* handed to the concentrator for its receive window (each transmission) */
+    LWC_MQTT_DL_ACKED,      /* confirmed: the device acknowledged it */
+    LWC_MQTT_DL_NACKED,     /* confirmed: the device's next uplink did not acknowledge it */
+    LWC_MQTT_DL_DROPPED,    /* removed without being delivered: `reason` */
+    LWC_MQTT_DL_STATES
+} lwc_mqtt_dl_state_t;
+
+typedef struct {
+    const char *node;   /* lwc_mqtt_node_id() */
+    uint64_t dev_eui;
+    const char *id;     /* NULL or "": none */
+    lwc_mqtt_dl_state_t state;
+    const char *reason; /* refused, dropped; NULL otherwise */
+    int port;           /* -1: unknown (a message that did not parse) */
+    int len;            /* -1: unknown */
+    bool confirmed;
+    bool has_fcnt;      /* sent, acked, nacked */
+    uint32_t fcnt_down;
+    unsigned tx;        /* transmissions so far; 0 leaves it out */
+    int64_t time_unix_s; /* < 0: wall clock not set, no "ts" */
+} lwc_mqtt_result_t;
+
+/** Result JSON. Returns the length, 0 if it does not fit or a field is bad. */
+size_t lwc_mqtt_result_json(const lwc_mqtt_result_t *r, char *out, size_t cap);
 
 #ifdef __cplusplus
 }
