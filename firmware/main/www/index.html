@@ -180,6 +180,7 @@
                 <label>User <input name="mqtt_user" id="mqtt-user" maxlength="63" pattern="[!-~]+" autocomplete="off"></label>
                 <label>Password <input name="mqtt_pass" type="password" maxlength="63" placeholder="Leave empty to keep the stored password" autocomplete="new-password"></label>
               </div>
+              <label class="switch"><input type="checkbox" id="mqtt-tls" name="tls"><span class="track" aria-hidden="true"></span><span>Use TLS<small>Encrypted, port 8883. The broker needs a certificate from a public CA (such as Let's Encrypt) for its host name: enter that name, not an IP address</small></span></label>
               <details class="more"><summary>Topics and downlinks</summary>
                 <div class="grid-form">
                   <label>Gateway id <input name="mqtt_gw_id" id="mqtt-gwid" maxlength="31" pattern="[a-z0-9_]+"></label>
@@ -188,7 +189,8 @@
                 <p class="note">Downlinks: publish <code>{"id":"job-1","port":1,"payload_hex":"0102","confirmed":true}</code> (not retained) to <code>…/&lt;DevEUI&gt;/down</code>; <code>confirmed</code> and <code>id</code> are optional. The gateway sends it after the device's next uplink, up to 4 per device. Needs "Local server transmit" on (Radio tab).</p>
                 <p class="note">Results on <code>…/&lt;DevEUI&gt;/down/result</code>, with your <code>id</code>: <code>queued</code> or <code>refused</code>, then <code>sent</code> for each transmission, then <code>acked</code> or <code>nacked</code> for a confirmed downlink. <code>dropped</code> if it could not be delivered. A nacked downlink is not sent again: publish it again if needed.</p>
               </details>
-              <p class="note">Plain MQTT (no TLS): use it on your own network only. Anyone who can publish on the broker can send downlinks to your devices. The password is stored on the gateway and never shown again.</p>
+              <p class="note" id="mqtt-plain-note">Plain MQTT (no TLS): the password and data cross the network readable; use it on your own network only.</p>
+              <p class="note">Anyone who can publish on the broker can send downlinks to your devices: limit that with the broker's access rules. The password is stored on the gateway and never shown again.</p>
               <div class="actions"><button type="submit" class="primary">Save and restart</button></div>
             </form>
           </div>

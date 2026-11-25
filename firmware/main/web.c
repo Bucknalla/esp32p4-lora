@@ -554,21 +554,24 @@ static bool form_has(const char *body, size_t got, const char *key)
 }
 
 /* MQTT settings (ADR-0018): mqtt=on|off, mqtt_host, mqtt_port, mqtt_user,
- * mqtt_pass (write-only; empty erases it), mqtt_gw_id (empty: the default).
+ * mqtt_pass (write-only; empty erases it), mqtt_gw_id (empty: the default),
+ * mqtt_tls=on|off (ADR-0019).
  * Returns 0 if no MQTT field is present, 1 if stored, -1 for a bad value, -2
  * if storing failed. */
 static int settings_mqtt(const char *body, size_t got)
 {
     char on_s[8], host[MQTTC_HOST_MAX], port_s[8], user[MQTTC_USER_MAX], pass[MQTTC_PASS_MAX],
-        gw_id[MQTTC_GWID_MAX];
+        gw_id[MQTTC_GWID_MAX], tls_s[8];
     const int ol = lwc_form_get(body, got, "mqtt", on_s, sizeof on_s);
+    const int tl = lwc_form_get(body, got, "mqtt_tls", tls_s, sizeof tls_s);
     const int hl = lwc_form_get(body, got, "mqtt_host", host, sizeof host);
     const int pl = lwc_form_get(body, got, "mqtt_port", port_s, sizeof port_s);
     const int ul = lwc_form_get(body, got, "mqtt_user", user, sizeof user);
     const int kl = lwc_form_get(body, got, "mqtt_pass", pass, sizeof pass);
     const int gl = lwc_form_get(body, got, "mqtt_gw_id", gw_id, sizeof gw_id);
-    if (ol < 0 && hl < 0 && pl < 0 && ul < 0 && kl < 0 && gl < 0) {
-        static const char *const KEYS[] = {"mqtt", "mqtt_host", "mqtt_port", "mqtt_user", "mqtt_pass", "mqtt_gw_id"};
+    if (ol < 0 && hl < 0 && pl < 0 && ul < 0 && kl < 0 && gl < 0 && tl < 0) {
+        static const char *const KEYS[] = {"mqtt",      "mqtt_host",  "mqtt_port", "mqtt_user",
+                                           "mqtt_pass", "mqtt_gw_id", "mqtt_tls"};
         for (size_t i = 0; i < sizeof KEYS / sizeof KEYS[0]; i++) {
             if (form_has(body, got, KEYS[i])) {
                 return -1; /* present but too long or badly encoded */
@@ -584,14 +587,17 @@ static int settings_mqtt(const char *body, size_t got)
     char *end = NULL;
     const long port = pl > 0 ? strtol(port_s, &end, 10) : 0;
     bool on = false;
+    const bool tls = tl >= 0 && strcmp(tls_s, "on") == 0;
     int rc = 1;
-    if ((ol >= 0 && strcmp(on_s, "on") != 0 && strcmp(on_s, "off") != 0) || pl == 0 ||
+    if ((ol >= 0 && strcmp(on_s, "on") != 0 && strcmp(on_s, "off") != 0) ||
+        (tl >= 0 && strcmp(tls_s, "on") != 0 && strcmp(tls_s, "off") != 0) || pl == 0 ||
         (pl > 0 && (port < 1 || port > 65535 || *end != '\0'))) {
         rc = -1;
     } else {
         on = ol >= 0 && strcmp(on_s, "on") == 0;
         const esp_err_t r = mqttc_set(ol >= 0 ? &on : NULL, hl >= 0 ? host : NULL, (uint16_t)port,
-                                      ul >= 0 ? user : NULL, kl >= 0 ? pass : NULL, gl >= 0 ? gw_id : NULL);
+                                      ul >= 0 ? user : NULL, kl >= 0 ? pass : NULL, gl >= 0 ? gw_id : NULL,
+                                      tl >= 0 ? &tls : NULL);
         rc = r == ESP_OK ? 1 : r == ESP_ERR_INVALID_ARG ? -1 : -2;
         if (rc == 1) {
             ESP_LOGW(TAG, "MQTT settings changed%s", kl >= 0 ? " (password replaced)" : "");
@@ -627,7 +633,8 @@ static esp_err_t api_settings(httpd_req_t *req)
         memset(key, 0, sizeof key);
         return mq == -1 ? send_status(req, "400 Bad Request",
                                       "mqtt=on|off, mqtt_host (host name or IPv4), mqtt_port (1-65535), mqtt_user "
-                                      "(printable, no spaces), mqtt_pass (printable), mqtt_gw_id ([a-z0-9_], 31)\n")
+                                      "(printable, no spaces), mqtt_pass (printable), mqtt_gw_id ([a-z0-9_], 31), "
+                                      "mqtt_tls=on|off\n")
                         : send_status(req, "500 Internal Server Error", "storing the MQTT settings failed\n");
     }
     lwc_mode_t m;

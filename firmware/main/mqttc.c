@@ -17,6 +17,9 @@
  * real downlinks keep room. Like events, they are dropped while the broker is
  * away.
  *
+ * With TLS on (ADR-0019) the broker's certificate is checked against the
+ * ESP-IDF CA bundle (public CAs, e.g. Let's Encrypt) and its host name.
+ *
  * The password is kept in NVS and given only to the client; it is never
  * logged or returned by the API.
  */
@@ -28,6 +31,7 @@
 #include <sys/time.h>
 
 #include "esp_check.h"
+#include "esp_crt_bundle.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -51,6 +55,7 @@ static const char *TAG = "mqtt";
 #define KEY_USER "user"
 #define KEY_PASS "pass"
 #define KEY_GWID "gwid"
+#define KEY_TLS "tls"
 
 #define DEFAULT_PORT 1883U
 #define QUEUE_LEN 16
@@ -58,6 +63,7 @@ static const char *TAG = "mqtt";
 #define TASK_STACK 4096
 #define TASK_PRIO 2
 #define TASK_CORE 0
+#define CLIENT_STACK_TLS 8192 /* esp-mqtt task with a TLS handshake in it */
 #define OUTBOX_LIMIT (32 * 1024)
 #define JSON_MAX 1024
 typedef enum {
@@ -66,6 +72,7 @@ typedef enum {
     ST_CONNECTING,
     ST_CONNECTED,
     ST_REFUSED,
+    ST_TLS_ERROR, /* the TLS handshake failed: certificate not trusted, wrong name, no TLS there */
 } state_t;
 
 static QueueHandle_t s_q;
@@ -153,6 +160,9 @@ static void load(mqttc_cfg_t *c, char *pass, size_t pcap)
             get_str(h, KEY_PASS, pass, pcap);
         }
         get_str(h, KEY_GWID, c->gw_id, sizeof c->gw_id);
+        uint8_t tls = 0;
+        (void)nvs_get_u8(h, KEY_TLS, &tls);
+        c->tls = tls != 0U;
         nvs_close(h);
     }
     if (!lwc_mqtt_id_ok(c->gw_id)) {
@@ -178,7 +188,7 @@ static esp_err_t set_or_erase(nvs_handle_t h, const char *key, const char *v)
 }
 
 esp_err_t mqttc_set(const bool *on, const char *host, uint16_t port, const char *user, const char *pass,
-                    const char *gw_id)
+                    const char *gw_id, const bool *tls)
 {
     ESP_RETURN_ON_FALSE(host == NULL || host[0] == '\0' || host_ok(host), ESP_ERR_INVALID_ARG, TAG, "host");
     ESP_RETURN_ON_FALSE(user == NULL || text_ok(user, MQTTC_USER_MAX, false), ESP_ERR_INVALID_ARG, TAG, "user");
@@ -204,6 +214,9 @@ esp_err_t mqttc_set(const bool *on, const char *host, uint16_t port, const char 
     }
     if (err == ESP_OK && gw_id != NULL) {
         err = set_or_erase(h, KEY_GWID, gw_id);
+    }
+    if (err == ESP_OK && tls != NULL) {
+        err = nvs_set_u8(h, KEY_TLS, *tls ? 1U : 0U);
     }
     if (err == ESP_OK) {
         err = nvs_commit(h);
@@ -394,16 +407,34 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
          * would fill with them while a broker is away). */
         if (e != NULL && e->error_handle != NULL) {
             const esp_mqtt_error_codes_t *x = e->error_handle;
+            /* a TLS failure: the handshake itself, not the network */
+            const bool tls_bad = s_cfg.tls && x->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT &&
+                                 (x->esp_tls_cert_verify_flags != 0 || x->esp_tls_stack_err != 0);
+            /* 0x2700: MBEDTLS_ERR_X509_CERT_VERIFY_FAILED (the bundle path leaves the
+             * flags 0; esp-tls reports the code without its sign) */
+            const bool cert_bad = tls_bad && (x->esp_tls_cert_verify_flags != 0 || x->esp_tls_stack_err == 0x2700 ||
+                                              x->esp_tls_stack_err == -0x2700);
             const int kind = x->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED ? 1000 + (int)x->connect_return_code
-                                                                                  : (int)x->error_type;
+                             : cert_bad ? 2000
+                             : tls_bad  ? 3000 + (x->esp_tls_stack_err & 0xffff)
+                                        : (int)x->error_type;
             if (x->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED) {
                 atomic_store(&s_state, ST_REFUSED);
+            } else if (tls_bad) {
+                atomic_store(&s_state, ST_TLS_ERROR);
             }
             if (kind != s_last_err) {
                 s_last_err = kind;
                 if (x->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED) {
                     ESP_LOGW(TAG, "broker refused the connection (code %d): check the user and password",
                              (int)x->connect_return_code);
+                } else if (cert_bad) {
+                    ESP_LOGW(TAG, "broker certificate not accepted (flags 0x%x): it must come from a public CA "
+                                  "(e.g. Let's Encrypt), be valid now, and name the host set here",
+                             (unsigned)x->esp_tls_cert_verify_flags);
+                } else if (tls_bad) {
+                    ESP_LOGW(TAG, "TLS handshake with the broker failed (mbedTLS -0x%04x): is TLS on at this port?",
+                             (unsigned)(x->esp_tls_stack_err < 0 ? -x->esp_tls_stack_err : x->esp_tls_stack_err));
                 } else {
                     ESP_LOGW(TAG, "cannot reach the broker (error type %d, socket errno %d): retrying every 10 s",
                              (int)x->error_type, x->esp_transport_sock_errno);
@@ -415,7 +446,7 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         down_in(e);
         break;
     case MQTT_EVENT_BEFORE_CONNECT:
-        if (atomic_load(&s_state) != ST_REFUSED) {
+        if (atomic_load(&s_state) != ST_REFUSED && atomic_load(&s_state) != ST_TLS_ERROR) {
             atomic_store(&s_state, ST_CONNECTING);
         }
         break;
@@ -456,7 +487,11 @@ esp_err_t mqttc_start(void)
         }
     }
     const esp_mqtt_client_config_t cfg = {
-        .broker.address = {.hostname = s_cfg.host, .port = s_cfg.port, .transport = MQTT_TRANSPORT_OVER_TCP},
+        .broker = {.address = {.hostname = s_cfg.host,
+                               .port = s_cfg.port,
+                               .transport = s_cfg.tls ? MQTT_TRANSPORT_OVER_SSL : MQTT_TRANSPORT_OVER_TCP},
+                   .verification = {.crt_bundle_attach = s_cfg.tls ? esp_crt_bundle_attach : NULL}},
+        .task = {.stack_size = s_cfg.tls ? CLIENT_STACK_TLS : 0}, /* 0: the Kconfig default */
         .credentials = {.username = s_cfg.user[0] != '\0' ? s_cfg.user : NULL,
                         .client_id = client_id,
                         .authentication.password = s_pass[0] != '\0' ? s_pass : NULL},
@@ -466,8 +501,14 @@ esp_err_t mqttc_start(void)
         .buffer = {.size = 1536, .out_size = 1536},
         .outbox = {.limit = OUTBOX_LIMIT},
     };
-    /* esp-mqtt logs every failed retry; this file logs each new failure once. */
-    esp_log_level_set("mqtt_client", ESP_LOG_NONE);
+    /* esp-mqtt and the transport layers log every failed retry (three lines
+     * every 10 s for a TLS failure); this file logs each new failure once, and
+     * the Basics Station link logs its own: silenced (the same levels as
+     * lbsfwd.c quiet_transport_logs, which may run later). */
+    static const char *const quiet[] = {"mqtt_client", "esp-tls", "esp-tls-mbedtls", "transport_base", "transport"};
+    for (size_t i = 0; i < sizeof quiet / sizeof quiet[0]; i++) {
+        esp_log_level_set(quiet[i], ESP_LOG_NONE);
+    }
     s_client = esp_mqtt_client_init(&cfg);
     ESP_RETURN_ON_FALSE(s_client != NULL, ESP_ERR_NO_MEM, TAG, "client");
     ESP_RETURN_ON_ERROR(esp_mqtt_client_register_event(s_client, ESP_EVENT_ANY_ID, on_event, NULL), TAG, "events");
@@ -475,8 +516,8 @@ esp_err_t mqttc_start(void)
     const BaseType_t ok = xTaskCreatePinnedToCore(mqtt_task, "mqttc", TASK_STACK, NULL, TASK_PRIO, NULL, TASK_CORE);
     ESP_RETURN_ON_FALSE(ok == pdPASS, ESP_ERR_NO_MEM, TAG, "task");
     ESP_RETURN_ON_ERROR(esp_mqtt_client_start(s_client), TAG, "start");
-    ESP_LOGI(TAG, "broker %s:%u, gateway id %s, client id %s", s_cfg.host, (unsigned)s_cfg.port, s_cfg.gw_id,
-             client_id);
+    ESP_LOGI(TAG, "broker %s:%u%s, gateway id %s, client id %s", s_cfg.host, (unsigned)s_cfg.port,
+             s_cfg.tls ? " (TLS)" : "", s_cfg.gw_id, client_id);
     return ESP_OK;
 }
 
@@ -505,7 +546,7 @@ void mqttc_result(const mqttc_res_t *r)
 
 void mqttc_status_line(char *buf, size_t len)
 {
-    static const char *const NAMES[] = {"off", "no_host", "connecting", "connected", "refused"};
+    static const char *const NAMES[] = {"off", "no_host", "connecting", "connected", "refused", "tls_error"};
     mqttc_cfg_t c;
     if (s_client != NULL || atomic_load(&s_state) == ST_NO_HOST) {
         c = s_cfg;
@@ -514,10 +555,10 @@ void mqttc_status_line(char *buf, size_t len)
     }
     const int st = atomic_load(&s_state);
     snprintf(buf, len,
-             "state=%s on=%s host=%s port=%u user=%s pass=%s gw_id=%s"
+             "state=%s tls=%s on=%s host=%s port=%u user=%s pass=%s gw_id=%s"
              " published=%u dropped=%u failed=%u connects=%u down_queued=%u down_refused=%u results=%u"
              " results_dropped=%u",
-             NAMES[st >= 0 && st <= ST_REFUSED ? st : 0], c.on ? "on" : "off", c.host[0] ? c.host : "-",
+             NAMES[st >= 0 && st <= ST_TLS_ERROR ? st : 0], c.tls ? "on" : "off", c.on ? "on" : "off", c.host[0] ? c.host : "-",
              (unsigned)c.port, c.user[0] ? c.user : "-", c.pass_set ? "set" : "none", c.gw_id,
              atomic_load(&s_published), atomic_load(&s_dropped), atomic_load(&s_failed), atomic_load(&s_connects),
              atomic_load(&s_down_ok), atomic_load(&s_down_bad), atomic_load(&s_results),
