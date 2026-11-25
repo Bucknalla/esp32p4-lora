@@ -42,6 +42,7 @@
 #include "radio_pkt.h"
 #include "radio_tx.h"
 #include "sdkconfig.h"
+#include "codecs.h"
 #include "mqttc.h"
 #include "sv.h"
 
@@ -186,6 +187,8 @@ typedef struct {
 
 static lwc_ns_t s_ns;
 static dev_stat_t s_stat[LWC_NS_MAX_DEVICES];
+/* the payload codec of each device slot (ADR-0021), "" for none; NVS key x<slot> */
+static char s_codec[LWC_NS_MAX_DEVICES][CODEC_NAME_MAX + 1U];
 static SemaphoreHandle_t s_lock;
 static QueueHandle_t s_radio_q;
 static QueueHandle_t s_fwd_q;
@@ -418,6 +421,11 @@ static void load(void)
             s_ns.dev[i].has_up = c.has_up != 0U;
         }
         s_ns.dev[i].fcnt_down += FCNT_DOWN_SKIP;
+        key_of(k, 'x', i);
+        size_t cl = sizeof s_codec[i];
+        if (nvs_get_str(h, k, s_codec[i], &cl) != ESP_OK || !codecs_name_ok(s_codec[i])) {
+            s_codec[i][0] = '\0';
+        }
         n++;
     }
     if (r != NULL) {
@@ -558,6 +566,10 @@ static void ev_radio(mqttc_ev_t *ev, const radio_pkt_t *p, const lwc_ns_dev_t *d
     ev->freq_hz = p->freq_hz;
     ev->time_unix_s = p->time_unix_us >= 0 ? p->time_unix_us / 1000000 : -1;
     ev->port = -1;
+    const size_t i = (size_t)(d - s_ns.dev);
+    if (i < LWC_NS_MAX_DEVICES) {
+        memcpy(ev->codec, s_codec[i], sizeof ev->codec);
+    }
 }
 
 static bool handle(const radio_pkt_t *p)
@@ -963,6 +975,7 @@ lwc_ns_err_t lns_add(uint64_t dev_eui, uint64_t join_eui, const uint8_t app_key[
             r = LWC_NS_ERR_FULL; /* storage full or failing */
         } else {
             memset(&s_stat[idx], 0, sizeof s_stat[idx]);
+            s_codec[idx][0] = '\0';
         }
     }
     xSemaphoreGive(s_lock);
@@ -1008,6 +1021,59 @@ lwc_ns_err_t lns_set_class(uint64_t dev_eui, const lwc_ns_class_t *cls, const ui
     return r;
 }
 
+lwc_ns_err_t lns_set_codec(uint64_t dev_eui, const char *codec)
+{
+    if (s_lock == NULL || codec == NULL || (codec[0] != '\0' && !codecs_name_ok(codec))) {
+        return LWC_NS_ERR_ARG;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    const int i = lwc_ns_find(&s_ns, dev_eui);
+    lwc_ns_err_t r = i < 0 ? LWC_NS_ERR_NOT_FOUND : LWC_NS_OK;
+    if (r == LWC_NS_OK) {
+        nvs_handle_t h;
+        char k[4];
+        key_of(k, 'x', (size_t)i);
+        esp_err_t err = nvs_open(NVS_NS, NVS_READWRITE, &h);
+        if (err == ESP_OK) {
+            if (codec[0] != '\0') {
+                err = nvs_set_str(h, k, codec);
+            } else {
+                err = nvs_erase_key(h, k);
+                err = err == ESP_ERR_NVS_NOT_FOUND ? ESP_OK : err;
+            }
+            if (err == ESP_OK) {
+                err = nvs_commit(h);
+            }
+            nvs_close(h);
+        }
+        if (err == ESP_OK) {
+            (void)snprintf(s_codec[i], sizeof s_codec[i], "%s", codec);
+        } else {
+            r = LWC_NS_ERR_FULL;
+        }
+    }
+    xSemaphoreGive(s_lock);
+    char e[17];
+    if (r == LWC_NS_OK) {
+        ESP_LOGI(TAG, "device %s: codec %s", eui_str(dev_eui, e), codec[0] != '\0' ? codec : "none");
+    }
+    return r;
+}
+
+bool lns_codec_of(uint64_t dev_eui, char out[CODEC_NAME_MAX + 1U])
+{
+    out[0] = '\0';
+    if (s_lock == NULL || xSemaphoreTake(s_lock, pdMS_TO_TICKS(200)) != pdTRUE) {
+        return false;
+    }
+    const int i = lwc_ns_find(&s_ns, dev_eui);
+    if (i >= 0) {
+        memcpy(out, s_codec[i], CODEC_NAME_MAX + 1U);
+    }
+    xSemaphoreGive(s_lock);
+    return i >= 0;
+}
+
 lwc_ns_err_t lns_remove(uint64_t dev_eui)
 {
     if (s_lock == NULL) {
@@ -1019,6 +1085,7 @@ lwc_ns_err_t lns_remove(uint64_t dev_eui)
     if (i >= 0) {
         r = lwc_ns_remove(&s_ns, dev_eui);
         memset(&s_stat[i], 0, sizeof s_stat[i]);
+        s_codec[i][0] = '\0';
         if (s_dlq != NULL) {
             dlq_drop_all(&s_dlq[i], "device removed");
         }
@@ -1028,6 +1095,8 @@ lwc_ns_err_t lns_remove(uint64_t dev_eui)
             key_of(k, 'd', (size_t)i);
             erase_key(h, k);
             key_of(k, 'c', (size_t)i);
+            erase_key(h, k);
+            key_of(k, 'x', (size_t)i);
             erase_key(h, k);
             (void)nvs_commit(h);
             nvs_close(h);
@@ -1088,7 +1157,7 @@ size_t lns_devices_json(char *out, size_t cap)
                     "\"joined\":%s,\"answered\":%s,\"dev_addr\":\"%08" PRIX32 "\",\"fcnt_up\":%" PRIu32 ",\"uplinks\":%" PRIu32
                     ",\"seen_s\":%" PRId64 ",\"rssi\":%d,\"snr\":%.1f,\"sf\":%u,\"port\":%d,\"payload\":\"%s\","
                     "\"battery\":%d,\"margin\":%d,\"tx_power\":%u,\"adr\":%s,\"rx1_delay_s\":%u,\"rx2_hz\":%" PRIu32
-                    ",\"rx2_dr\":%u,\"class\":\"%c\",\"c_ack_s\":%u,\"waiting\":%u}",
+                    ",\"rx2_dr\":%u,\"class\":\"%c\",\"c_ack_s\":%u,\"waiting\":%u,\"codec\":\"%s\"}",
                     first ? "" : ",", eui_str(d->dev_eui, dev), eui_str(d->join_eui, join), name,
                     d->mac == LWC_NS_MAC_1_0_4 ? "1.0.4" : "1.0.2", d->joined ? "true" : "false",
                     st->join_unanswered ? "false" : "true",
@@ -1098,7 +1167,7 @@ size_t lns_devices_json(char *out, size_t cap)
                     s_ns.link[i].has_status ? (int)s_ns.link[i].battery : -1, (int)s_ns.link[i].margin,
                     s_ns.link[i].tx_power, s_ns.link[i].adr_pending ? "\"pending\"" : "null", (unsigned)d->rx1_delay_s,
                     d->rx2_hz, (unsigned)d->rx2_dr, d->dev_class == LWC_NS_CLASS_C ? 'C' : 'A', lwc_ns_c_ack_s(d),
-                    s_dlq != NULL ? (unsigned)s_dlq[i].n : 0U);
+                    s_dlq != NULL ? (unsigned)s_dlq[i].n : 0U, s_codec[i]);
             first = false;
         }
         xSemaphoreGive(s_lock);

@@ -48,6 +48,49 @@ foreach(t logring supervisor session form netaddr led aes lorawan ns hex mac lbs
     add_test(NAME ${t} COMMAND test_${t})
 endforeach()
 
+# ---- payload codecs (ADR-0021): QuickJS-NG, upstream v0.14.0 for host tests ----
+# (the firmware uses Espressif's port of the same version, espressif/quickjs-ng)
+option(LWC_CODEC "Build the JavaScript codec glue and its tests (fetches QuickJS-NG)" ON)
+if(LWC_CODEC)
+    include(FetchContent)
+    FetchContent_Declare(quickjs_ng
+        URL https://github.com/quickjs-ng/quickjs/archive/refs/tags/v0.14.0.tar.gz
+        URL_HASH SHA256=928e9406addd99eb8623348f2cfcd916eade9a263c60d42be79bc7aee4ee8453
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+    FetchContent_GetProperties(quickjs_ng)
+    if(NOT quickjs_ng_POPULATED)
+        FetchContent_Populate(quickjs_ng) # sources only: its own CMake builds tools we do not need
+    endif()
+    add_library(qjs STATIC ${quickjs_ng_SOURCE_DIR}/quickjs.c ${quickjs_ng_SOURCE_DIR}/libregexp.c
+        ${quickjs_ng_SOURCE_DIR}/libunicode.c ${quickjs_ng_SOURCE_DIR}/dtoa.c)
+    target_include_directories(qjs SYSTEM PUBLIC ${quickjs_ng_SOURCE_DIR})
+    target_compile_definitions(qjs PRIVATE _GNU_SOURCE)
+    set_target_properties(qjs PROPERTIES C_STANDARD 11 C_EXTENSIONS ON)
+    target_compile_options(qjs PRIVATE -w)
+    if(LWC_SANITIZE)
+        target_compile_options(qjs PUBLIC ${SAN_FLAGS})
+        target_link_options(qjs PUBLIC ${SAN_FLAGS})
+    endif()
+    find_library(MATH_LIB m)
+    if(MATH_LIB)
+        target_link_libraries(qjs PUBLIC ${MATH_LIB})
+    endif()
+    find_package(Threads)
+    if(Threads_FOUND)
+        target_link_libraries(qjs PUBLIC Threads::Threads)
+    endif()
+
+    add_library(lwc_codec STATIC src/codec.c)
+    target_include_directories(lwc_codec PUBLIC include)
+    target_compile_options(lwc_codec PRIVATE ${LWC_WARNINGS})
+    target_link_libraries(lwc_codec PUBLIC qjs)
+
+    add_executable(test_codec test/test_codec.c)
+    target_link_libraries(test_codec PRIVATE lwc_codec lwc_core)
+    target_compile_options(test_codec PRIVATE ${LWC_WARNINGS})
+    add_test(NAME codec COMMAND test_codec)
+endif()
+
 if(LWC_FUZZ)
     add_executable(fuzz_frame fuzz/fuzz_frame.c ${LWC_SOURCES})
     target_include_directories(fuzz_frame PRIVATE include)

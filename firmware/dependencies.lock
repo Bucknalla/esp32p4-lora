@@ -167,6 +167,16 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 0.2.0
+  espressif/quickjs-ng:
+    component_hash: 51ead31abca34af01a44df24128e9ea10331cf35beb976a18fae62a03d36d6e2
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.4'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 0.14.0
   espressif/wifi_remote_over_eppp:
     component_hash: 1fd6968af20f0b19e421f6b519b0a8caf81d689afc3783b564c28559e45f66ef
     dependencies:
@@ -185,6 +195,16 @@ dependencies:
     source:
       type: idf
     version: 6.1.1
+  joltwallet/littlefs:
+    component_hash: 3af20a3d75c49db9dc2286fd50862c34055c9f578419ad1f2bf7ed3ed01391fe
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.22.3
 direct_dependencies:
 - espressif/esp_hosted
 - espressif/esp_websocket_client
@@ -194,7 +214,9 @@ direct_dependencies:
 - espressif/mqtt
 - espressif/network_provisioning
 - espressif/qrcode
+- espressif/quickjs-ng
 - idf
-manifest_hash: 110fb59903baea48e60b073e61abf128845c4b48f1980217b0c2292cdc36bde2
+- joltwallet/littlefs
+manifest_hash: 5a1b5386efc9c1a7a97f2b7f3480ff3052ce2ceb57b865990b69bf117362e382
 target: esp32p4
 version: 3.0.0

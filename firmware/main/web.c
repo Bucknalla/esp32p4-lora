@@ -18,6 +18,7 @@
 #include "esp_timer.h"
 #include "fault.h"
 #include "gwmode.h"
+#include "codecs.h"
 #include "lns.h"
 #include "lwc/hex.h"
 #include "freertos/FreeRTOS.h"
@@ -357,6 +358,8 @@ static esp_err_t api_status(httpd_req_t *req)
     json_str(out, STATUS_MAX, &o, "lns", line);
     mqttc_status_line(line, sizeof line);
     json_str(out, STATUS_MAX, &o, "mqtt", line);
+    codecs_status_line(line, sizeof line);
+    json_str(out, STATUS_MAX, &o, "codecs", line);
     lbsfwd_status(line, sizeof line);
     if (line[0] != '\0') {
         json_str(out, STATUS_MAX, &o, "lbs", strncmp(line, "LBS ", 4) == 0 ? line + 4 : line);
@@ -1018,7 +1021,7 @@ static esp_err_t api_devices_settings(httpd_req_t *req)
     }
     char body[BODY_MAX + 1];
     size_t got;
-    char dev[24], cls[4], ack[8];
+    char dev[24], cls[4], ack[8], codec[CODEC_NAME_MAX + 1U];
     uint64_t dev_eui;
     if (!read_body(req, body, &got)) {
         return send_status(req, "400 Bad Request", "bad body\n");
@@ -1026,21 +1029,230 @@ static esp_err_t api_devices_settings(httpd_req_t *req)
     const int dl = lwc_form_get(body, got, "dev_eui", dev, sizeof dev);
     const int cl = lwc_form_get(body, got, "class", cls, sizeof cls);
     const int al = lwc_form_get(body, got, "c_ack_s", ack, sizeof ack);
+    const int kl = lwc_form_get(body, got, "codec", codec, sizeof codec);
     if (dl <= 0 || !lwc_hex_eui(dev, (size_t)dl, &dev_eui)) {
         return send_status(req, "400 Bad Request", "DevEUI: 16 hex digits.\n");
     }
     char *end = NULL;
     const long secs = al > 0 ? strtol(ack, &end, 10) : -1;
+    if (kl > 0 && !codecs_exists(codec)) {
+        return send_status(req, "400 Bad Request", "codec: no codec of that name (add it on the Devices tab first).\n");
+    }
+    if (kl >= 0 && cl < 0 && al < 0) {
+        const lwc_ns_err_t e = lns_set_codec(dev_eui, kl > 0 ? codec : "");
+        return e == LWC_NS_OK ? send_status(req, "200 OK", "saved\n")
+                              : send_status(req, e == LWC_NS_ERR_NOT_FOUND ? "404 Not Found" : "507 Insufficient Storage",
+                                            ns_err_text(e));
+    }
     if ((cl < 0 && al < 0) || (cl >= 0 && strcmp(cls, "A") != 0 && strcmp(cls, "C") != 0) || al == 0 ||
         (al > 0 && (*end != '\0' || (secs != 0 && (secs < (long)LWC_NS_C_ACK_MIN_S || secs > (long)LWC_NS_C_ACK_MAX_S))))) {
         return send_status(req, "400 Bad Request", "class: A or C; c_ack_s: 0 (default, 60) or 5 to 3600.\n");
     }
     const lwc_ns_class_t c = cls[0] == 'C' ? LWC_NS_CLASS_C : LWC_NS_CLASS_A;
     const uint16_t a = (uint16_t)(secs < 0 ? 0 : secs);
-    const lwc_ns_err_t e = lns_set_class(dev_eui, cl > 0 ? &c : NULL, al > 0 ? &a : NULL);
+    lwc_ns_err_t e = lns_set_class(dev_eui, cl > 0 ? &c : NULL, al > 0 ? &a : NULL);
+    if (e == LWC_NS_OK && kl >= 0) {
+        e = lns_set_codec(dev_eui, kl > 0 ? codec : "");
+    }
     return e == LWC_NS_OK ? send_status(req, "200 OK", "saved\n")
                           : send_status(req, e == LWC_NS_ERR_NOT_FOUND ? "404 Not Found" : "507 Insufficient Storage",
                                         ns_err_text(e));
+}
+
+/* ---- payload codecs (ADR-0021) -------------------------------------------------------
+ * GET  /api/codecs                      list (viewer)
+ * GET  /api/codecs/source?name=         the script (admin)
+ * POST /api/codecs?name=                the script as the raw body, at most 128 KB (admin):
+ *                                       compiled first, stored only if it compiles
+ * POST /api/codecs/delete   name=       (admin)
+ * POST /api/codecs/test     name=&port=&payload_hex=   decode once, or
+ *                            name=[&port=]&object=      encode once (admin) */
+#define CODECS_JSON_MAX 8192
+
+static bool query_name(httpd_req_t *req, char name[CODEC_NAME_MAX + 1U])
+{
+    char q[64];
+    return httpd_req_get_url_query_str(req, q, sizeof q) == ESP_OK &&
+           httpd_query_key_value(q, "name", name, CODEC_NAME_MAX + 1U) == ESP_OK && codecs_name_ok(name);
+}
+
+static esp_err_t api_codecs_get(httpd_req_t *req)
+{
+    esp_err_t r;
+    if (!gate(req, LWC_ROLE_VIEWER, &r)) {
+        return r;
+    }
+    char *out = heap_caps_malloc(CODECS_JSON_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (out == NULL) {
+        return send_status(req, "503 Service Unavailable", "no memory\n");
+    }
+    const size_t n = codecs_json(out, CODECS_JSON_MAX);
+    common_headers(req);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    r = httpd_resp_send(req, out, (ssize_t)n);
+    heap_caps_free(out);
+    return r;
+}
+
+static esp_err_t api_codecs_source(httpd_req_t *req)
+{
+    esp_err_t r;
+    if (!gate(req, LWC_ROLE_ADMIN, &r)) {
+        return r;
+    }
+    char name[CODEC_NAME_MAX + 1U];
+    char *buf = NULL;
+    size_t n = 0;
+    if (!query_name(req, name) || codecs_source(name, &buf, &n) != ESP_OK) {
+        return send_status(req, "404 Not Found", "no codec of that name\n");
+    }
+    common_headers(req);
+    httpd_resp_set_type(req, "text/javascript; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    r = httpd_resp_send(req, buf, (ssize_t)n);
+    heap_caps_free(buf);
+    return r;
+}
+
+static esp_err_t api_codecs_post(httpd_req_t *req)
+{
+    esp_err_t r;
+    if (!gate(req, LWC_ROLE_ADMIN, &r)) {
+        return r;
+    }
+    char name[CODEC_NAME_MAX + 1U];
+    if (!query_name(req, name)) {
+        return send_status(req, "400 Bad Request", "name: 1 to 31 of a-z 0-9 _ - in the query (?name=)\n");
+    }
+    if (req->content_len == 0 || req->content_len > CODEC_SRC_MAX) {
+        return send_status(req, "413 Payload Too Large", "script: 1 B to 128 KB\n");
+    }
+    char *src = heap_caps_malloc(req->content_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (src == NULL) {
+        return send_status(req, "503 Service Unavailable", "no memory\n");
+    }
+    size_t got = 0;
+    while (got < req->content_len) {
+        const int n = httpd_req_recv(req, src + got, req->content_len - got);
+        if (n <= 0) {
+            heap_caps_free(src);
+            return send_status(req, "400 Bad Request", "bad body\n");
+        }
+        got += (size_t)n;
+    }
+    char err[LWC_CODEC_ERR_MAX + 2U];
+    const esp_err_t e = codecs_put(name, src, got, err);
+    heap_caps_free(src);
+    if (e == ESP_OK) {
+        ESP_LOGW(TAG, "codec %s replaced or added", name);
+        return send_status(req, "200 OK", "stored\n");
+    }
+    (void)strcat(err, "\n");
+    return send_status(req, e == ESP_ERR_NO_MEM ? "507 Insufficient Storage" : e == ESP_FAIL ? "500 Internal Server Error"
+                                                                                            : "400 Bad Request",
+                       err);
+}
+
+static esp_err_t api_codecs_delete(httpd_req_t *req)
+{
+    esp_err_t r;
+    if (!gate(req, LWC_ROLE_ADMIN, &r)) {
+        return r;
+    }
+    char body[BODY_MAX + 1], name[CODEC_NAME_MAX + 1U];
+    size_t got;
+    if (!read_body(req, body, &got) || lwc_form_get(body, got, "name", name, sizeof name) <= 0) {
+        return send_status(req, "400 Bad Request", "name\n");
+    }
+    return codecs_delete(name) == ESP_OK ? send_status(req, "200 OK", "deleted\n")
+                                         : send_status(req, "404 Not Found", "no codec of that name\n");
+}
+
+static esp_err_t api_codecs_test(httpd_req_t *req)
+{
+    esp_err_t r;
+    if (!gate(req, LWC_ROLE_ADMIN, &r)) {
+        return r;
+    }
+    /* an object can be 1 KB of JSON, three times that form-encoded */
+    if (req->content_len == 0 || req->content_len > 4000U) {
+        return send_status(req, "400 Bad Request", "bad body\n");
+    }
+    char *body = heap_caps_malloc(4096 + 1024 + 2048, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (body == NULL) {
+        return send_status(req, "503 Service Unavailable", "no memory\n");
+    }
+    char *objtxt = body + 4096; /* 1 KB: the object, decoded from the form */
+    char *out = objtxt + 1024;  /* 2 KB: the answer */
+    size_t got = 0;
+    while (got < req->content_len) {
+        const int n = httpd_req_recv(req, body + got, req->content_len - got);
+        if (n <= 0) {
+            heap_caps_free(body);
+            return send_status(req, "400 Bad Request", "bad body\n");
+        }
+        got += (size_t)n;
+    }
+    body[got] = '\0';
+    char name[CODEC_NAME_MAX + 1U], port_s[8], hex[2U * 242U + 2U];
+    const int nl = lwc_form_get(body, got, "name", name, sizeof name);
+    const int pl = lwc_form_get(body, got, "port", port_s, sizeof port_s);
+    const int hl = lwc_form_get(body, got, "payload_hex", hex, sizeof hex);
+    const int ol = lwc_form_get(body, got, "object", objtxt, 1024);
+    static uint8_t data[242]; /* web server task: one request at a time */
+    char *end = NULL;
+    const long port = pl > 0 ? strtol(port_s, &end, 10) : 0;
+    const bool encode = ol > 0;
+    if (nl <= 0 || (pl > 0 && (*end != '\0' || port < 1 || port > 223)) || (!encode && pl <= 0) ||
+        (!encode && (hl < 0 || hl % 2 != 0 || (hl > 0 && !lwc_hex_decode(hex, (size_t)hl, data, (size_t)hl / 2U))))) {
+        heap_caps_free(body);
+        return send_status(req, "400 Bad Request",
+                           "name, then port (1-223) and payload_hex to decode, or object (JSON, port optional) to "
+                           "encode\n");
+    }
+    char *obj = out + 1024;
+    char warn[128], err[LWC_CODEC_ERR_MAX];
+    size_t blen = 0;
+    uint8_t bport = 0;
+    const int64_t t0 = esp_timer_get_time();
+    const bool ok = encode ? codecs_encode(name, objtxt, (size_t)ol, (uint8_t)port, data, sizeof data, &blen, &bport,
+                                           warn, sizeof warn, err)
+                           : codecs_decode(name, (uint8_t)port, data, (size_t)hl / 2U, -1, obj, 1024, warn, sizeof warn,
+                                           err);
+    const int64_t us = esp_timer_get_time() - t0;
+    size_t o = 0;
+    o += (size_t)snprintf(out + o, 1024 - o, "{\"ok\":%s,\"ms\":%lld", ok ? "true" : "false", (long long)(us / 1000));
+    if (ok && encode) {
+        char h[2U * 242U + 1U];
+        lwc_hex_encode(data, blen, h);
+        o += (size_t)snprintf(out + o, 1024 - o, ",\"port\":%u", bport);
+        json_str(out, 1024, &o, "payload_hex", h);
+    }
+    if (ok) {
+        json_str(out, 1024, &o, "warnings", warn);
+    } else {
+        json_str(out, 1024, &o, "error", err);
+    }
+    common_headers(req);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    /* a decoded object is JSON already: sent as it is */
+    r = httpd_resp_send_chunk(req, out, (ssize_t)o);
+    if (r == ESP_OK && ok && !encode) {
+        r = httpd_resp_send_chunk(req, ",\"object\":", 10);
+        if (r == ESP_OK) {
+            r = httpd_resp_send_chunk(req, obj, (ssize_t)strlen(obj));
+        }
+    }
+    if (r == ESP_OK) {
+        r = httpd_resp_send_chunk(req, "}", 1);
+    }
+    if (r == ESP_OK) {
+        r = httpd_resp_send_chunk(req, NULL, 0);
+    }
+    heap_caps_free(body);
+    return r;
 }
 
 /* ---- claim (ADR-0014) ------------------------------------------------------------
@@ -1151,7 +1363,7 @@ esp_err_t web_start(void)
     cfg.httpd.core_id = 0;
     cfg.httpd.max_open_sockets = 3;
     cfg.httpd.lru_purge_enable = true;
-    cfg.httpd.max_uri_handlers = 28;
+    cfg.httpd.max_uri_handlers = 36;
     cfg.httpd.uri_match_fn = NULL;
     ESP_RETURN_ON_ERROR(httpd_ssl_start(&s_srv, &cfg), TAG, "httpd_ssl_start");
 
@@ -1179,6 +1391,11 @@ esp_err_t web_start(void)
         {.uri = "/api/devices", .method = HTTP_POST, .handler = api_devices_post},
         {.uri = "/api/devices/delete", .method = HTTP_POST, .handler = api_devices_delete},
         {.uri = "/api/devices/settings", .method = HTTP_POST, .handler = api_devices_settings},
+        {.uri = "/api/codecs", .method = HTTP_GET, .handler = api_codecs_get},
+        {.uri = "/api/codecs", .method = HTTP_POST, .handler = api_codecs_post},
+        {.uri = "/api/codecs/source", .method = HTTP_GET, .handler = api_codecs_source},
+        {.uri = "/api/codecs/delete", .method = HTTP_POST, .handler = api_codecs_delete},
+        {.uri = "/api/codecs/test", .method = HTTP_POST, .handler = api_codecs_test},
     };
     for (size_t i = 0; i < sizeof uris / sizeof uris[0]; i++) {
         ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_srv, &uris[i]), TAG, "uri %s", uris[i].uri);

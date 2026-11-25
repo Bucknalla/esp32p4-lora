@@ -463,7 +463,34 @@ function battery(level) {
     sv('rect', { class: 'fill', x: 2.5, y: 2.5, width: (15 * frac).toFixed(1), height: 7, rx: 1 }), sv('rect', { x: 19.5, y: 4, width: 2, height: 4, rx: 1, fill: 'currentColor' }));
   return el('span', { class: 'batt' }, s, txt);
 }
+/* ---- payload codecs (ADR-0021) --------------------------------------------- */
+let CODECS = [];
+async function refreshCodecs() {
+  try { CODECS = await (await api('/api/codecs')).json(); } catch (e) { CODECS = []; }
+  const list = $('#codec-list');
+  if (!CODECS.length) {
+    list.replaceChildren(el('p', { class: 'empty-note', text: 'No codecs yet.' }));
+  } else {
+    list.replaceChildren(...CODECS.map((c) => {
+      const del = el('button', { type: 'button', class: 'ghost small admin', text: 'Delete' });
+      del.addEventListener('click', async () => {
+        if (!confirm('Delete codec ' + c.name + '? Devices that use it then send uplinks without decoded data.')) return;
+        try { await post('/api/codecs/delete', 'name=' + encodeURIComponent(c.name)); toast('Codec deleted.'); refreshDevices(); } catch (e) { toast(e.message, true); }
+      });
+      return el('div', { class: 'codec' }, el('code', { text: c.name }),
+        el('span', { class: 'chip dot ' + (c.ok ? 'ok' : 'bad'), text: c.ok ? 'Compiled' : 'Does not compile' }),
+        c.ok && c.encode ? el('span', { class: 'chip', text: 'Encoder' }) : null,
+        el('small', { text: (c.size / 1024).toFixed(1) + ' KB' + (c.ok ? '' : ': ' + c.error) }), del);
+    }));
+  }
+  const sel = $('#codec-test-name');
+  const keep = sel.value;
+  sel.replaceChildren(...CODECS.map((c) => el('option', { value: c.name, text: c.name })));
+  if (keep) sel.value = keep;
+}
+
 async function refreshDevices() {
+  await refreshCodecs();
   try {
     const list = await (await api('/api/devices')).json();
     if (!list.length) {
@@ -492,9 +519,17 @@ async function refreshDevices() {
         try { await post('/api/devices/settings', 'dev_eui=' + d.dev_eui + '&c_ack_s=' + ack.value); toast('ACK wait ' + ack.value + ' s.'); } catch (e) { toast(e.message, true); refreshDevices(); }
       });
       const ackBox = d.class === 'C' ? el('label', { class: 'admin ack-wait' }, 'ACK wait ', ack, ' s') : null;
+      /* payload codec (ADR-0021) */
+      const cod = el('select', { class: 'admin small', 'aria-label': 'Codec of ' + (d.name || d.dev_eui) },
+        el('option', { value: '', text: 'No codec' }), ...CODECS.map((c) => el('option', { value: c.name, text: 'Codec: ' + c.name })));
+      if (d.codec && !CODECS.some((c) => c.name === d.codec)) cod.append(el('option', { value: d.codec, text: 'Codec: ' + d.codec + ' (missing)' }));
+      cod.value = d.codec || '';
+      cod.addEventListener('change', async () => {
+        try { await post('/api/devices/settings', 'dev_eui=' + d.dev_eui + '&codec=' + encodeURIComponent(cod.value)); toast(cod.value ? 'Codec ' + cod.value + ' set.' : 'Codec removed.'); } catch (e) { toast(e.message, true); refreshDevices(); }
+      });
       return el('div', { class: 'dev' },
         el('div', { class: 'who' }, el('b', { text: d.name || 'Unnamed device' }), el('code', { text: d.dev_eui }),
-          el('span', { class: 'chip viewer-only', text: 'Class ' + (d.class === 'C' ? 'C' : 'A') }), cls, ackBox,
+          el('span', { class: 'chip viewer-only', text: 'Class ' + (d.class === 'C' ? 'C' : 'A') + (d.codec ? ' · ' + d.codec : '') }), cls, ackBox, cod,
           d.waiting ? el('span', { class: 'chip warn', text: d.waiting + ' downlink' + (d.waiting > 1 ? 's' : '') + ' waiting' }) : null),
         el('div', { class: 'sig' }, bars(d.snr, seen), el('span', { text: seen ? d.rssi + ' dBm · SNR ' + d.snr + ' dB · SF' + d.sf : 'No signal yet' })),
         el('div', { class: 'seen' }, el('span', { class: 'chip dot ' + status[0], text: status[1] }),
@@ -865,6 +900,31 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   /* devices */
+  $('#codec-add').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const f = ev.target, file = f.file.files[0];
+    if (!file) return;
+    if (file.size > 128 * 1024) { toast('The script is larger than 128 KB.', true); return; }
+    try {
+      await api('/api/codecs?name=' + encodeURIComponent(f.name.value), { method: 'POST', headers: { 'Content-Type': 'text/javascript' }, body: await file.text() });
+      toast('Codec ' + f.name.value + ' stored.'); f.reset(); refreshDevices();
+    } catch (e) { toast(e.message, true); }
+  });
+  $('#codec-test').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const out = $('#codec-out');
+    try {
+      const fd = new FormData(ev.target), enc = ev.submitter && ev.submitter.value === 'encode';
+      fd.delete(enc ? 'payload_hex' : 'object');
+      if (enc && !fd.get('object')) { toast('Enter an object to encode.', true); return; }
+      const r = JSON.parse(await post('/api/codecs/test', new URLSearchParams(fd)));
+      const body = enc ? 'port ' + r.port + ', payload_hex ' + (r.payload_hex || '(empty)') : JSON.stringify(r.object, null, 2);
+      out.textContent = r.ok ? body + (r.warnings ? '\nWarnings: ' + r.warnings : '') + '\n(' + r.ms + ' ms)'
+        : 'Error: ' + r.error + '\n(' + r.ms + ' ms)';
+      out.className = 'codec-out' + (r.ok ? '' : ' bad');
+    } catch (e) { out.textContent = e.message; out.className = 'codec-out bad'; }
+    out.hidden = false;
+  });
   const addBox = $('#dev-add-box');
   $('#dev-add-open').addEventListener('click', () => { addBox.hidden = false; $('input', addBox).focus(); });
   $('#dev-add-cancel').addEventListener('click', () => { addBox.hidden = true; $('#dev-add').reset(); });

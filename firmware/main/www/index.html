@@ -186,7 +186,7 @@
                   <label>Gateway id <input name="mqtt_gw_id" id="mqtt-gwid" maxlength="31" pattern="[a-z0-9_]+"></label>
                 </div>
                 <p class="note">Topics: <code id="mqtt-topics"></code>. The gateway id is part of every topic.</p>
-                <p class="note">Downlinks: publish <code>{"id":"job-1","port":1,"payload_hex":"0102","confirmed":true}</code> (not retained) to <code>…/&lt;DevEUI&gt;/down</code>; <code>confirmed</code> and <code>id</code> are optional. The gateway sends it after the device's next uplink (a class C device: at once, then one every 5 s), up to 4 per device. Needs "Local server transmit" on (Radio tab).</p>
+                <p class="note">Downlinks: publish <code>{"id":"job-1","port":1,"payload_hex":"0102","confirmed":true}</code> (not retained) to <code>…/&lt;DevEUI&gt;/down</code>; <code>confirmed</code> and <code>id</code> are optional; with a codec, <code>{"object":{...}}</code> instead of <code>payload_hex</code> (port optional). The gateway sends it after the device's next uplink (a class C device: at once, then one every 5 s), up to 4 per device. Needs "Local server transmit" on (Radio tab).</p>
                 <p class="note">Results on <code>…/&lt;DevEUI&gt;/down/result</code>, with your <code>id</code>: <code>queued</code> or <code>refused</code>, then <code>sent</code> for each transmission, then <code>acked</code> or <code>nacked</code> for a confirmed downlink. <code>dropped</code> if it could not be delivered. A nacked downlink is not sent again: publish it again if needed.</p>
               </details>
               <p class="note" id="mqtt-plain-note">Plain MQTT (no TLS): the password and data cross the network readable; use it on your own network only.</p>
@@ -217,6 +217,26 @@
           <label>Class <select name="class"><option value="A">A: listens after each uplink</option><option value="C">C: listens all the time (mains powered)</option></select></label>
           <div class="actions"><button type="submit" class="primary">Add device</button><button type="button" class="ghost" id="dev-add-cancel">Cancel</button></div>
         </form>
+      </div>
+      <div class="panel" id="codec-box">
+        <h2>Payload codecs</h2>
+        <p class="note">JavaScript codecs, as published for TTN and ChirpStack: a decoder (<code>decodeUplink</code>, or the older <code>Decoder</code> and <code>Decode</code>) and/or an encoder (<code>encodeDownlink</code>, <code>Encoder</code>, <code>Encode</code>); join a device's two files into one. Pick one for a device above: its uplinks then carry the decoded data as <code>object</code> next to <code>payload_hex</code>, and its MQTT downlinks may carry <code>object</code> instead of <code>payload_hex</code>. Each run is limited to 200 ms and 1 MB.</p>
+        <div id="codec-list" class="codec-list"></div>
+        <h3 class="admin sub">Add or replace a codec</h3>
+        <form id="codec-add" class="grid-form admin" autocomplete="off">
+          <label>Name <input name="name" required maxlength="31" pattern="[a-z0-9_\-]+" placeholder="e.g. em300-th"></label>
+          <label>Script (.js, at most 128 KB) <input name="file" type="file" accept=".js,text/javascript" required></label>
+          <div class="actions"><button type="submit" class="primary">Add or replace codec</button></div>
+        </form>
+        <h3 class="admin sub">Try a codec</h3>
+        <form id="codec-test" class="grid-form admin" autocomplete="off">
+          <label>Codec <select name="name" id="codec-test-name"></select></label>
+          <label>Port <input name="port" type="number" min="1" max="223" value="1" required></label>
+          <label>Payload (hex), to decode <input name="payload_hex" class="hex" pattern="([0-9A-Fa-f]{2})*" maxlength="484" placeholder="e.g. 0175640367100104682D"></label>
+          <label class="wide">Object (JSON), to encode <textarea name="object" rows="3" maxlength="1024" placeholder='e.g. {"valve":"open"}'></textarea></label>
+          <div class="actions"><button type="submit" value="decode">Test decode</button><button type="submit" value="encode">Test encode</button></div>
+        </form>
+        <pre id="codec-out" class="codec-out" hidden></pre>
       </div>
     </div>
 

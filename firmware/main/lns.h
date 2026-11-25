@@ -8,6 +8,7 @@
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "codecs.h"
 #include "lwc/ns.h"
 
 /**
@@ -27,6 +28,13 @@ lwc_ns_err_t lns_add(uint64_t dev_eui, uint64_t join_eui, const uint8_t app_key[
 /** Change a device's class (A or C) and/or its class C ACK wait (seconds,
  *  0 = default), ADR-0020; NULL leaves one as it is. Its session is kept. */
 lwc_ns_err_t lns_set_class(uint64_t dev_eui, const lwc_ns_class_t *cls, const uint16_t *c_ack_s);
+
+/** The device's payload codec (ADR-0021): a codec name, or "" for none. The
+ *  caller checks the codec exists. */
+lwc_ns_err_t lns_set_codec(uint64_t dev_eui, const char *codec);
+
+/** The device's codec name into `out` ("" for none); false if no such device. */
+bool lns_codec_of(uint64_t dev_eui, char out[CODEC_NAME_MAX + 1U]);
 lwc_ns_err_t lns_remove(uint64_t dev_eui);
 
 /**
