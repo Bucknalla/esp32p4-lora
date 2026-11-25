@@ -11,7 +11,7 @@ option(LWC_SANITIZE "Build with ASan + UBSan" ON)
 option(LWC_FUZZ "Build libFuzzer targets (clang only)" OFF)
 
 set(LWC_SOURCES src/frame.c src/console_cmd.c src/txpk.c src/logring.c src/supervisor.c src/session.c src/form.c src/netaddr.c src/led.c src/aes.c src/lorawan.c src/ns.c src/hex.c src/mac.c
-    src/json.c src/lbs.c src/plan.c src/mqtt.c src/dlq.c src/gps.c)
+    src/json.c src/lbs.c src/plan.c src/mqtt.c src/dlq.c src/gps.c src/region.c)
 set(LWC_WARNINGS -Wall -Wextra -Werror -Wshadow -Wconversion -Wstrict-prototypes)
 
 add_library(lwc_core STATIC ${LWC_SOURCES})
@@ -25,6 +25,11 @@ if(LWC_SANITIZE)
 endif()
 
 enable_testing()
+# EU868 golden snapshot (ADR-0023): the output before the region layer
+add_executable(test_golden_eu868 test/test_golden_eu868.c)
+target_link_libraries(test_golden_eu868 PRIVATE lwc_core)
+target_compile_options(test_golden_eu868 PRIVATE ${LWC_WARNINGS})
+add_test(NAME golden_eu868 COMMAND test_golden_eu868 ${CMAKE_CURRENT_SOURCE_DIR}/test/golden_eu868.txt)
 add_executable(test_frame test/test_frame.c)
 target_link_libraries(test_frame PRIVATE lwc_core)
 target_compile_options(test_frame PRIVATE ${LWC_WARNINGS})
@@ -41,7 +46,7 @@ target_link_libraries(test_txpk PRIVATE lwc_core)
 target_compile_options(test_txpk PRIVATE ${LWC_WARNINGS})
 add_test(NAME txpk COMMAND test_txpk)
 
-foreach(t logring supervisor session form netaddr led aes lorawan ns hex mac lbs plan mqtt dlq gps)
+foreach(t logring supervisor session form netaddr led aes lorawan ns hex mac lbs plan mqtt dlq gps region)
     add_executable(test_${t} test/test_${t}.c)
     target_link_libraries(test_${t} PRIVATE lwc_core)
     target_compile_options(test_${t} PRIVATE ${LWC_WARNINGS})

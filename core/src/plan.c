@@ -2,10 +2,16 @@
 
 #include <string.h>
 
+#include "lwc/region.h"
+
 #define BAND_MIN_HZ 863000000U
 #define BAND_MAX_HZ 870000000U
 
-static const uint32_t k_defaults[3] = {868100000U, 868300000U, 868500000U};
+/* EU868 default channel k (RP002): the region table. */
+static uint32_t k_default(size_t k)
+{
+    return lwc_region(LWC_REGION_EU868)->default_ch[k].hz;
+}
 
 void lwc_plan_default_eu868(lwc_plan_t *p)
 {
@@ -87,7 +93,7 @@ lwc_plan_err_t lwc_plan_check(const lwc_plan_t *p)
     for (size_t d = 0; d < 3U; d++) {
         bool found = false;
         for (size_t i = 0; i < LWC_PLAN_MULTISF && !found; i++) {
-            found = lwc_plan_hz(p, &p->multisf[i]) == k_defaults[d];
+            found = lwc_plan_hz(p, &p->multisf[i]) == k_default(d);
         }
         if (!found) {
             return LWC_PLAN_ERR_DEFAULT;
@@ -110,7 +116,7 @@ size_t lwc_plan_cflist(const lwc_plan_t *p, uint32_t out[5])
         const uint32_t hz = lwc_plan_hz(p, &p->multisf[i]);
         bool skip = hz == 0U;
         for (size_t d = 0; d < 3U && !skip; d++) {
-            skip = hz == k_defaults[d];
+            skip = hz == k_default(d);
         }
         for (size_t j = 0; j < n && !skip; j++) {
             skip = out[j] == hz;
