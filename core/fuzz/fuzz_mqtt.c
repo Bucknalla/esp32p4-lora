@@ -10,7 +10,13 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 {
     lwc_mqtt_down_t d;
     const char *why = lwc_mqtt_down_parse((const char *)data, size, &d);
-    if (why == NULL && (d.port < 1U || d.port > 223U || d.len > sizeof d.data)) {
+    if (why == NULL && d.object == NULL && (d.port < 1U || d.port > 223U || d.len > sizeof d.data)) {
+        __builtin_trap();
+    }
+    /* an object is one span inside the input, starting with '{', at most 1 KB, port 0 or 1..223 */
+    if (why == NULL && d.object != NULL &&
+        (d.object < (const char *)data || d.object + d.object_len > (const char *)data + size || d.object_len < 2U ||
+         d.object_len > LWC_MQTT_OBJECT_MAX || d.object[0] != '{' || d.port > 223U || d.len != 0U)) {
         __builtin_trap();
     }
     /* whatever id was read goes into a result: it must always make valid output */

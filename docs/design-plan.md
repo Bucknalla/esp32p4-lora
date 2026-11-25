@@ -246,7 +246,7 @@ The gateway publishes plain JSON over standard protocols, so any application tha
 | MQTT | Out: uplinks, joins, status. In: downlink queue | JSON on `lora/<gateway_id>/…` topics (ADR-0018) | 3 |
 | HTTP webhook | Out | Same JSON as MQTT, POSTed per event | 5 |
 
-**Codecs:** decode and encode functions in JavaScript, compatible with ChirpStack and TTN codecs, run in an embedded QuickJS engine on PSRAM with a time and memory limit per call. Until then, raw payloads go out as base64 and are decoded downstream.
+**Codecs:** decode functions in JavaScript (TTN and ChirpStack formats) run in QuickJS-NG on PSRAM, compiled once and run fresh per uplink with time, memory and stack limits (ADR-0021); the decoded data goes out as `object` next to `payload_hex`. Downlinks may carry an object that the device's encoder turns into bytes.
 
 **Hybrid forwarding**
 

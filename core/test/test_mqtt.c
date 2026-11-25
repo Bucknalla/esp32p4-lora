@@ -116,6 +116,39 @@ static void test_up(void)
     CHECK(n > 0 && valid_json(out, n) && strstr(out, "fcnt") == NULL && strstr(out, "\"rssi\":-97") != NULL);
 }
 
+static void test_codec_fields(void)
+{
+    static const uint8_t pl[] = {0x01, 0x02};
+    char out[1024];
+    lwc_mqtt_up_t u = {.node = "70b3d57ed0001234", .name = "th", .dev_eui = 0x70B3D57ED0001234ULL, .fcnt = 3,
+                       .port = 85, .data = pl, .len = 2, .time_unix_s = -1, .codec = "em300",
+                       .object = "{\"temperature\":27.2,\"humidity\":22.5}", .codec_warnings = "low battery"};
+    size_t n = lwc_mqtt_up_json(&u, out, sizeof out);
+    CHECK(n > 0 && valid_json(out, n));
+    CHECK(strstr(out, "\"payload_hex\":\"0102\",\"codec\":\"em300\",\"object\":{\"temperature\":27.2,"
+                      "\"humidity\":22.5},\"codec_warnings\":\"low battery\"") != NULL);
+    CHECK(strstr(out, "codec_error") == NULL);
+    /* an error: no object */
+    u.codec_error = "decodeUplink: TypeError: x \"y\"";
+    n = lwc_mqtt_up_json(&u, out, sizeof out);
+    CHECK(n > 0 && valid_json(out, n) && strstr(out, "\"object\"") == NULL &&
+          strstr(out, "\"codec_error\":\"decodeUplink: TypeError: x \\\"y\\\"\"") != NULL);
+    /* output that is not one object never goes in raw */
+    u.codec_error = NULL;
+    static const char *const bad[] = {"[1,2]", "{\"a\":1}}", "{\"a\":", "{\"a\":1},\"x\":{}", "42", ""};
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        u.object = bad[i];
+        n = lwc_mqtt_up_json(&u, out, sizeof out);
+        CHECK(n > 0 && valid_json(out, n) && strstr(out, "\"object\"") == NULL &&
+              strstr(out, "not one JSON object") != NULL);
+    }
+    /* no codec: no codec fields at all */
+    u.codec = NULL;
+    u.object = "{\"a\":1}";
+    n = lwc_mqtt_up_json(&u, out, sizeof out);
+    CHECK(n > 0 && strstr(out, "codec") == NULL && strstr(out, "object") == NULL);
+}
+
 static void test_long_ids(void)
 {
     /* longest ids fit the firmware's topic buffer */
@@ -191,6 +224,25 @@ static void test_down(void)
     CHECK(strcmp(down("{\"port\":0,\"payload_hex\":\"0\",\"id\":\"late\"}", &d), "port: 1 to 223") == 0);
     CHECK(down("{\"port\":\"x\",\"confirmed\":\"no\",\"payload_hex\":7,\"id\":\"k\"}", &d) != NULL &&
           strcmp(d.id, "k") == 0);
+    /* object instead of payload_hex: port optional; the exact text is kept */
+    const char *m = "{\"id\":\"v1\",\"object\": {\"valve\":\"open\",\"n\":[1,{\"a\":null}]} ,\"confirmed\":true}";
+    CHECK(down(m, &d) == NULL && d.port == 0U && d.object != NULL && d.confirmed && strcmp(d.id, "v1") == 0);
+    CHECK(d.object_len == strlen("{\"valve\":\"open\",\"n\":[1,{\"a\":null}]}") &&
+          memcmp(d.object, "{\"valve\":\"open\",\"n\":[1,{\"a\":null}]}", d.object_len) == 0);
+    CHECK(down("{\"port\":7,\"object\":{}}", &d) == NULL && d.port == 7U && d.object_len == 2U && d.len == 0U);
+    CHECK(down("{\"port\":7}", &d) != NULL && d.object == NULL);
+    CHECK(strcmp(down("{\"object\":{},\"payload_hex\":\"01\"}", &d), "payload_hex or object, not both") == 0);
+    CHECK(strcmp(down("{\"object\":[1],\"id\":\"z\"}", &d), "object: a JSON object") == 0 && strcmp(d.id, "z") == 0);
+    CHECK(down("{\"object\":\"{}\"}", &d) != NULL && d.object == NULL);
+    CHECK(down("{\"object\":{\"a\":}", &d) != NULL);
+    CHECK(down("{\"object\":{},\"port\":0}", &d) != NULL);
+    char big_obj[1200];
+    int bo = snprintf(big_obj, sizeof big_obj, "{\"object\":{\"s\":\"");
+    for (int i = 0; i < 1100; i++) {
+        big_obj[bo++] = 'x';
+    }
+    (void)snprintf(big_obj + bo, sizeof big_obj - (size_t)bo, "\"}}");
+    CHECK(strcmp(down(big_obj, &d), "object: at most 1 KB") == 0 && d.object == NULL);
     /* broken JSON still stops at once */
     CHECK(down("{\"port\":0,\"id\":\"late\"", &d) != NULL);
     CHECK(down("{\"id\":\"\",\"port\":4,\"payload_hex\":\"01\"}", &d) != NULL);
@@ -249,6 +301,7 @@ int main(void)
     test_topics();
     test_up();
     test_long_ids();
+    test_codec_fields();
     test_down();
     test_result();
     if (failures != 0) {

@@ -7,6 +7,7 @@
 #include <stdint.h>
 
 #include "esp_err.h"
+#include "codecs.h"
 #include "lwc/dlq.h"
 #include "lwc/ns.h"
 
@@ -37,6 +38,7 @@ typedef struct {
     int64_t time_unix_s; /* < 0: wall clock not set */
     uint8_t len;
     uint8_t data[242];
+    char codec[CODEC_NAME_MAX + 1U]; /* payload codec (ADR-0021); "" for none */
 } mqttc_ev_t;
 
 /** What became of a downlink (lora/<gw>/<node>/down/result). Copied into its
@@ -52,6 +54,7 @@ typedef struct {
     uint32_t fcnt_down;
     uint8_t tx;
     char id[LWC_DLQ_ID_MAX + 1U];
+    char text[LWC_CODEC_ERR_MAX]; /* a reason built at run time (a codec error), when `reason` is NULL */
 } mqttc_res_t;
 
 /** Settings for display (no password). */

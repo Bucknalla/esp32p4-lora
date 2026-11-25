@@ -65,7 +65,8 @@ static const char *TAG = "mqtt";
 #define TASK_CORE 0
 #define CLIENT_STACK_TLS 8192 /* esp-mqtt task with a TLS handshake in it */
 #define OUTBOX_LIMIT (32 * 1024)
-#define JSON_MAX 1024
+#define JSON_MAX 2048   /* an uplink with a 242-byte payload and a 1 KB decoded object */
+#define OBJECT_MAX 1024 /* decoded data (ADR-0021) */
 typedef enum {
     ST_OFF,
     ST_NO_HOST,
@@ -267,7 +268,28 @@ static void handle(const mqttc_ev_t *ev)
                            .freq_hz = ev->freq_hz,
                            .time_unix_s = ev->time_unix_s};
     const bool up = ev->kind == MQTTC_UP;
-    const size_t n = up ? lwc_mqtt_up_json(&u, json, sizeof json) : lwc_mqtt_join_json(&u, json, sizeof json);
+    /* payload codec (ADR-0021): not for MAC commands (port 0) or no payload */
+    static char object[OBJECT_MAX], warn[128], err[LWC_CODEC_ERR_MAX];
+    lwc_mqtt_up_t uc = u;
+    if (up && ev->codec[0] != '\0' && ev->port > 0) {
+        const int64_t ms = ev->time_unix_s >= 0 ? ev->time_unix_s * 1000 : -1;
+        uc.codec = ev->codec;
+        if (codecs_decode(ev->codec, (uint8_t)ev->port, ev->data, ev->len, ms, object, sizeof object, warn,
+                          sizeof warn, err)) {
+            uc.object = object;
+            uc.codec_warnings = warn;
+        } else {
+            uc.codec_error = err;
+            /* one line a second at most: a broken codec must not fill the log */
+            static int64_t last_us = -1000000;
+            const int64_t now = esp_timer_get_time();
+            if (now - last_us >= 1000000) {
+                ESP_LOGW(TAG, "codec %s for %s: %s", ev->codec, ev->name[0] ? ev->name : node, err);
+                last_us = now;
+            }
+        }
+    }
+    const size_t n = up ? lwc_mqtt_up_json(&uc, json, sizeof json) : lwc_mqtt_join_json(&u, json, sizeof json);
     if (n == 0U || !lwc_mqtt_topic(topic, sizeof topic, s_cfg.gw_id, node, up ? "up" : "join")) {
         atomic_fetch_add(&s_failed, 1U);
         return;
@@ -286,7 +308,7 @@ static void handle_result(const mqttc_res_t *r)
                                  .dev_eui = r->dev_eui,
                                  .id = r->id,
                                  .state = (lwc_mqtt_dl_state_t)r->state,
-                                 .reason = r->reason,
+                                 .reason = r->reason != NULL ? r->reason : r->text[0] != '\0' ? r->text : NULL,
                                  .port = r->port,
                                  .len = r->len,
                                  .confirmed = r->confirmed,
@@ -343,6 +365,23 @@ static void down_in(const esp_mqtt_event_t *e)
     lwc_mqtt_node_id(eui, node);
     const char *why = lwc_mqtt_down_parse(e->data, (size_t)e->data_len, &d);
     const bool parsed = why == NULL;
+    static char cerr[LWC_CODEC_ERR_MAX]; /* esp-mqtt task only */
+    cerr[0] = '\0';
+    if (why == NULL && d.object != NULL) {
+        /* "object": the device's codec makes the bytes (ADR-0021) */
+        char codec[CODEC_NAME_MAX + 1U], warn[96];
+        uint8_t port = 0;
+        if (!lns_codec_of(eui, codec)) {
+            why = "no such local device";
+        } else if (codec[0] == '\0') {
+            why = "the device has no codec: send payload_hex, or choose a codec on the Devices tab";
+        } else if (!codecs_encode(codec, d.object, d.object_len, d.port, d.data, LWC_MQTT_DOWN_MAX, &d.len, &port, warn,
+                                  sizeof warn, cerr)) {
+            why = cerr;
+        } else {
+            d.port = port;
+        }
+    }
     if (why == NULL) {
         const esp_err_t err = lns_queue_down(eui, d.port, d.data, d.len, d.confirmed, d.id);
         why = err == ESP_OK                  ? NULL
@@ -353,13 +392,17 @@ static void down_in(const esp_mqtt_event_t *e)
               : err == ESP_ERR_NO_MEM        ? "the device's queue is full (4)"
                                              : "busy";
     }
+    const bool encoded = parsed && d.object != NULL && why == NULL;
     mqttc_res_t r = {.dev_eui = eui,
                      .state = why != NULL ? LWC_MQTT_DL_REFUSED : LWC_MQTT_DL_QUEUED,
-                     .reason = why, /* a string literal (core or above) */
-                     .port = parsed ? (int16_t)d.port : -1,
-                     .len = parsed ? (int16_t)d.len : -1,
+                     .reason = why == cerr ? NULL : why, /* a string literal (core or above) */
+                     .port = parsed && (d.object == NULL || encoded) ? (int16_t)d.port : -1,
+                     .len = parsed && (d.object == NULL || encoded) ? (int16_t)d.len : -1,
                      .confirmed = d.confirmed};
     memcpy(r.id, d.id, sizeof r.id);
+    if (why == cerr) {
+        memcpy(r.text, cerr, sizeof r.text); /* built at run time: copied into the result */
+    }
     if (why != NULL) {
         atomic_fetch_add(&s_down_bad, 1U);
         /* at most one line a second: a flood of bad messages must not push
@@ -376,8 +419,8 @@ static void down_in(const esp_mqtt_event_t *e)
         }
     } else {
         atomic_fetch_add(&s_down_ok, 1U);
-        ESP_LOGI(TAG, "downlink for %s queued: port %u, %u B%s", node, d.port, (unsigned)d.len,
-                 d.confirmed ? ", confirmed" : "");
+        ESP_LOGI(TAG, "downlink for %s queued: port %u, %u B%s%s", node, d.port, (unsigned)d.len,
+                 d.confirmed ? ", confirmed" : "", encoded ? ", encoded by its codec" : "");
     }
     mqttc_result(&r);
     memset(&d, 0, sizeof d);
@@ -498,7 +541,7 @@ esp_err_t mqttc_start(void)
         .session = {.last_will = {.topic = s_status_topic, .msg = "offline", .msg_len = 7, .qos = 1, .retain = 1},
                     .keepalive = 60},
         .network = {.reconnect_timeout_ms = 10000, .timeout_ms = 10000},
-        .buffer = {.size = 1536, .out_size = 1536},
+        .buffer = {.size = 1536, .out_size = JSON_MAX + 512},
         .outbox = {.limit = OUTBOX_LIMIT},
     };
     /* esp-mqtt and the transport layers log every failed retry (three lines

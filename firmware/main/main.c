@@ -9,6 +9,7 @@
 #include "board.h"
 #include "gwmode.h"
 #include "lns.h"
+#include "codecs.h"
 #include "mqttc.h"
 #include "conc.h"
 #include "conc_hal.h"
@@ -207,6 +208,12 @@ void app_main(void)
     err = lns_start(s_rx_queue, &fwd_q);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "local network server: %s", esp_err_to_name(err));
+    }
+    /* Payload codecs (ADR-0021): before MQTT, which decodes with them. A
+     * storage or codec failure leaves codecs off; the gateway runs on. */
+    err = codecs_start();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "codecs: %s", esp_err_to_name(err));
     }
     /* MQTT client (ADR-0018): events out, downlinks in. */
     err = mqttc_start();

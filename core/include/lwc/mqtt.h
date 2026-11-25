@@ -56,9 +56,16 @@ typedef struct {
     unsigned bw_khz;
     uint32_t freq_hz;
     int64_t time_unix_s;  /* < 0: wall clock not set, no "ts" */
+    /* payload codec (ADR-0021); NULL: none */
+    const char *codec;          /* its name */
+    const char *object;         /* the decoded data: JSON text of one object, checked before it goes in */
+    const char *codec_warnings;
+    const char *codec_error;
 } lwc_mqtt_up_t;
 
-/** Uplink JSON. Returns the length, 0 if it does not fit. */
+/** Uplink JSON. Returns the length, 0 if it does not fit. With `codec` set:
+ *  "codec", then "object" (if it is one valid JSON object, else a
+ *  codec_error says so), "codec_warnings" and "codec_error" when given. */
 size_t lwc_mqtt_up_json(const lwc_mqtt_up_t *u, char *out, size_t cap);
 
 /** Join JSON (node, name, dev_eui, dev_addr, rssi, snr, sf, ts). Uses the same
@@ -75,7 +82,13 @@ typedef struct {
     char id[LWC_DLQ_ID_MAX + 1U]; /* optional; "" if not given */
     uint8_t data[LWC_MQTT_DOWN_MAX];
     size_t len;
+    /* "object" instead of "payload_hex", for the device's codec (ADR-0021):
+     * points into the parsed message, which must outlive it; NULL if none */
+    const char *object;
+    size_t object_len;
 } lwc_mqtt_down_t;
+
+#define LWC_MQTT_OBJECT_MAX 1024U /* an "object" in a downlink */
 
 /**
  * `topic` (not NUL-terminated, `n` bytes) is lora/<gw>/<16 hex digits>/down:
@@ -87,7 +100,9 @@ bool lwc_mqtt_down_topic(const char *topic, size_t n, const char *gw, uint64_t *
  * Parse a downlink message (untrusted): {"port":1..223,"payload_hex":"..",
  * "confirmed":false,"id":".."}. `port` and `payload_hex` are required (hex may
  * be empty); `confirmed` and `id` (1-36 of [A-Za-z0-9_.:-], echoed in results)
- * are optional; other keys are skipped. Returns NULL, or what is wrong (for
+ * are optional; other keys are skipped. Instead of `payload_hex`, `object`
+ * (a JSON object of at most 1 KB, for the device's codec): then `port` is
+ * optional (0 when not given; the codec may choose it). Returns NULL, or what is wrong (for
  * the log and the result). A wrong field does not stop the reading while the
  * JSON itself is sound, so a valid `id` is kept wherever it is (for the
  * `refused` result); the first wrong field is reported.

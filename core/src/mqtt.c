@@ -128,6 +128,29 @@ size_t lwc_mqtt_up_json(const lwc_mqtt_up_t *u, char *out, size_t cap)
         lwc_sb_printf(&b, "%02X", u->data[i]);
     }
     lwc_sb_printf(&b, "\"");
+    if (u->codec != NULL) {
+        const char *cerr = u->codec_error;
+        lwc_sb_printf(&b, ",\"codec\":");
+        jstr(&b, u->codec);
+        if (u->object != NULL && cerr == NULL) {
+            lwc_jr_t r = {.p = u->object, .end = u->object + strlen(u->object)};
+            const bool one = u->object[0] == '{' && lwc_jr_skip(&r);
+            lwc_jr_ws(&r);
+            if (one && r.p == r.end) {
+                lwc_sb_printf(&b, ",\"object\":%s", u->object);
+            } else {
+                cerr = "the codec's output is not one JSON object";
+            }
+        }
+        if (u->codec_warnings != NULL && u->codec_warnings[0] != '\0') {
+            lwc_sb_printf(&b, ",\"codec_warnings\":");
+            jstr(&b, u->codec_warnings);
+        }
+        if (cerr != NULL) {
+            lwc_sb_printf(&b, ",\"codec_error\":");
+            jstr(&b, cerr);
+        }
+    }
     radio(&b, u);
     lwc_sb_printf(&b, "}");
     return done(&b);
@@ -208,6 +231,21 @@ const char *lwc_mqtt_down_parse(const char *json, size_t n, lwc_mqtt_down_t *out
                 } else {
                     return "bad JSON";
                 }
+            } else if (lwc_jr_key_is(k, kn, "object")) {
+                lwc_jr_ws(&r);
+                const char *o0 = r.p;
+                const bool obj = r.p < r.end && *r.p == '{';
+                if (!lwc_jr_skip(&r)) {
+                    return "bad JSON";
+                }
+                if (!obj) {
+                    bad = "object: a JSON object";
+                } else if ((size_t)(r.p - o0) > LWC_MQTT_OBJECT_MAX) {
+                    bad = "object: at most 1 KB";
+                } else {
+                    out->object = o0;
+                    out->object_len = (size_t)(r.p - o0);
+                }
             } else if (lwc_jr_key_is(k, kn, "id")) {
                 if (lwc_jr_str(&r, &v, &vn)) {
                     if (lwc_dlq_id_ok(v, vn)) {
@@ -246,7 +284,13 @@ const char *lwc_mqtt_down_parse(const char *json, size_t n, lwc_mqtt_down_t *out
     if (r.p != r.end) {
         return "bad JSON";
     }
-    return err != NULL ? err : !has_port ? "port: required" : !has_data ? "payload_hex: required" : NULL;
+    if (err != NULL) {
+        return err;
+    }
+    if (out->object != NULL) {
+        return has_data ? "payload_hex or object, not both" : NULL; /* port optional */
+    }
+    return !has_port ? "port: required" : !has_data ? "payload_hex or object: required" : NULL;
 }
 
 size_t lwc_mqtt_result_json(const lwc_mqtt_result_t *r, char *out, size_t cap)

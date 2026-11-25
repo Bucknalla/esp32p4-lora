@@ -22,7 +22,7 @@ jobs:
           cmake --build build/host
           ctest --test-dir build/host --output-on-failure
       - name: cppcheck
-        run: cppcheck --error-exitcode=1 --enable=warning,style,portability --std=c11 -I core/include core/src
+        run: cppcheck --error-exitcode=1 --enable=warning,style,portability --inline-suppr --std=c11 -I core/include core/src
       - name: Fuzz frame parser (60 s)
         run: |
           cmake -S core -B build/fuzz -G Ninja -DCMAKE_C_COMPILER=clang -DLWC_FUZZ=ON -DLWC_SANITIZE=OFF

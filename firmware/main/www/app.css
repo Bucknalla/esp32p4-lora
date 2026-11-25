@@ -363,3 +363,15 @@ th .sort.on::after { content: " \2193"; }
 /* Devices: class C ACK wait (ADR-0020) */
 .ack-wait { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted, inherit); white-space: nowrap; }
 .ack-wait input { width: 5.5em; padding: 4px 6px; font-size: 13px; }
+/* Devices: payload codecs (ADR-0021) */
+.codec-list { display: grid; gap: 8px; margin: 12px 0 16px; }
+.codec { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--sunken); }
+.codec small { color: var(--muted); flex: 1; min-width: 8em; overflow-wrap: anywhere; }
+#codec-add, #codec-test { margin-top: 12px; }
+.codec-out { margin: 12px 0 0; padding: 12px 14px; font: 12px/1.55 var(--mono); background: var(--log-bg); color: var(--log-ink); border: 1px solid var(--line); border-radius: var(--r-ctl); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 40vh; overflow: auto; }
+.codec-out.bad { border-color: var(--bad, #c0392b); }
+h3.sub { font-size: 14px; margin: 20px 0 0; color: var(--ink); }
+#codec-add, #codec-test { margin-top: 8px; }
+#codec-test .wide { grid-column: 1 / -1; }
+#codec-test textarea { width: 100%; font: 13px/1.4 var(--mono); padding: 8px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--surface); color: var(--ink); box-sizing: border-box; }
+#codec-test .actions { display: flex; gap: 8px; }

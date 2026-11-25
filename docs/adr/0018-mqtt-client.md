@@ -61,7 +61,8 @@ today.
   field does not stop the reading, so the `id` is in the `refused` result
   wherever it is). It is
   queued for that local device and sent with its next class A answer. The
-  queue rules are in core (`lwc/dlq.h`, host-tested).
+  queue rules are in core (`lwc/dlq.h`, host-tested). With a payload codec
+  (ADR-0021), `"object": {...}` may replace `payload_hex`.
   - Retained and empty messages are ignored: a retained downlink would be
     sent again after every reconnect. (A broker delivers a new retained
     message once, live, to current subscribers; that copy is used.)
