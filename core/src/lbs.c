@@ -6,28 +6,24 @@
 #include "lwc/hex.h"
 #include "lwc/json.h"
 #include "lwc/lorawan.h"
+#include "lwc/region.h"
 
 /* ---- data rates ------------------------------------------------------------- */
 
-/* EU868 (RP002-1.0.x): DR0-5 SF12-SF7 at 125 kHz, DR6 SF7 at 250 kHz, DR7 FSK. */
+/* EU868 (ADR-0023 region tables): DR0-5 SF12-SF7 at 125 kHz, DR6 SF7 at 250 kHz. */
 int lwc_lbs_dr(uint8_t sf, uint16_t bw_khz)
 {
-    if (bw_khz == 125U && sf >= 7U && sf <= 12U) {
-        return 12 - (int)sf;
-    }
-    if (bw_khz == 250U && sf == 7U) {
-        return 6;
-    }
-    return -1;
+    return lwc_region_dr_of(lwc_region(LWC_REGION_EU868), sf, bw_khz, false);
 }
 
 bool lwc_lbs_dr_params(uint8_t dr, uint8_t *sf, uint16_t *bw_khz)
 {
-    if (sf == NULL || bw_khz == NULL || dr > 6U) {
+    const lwc_region_t *r = lwc_region(LWC_REGION_EU868);
+    if (sf == NULL || bw_khz == NULL || dr > 15U || r->dr[dr].kind != LWC_DR_LORA) {
         return false;
     }
-    *sf = dr == 6U ? 7U : (uint8_t)(12U - dr);
-    *bw_khz = dr == 6U ? 250U : 125U;
+    *sf = r->dr[dr].sf;
+    *bw_khz = r->dr[dr].bw_khz;
     return true;
 }
 

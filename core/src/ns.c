@@ -4,6 +4,7 @@
 
 #include "lwc/lorawan.h"
 #include "lwc/mac.h"
+#include "lwc/region.h"
 
 static void wipe(void *p, size_t n)
 {
@@ -21,7 +22,8 @@ void lwc_ns_init(lwc_ns_t *ns)
     lwc_plan_t p;
     lwc_plan_default_eu868(&p);
     lwc_ns_set_plan(ns, &p);
-    (void)lwc_ns_set_rx(ns, 1U, LWC_NS_RX2_FREQ_HZ, 0U);
+    const lwc_region_t *r = lwc_region(LWC_REGION_EU868);
+    (void)lwc_ns_set_rx(ns, 1U, r->rx2_hz, r->rx2_dr);
 }
 
 bool lwc_ns_rx_ok(uint8_t rx1_delay_s, uint32_t rx2_hz, uint8_t rx2_dr)
@@ -385,16 +387,18 @@ static bool adr_want(lwc_ns_link_t *l, const lwc_ns_uplink_t *up, const lwc_ns_r
 
 int lwc_ns_dr(uint8_t sf, uint16_t bw_khz)
 {
-    if (bw_khz == 125U && sf >= 7U && sf <= 12U) {
-        return 12 - (int)sf;
-    }
-    return bw_khz == 250U && sf == 7U ? 6 : -1;
+    return lwc_region_dr_of(lwc_region(LWC_REGION_EU868), sf, bw_khz, false);
 }
 
 size_t lwc_ns_max_frm(int dr)
 {
-    /* RP002-1.0.3 EU868: N = 51 (DR0-DR2), 115 (DR3), 222 (DR4-DR7) */
-    return dr < 0 || dr > 7 ? 0U : dr <= 2 ? 51U : dr == 3 ? 115U : 222U;
+    /* RP002 EU868, repeater-compatible: 51 (DR0-2), 115 (DR3), 222 (DR4-7). LR-FHSS
+     * (DR8-11) is uplink only and the SX1302 cannot receive it: 0. */
+    const lwc_region_t *r = lwc_region(LWC_REGION_EU868);
+    if (dr < 0 || dr > 15 || (r->dr[dr].kind != LWC_DR_LORA && r->dr[dr].kind != LWC_DR_FSK)) {
+        return 0U;
+    }
+    return lwc_region_max_n(r, dr, false);
 }
 
 bool lwc_ns_answer(lwc_ns_t *ns, lwc_ns_up_res_t res, const lwc_ns_uplink_t *up, const lwc_ns_rx_t *rx,

@@ -1,0 +1,616 @@
+ns_dr sf=5 bw=0 -> -1 | lbs_dr -> -1
+ns_dr sf=5 bw=125 -> -1 | lbs_dr -> -1
+ns_dr sf=5 bw=250 -> -1 | lbs_dr -> -1
+ns_dr sf=5 bw=500 -> -1 | lbs_dr -> -1
+required_snr10 sf=5 -> -75
+ns_dr sf=6 bw=0 -> -1 | lbs_dr -> -1
+ns_dr sf=6 bw=125 -> -1 | lbs_dr -> -1
+ns_dr sf=6 bw=250 -> -1 | lbs_dr -> -1
+ns_dr sf=6 bw=500 -> -1 | lbs_dr -> -1
+required_snr10 sf=6 -> -75
+ns_dr sf=7 bw=0 -> -1 | lbs_dr -> -1
+ns_dr sf=7 bw=125 -> 5 | lbs_dr -> 5
+ns_dr sf=7 bw=250 -> 6 | lbs_dr -> 6
+ns_dr sf=7 bw=500 -> -1 | lbs_dr -> -1
+required_snr10 sf=7 -> -75
+ns_dr sf=8 bw=0 -> -1 | lbs_dr -> -1
+ns_dr sf=8 bw=125 -> 4 | lbs_dr -> 4
+ns_dr sf=8 bw=250 -> -1 | lbs_dr -> -1
+ns_dr sf=8 bw=500 -> -1 | lbs_dr -> -1
+required_snr10 sf=8 -> -100
+ns_dr sf=9 bw=0 -> -1 | lbs_dr -> -1
+ns_dr sf=9 bw=125 -> 3 | lbs_dr -> 3
+ns_dr sf=9 bw=250 -> -1 | lbs_dr -> -1
+ns_dr sf=9 bw=500 -> -1 | lbs_dr -> -1
+required_snr10 sf=9 -> -125
+ns_dr sf=10 bw=0 -> -1 | lbs_dr -> -1
+ns_dr sf=10 bw=125 -> 2 | lbs_dr -> 2
+ns_dr sf=10 bw=250 -> -1 | lbs_dr -> -1
+ns_dr sf=10 bw=500 -> -1 | lbs_dr -> -1
+required_snr10 sf=10 -> -150
+ns_dr sf=11 bw=0 -> -1 | lbs_dr -> -1
+ns_dr sf=11 bw=125 -> 1 | lbs_dr -> 1
+ns_dr sf=11 bw=250 -> -1 | lbs_dr -> -1
+ns_dr sf=11 bw=500 -> -1 | lbs_dr -> -1
+required_snr10 sf=11 -> -175
+ns_dr sf=12 bw=0 -> -1 | lbs_dr -> -1
+ns_dr sf=12 bw=125 -> 0 | lbs_dr -> 0
+ns_dr sf=12 bw=250 -> -1 | lbs_dr -> -1
+ns_dr sf=12 bw=500 -> -1 | lbs_dr -> -1
+required_snr10 sf=12 -> -200
+ns_dr sf=13 bw=0 -> -1 | lbs_dr -> -1
+ns_dr sf=13 bw=125 -> -1 | lbs_dr -> -1
+ns_dr sf=13 bw=250 -> -1 | lbs_dr -> -1
+ns_dr sf=13 bw=500 -> -1 | lbs_dr -> -1
+required_snr10 sf=13 -> -200
+max_frm dr=-1 -> 0 | lbs_dr_params -> 0 sf=0 bw=0
+max_frm dr=0 -> 51 | lbs_dr_params -> 1 sf=12 bw=125
+max_frm dr=1 -> 51 | lbs_dr_params -> 1 sf=11 bw=125
+max_frm dr=2 -> 51 | lbs_dr_params -> 1 sf=10 bw=125
+max_frm dr=3 -> 115 | lbs_dr_params -> 1 sf=9 bw=125
+max_frm dr=4 -> 222 | lbs_dr_params -> 1 sf=8 bw=125
+max_frm dr=5 -> 222 | lbs_dr_params -> 1 sf=7 bw=125
+max_frm dr=6 -> 222 | lbs_dr_params -> 1 sf=7 bw=250
+max_frm dr=7 -> 222 | lbs_dr_params -> 0 sf=0 bw=0
+max_frm dr=8 -> 0 | lbs_dr_params -> 0 sf=0 bw=0
+max_frm dr=9 -> 0 | lbs_dr_params -> 0 sf=0 bw=0
+max_frm dr=10 -> 0 | lbs_dr_params -> 0 sf=0 bw=0
+max_frm dr=11 -> 0 | lbs_dr_params -> 0 sf=0 bw=0
+max_frm dr=12 -> 0 | lbs_dr_params -> 0 sf=0 bw=0
+max_frm dr=13 -> 0 | lbs_dr_params -> 0 sf=0 bw=0
+max_frm dr=14 -> 0 | lbs_dr_params -> 0 sf=0 bw=0
+max_frm dr=15 -> 0 | lbs_dr_params -> 0 sf=0 bw=0
+max_frm dr=16 -> 0 | lbs_dr_params -> 0 sf=0 bw=0
+rx_ok d=0 f=862999999 dr=0 -> 0
+rx_ok d=0 f=862999999 dr=2 -> 0
+rx_ok d=0 f=862999999 dr=4 -> 0
+rx_ok d=0 f=862999999 dr=6 -> 0
+rx_ok d=0 f=862999999 dr=8 -> 0
+rx_ok d=0 f=863000000 dr=0 -> 0
+rx_ok d=0 f=863000000 dr=2 -> 0
+rx_ok d=0 f=863000000 dr=4 -> 0
+rx_ok d=0 f=863000000 dr=6 -> 0
+rx_ok d=0 f=863000000 dr=8 -> 0
+rx_ok d=0 f=868100000 dr=0 -> 0
+rx_ok d=0 f=868100000 dr=2 -> 0
+rx_ok d=0 f=868100000 dr=4 -> 0
+rx_ok d=0 f=868100000 dr=6 -> 0
+rx_ok d=0 f=868100000 dr=8 -> 0
+rx_ok d=0 f=869525000 dr=0 -> 0
+rx_ok d=0 f=869525000 dr=2 -> 0
+rx_ok d=0 f=869525000 dr=4 -> 0
+rx_ok d=0 f=869525000 dr=6 -> 0
+rx_ok d=0 f=869525000 dr=8 -> 0
+rx_ok d=0 f=870000000 dr=0 -> 0
+rx_ok d=0 f=870000000 dr=2 -> 0
+rx_ok d=0 f=870000000 dr=4 -> 0
+rx_ok d=0 f=870000000 dr=6 -> 0
+rx_ok d=0 f=870000000 dr=8 -> 0
+rx_ok d=0 f=870000001 dr=0 -> 0
+rx_ok d=0 f=870000001 dr=2 -> 0
+rx_ok d=0 f=870000001 dr=4 -> 0
+rx_ok d=0 f=870000001 dr=6 -> 0
+rx_ok d=0 f=870000001 dr=8 -> 0
+rx_ok d=4 f=862999999 dr=0 -> 0
+rx_ok d=4 f=862999999 dr=2 -> 0
+rx_ok d=4 f=862999999 dr=4 -> 0
+rx_ok d=4 f=862999999 dr=6 -> 0
+rx_ok d=4 f=862999999 dr=8 -> 0
+rx_ok d=4 f=863000000 dr=0 -> 1
+rx_ok d=4 f=863000000 dr=2 -> 1
+rx_ok d=4 f=863000000 dr=4 -> 1
+rx_ok d=4 f=863000000 dr=6 -> 0
+rx_ok d=4 f=863000000 dr=8 -> 0
+rx_ok d=4 f=868100000 dr=0 -> 1
+rx_ok d=4 f=868100000 dr=2 -> 1
+rx_ok d=4 f=868100000 dr=4 -> 1
+rx_ok d=4 f=868100000 dr=6 -> 0
+rx_ok d=4 f=868100000 dr=8 -> 0
+rx_ok d=4 f=869525000 dr=0 -> 1
+rx_ok d=4 f=869525000 dr=2 -> 1
+rx_ok d=4 f=869525000 dr=4 -> 1
+rx_ok d=4 f=869525000 dr=6 -> 0
+rx_ok d=4 f=869525000 dr=8 -> 0
+rx_ok d=4 f=870000000 dr=0 -> 1
+rx_ok d=4 f=870000000 dr=2 -> 1
+rx_ok d=4 f=870000000 dr=4 -> 1
+rx_ok d=4 f=870000000 dr=6 -> 0
+rx_ok d=4 f=870000000 dr=8 -> 0
+rx_ok d=4 f=870000001 dr=0 -> 0
+rx_ok d=4 f=870000001 dr=2 -> 0
+rx_ok d=4 f=870000001 dr=4 -> 0
+rx_ok d=4 f=870000001 dr=6 -> 0
+rx_ok d=4 f=870000001 dr=8 -> 0
+rx_ok d=8 f=862999999 dr=0 -> 0
+rx_ok d=8 f=862999999 dr=2 -> 0
+rx_ok d=8 f=862999999 dr=4 -> 0
+rx_ok d=8 f=862999999 dr=6 -> 0
+rx_ok d=8 f=862999999 dr=8 -> 0
+rx_ok d=8 f=863000000 dr=0 -> 1
+rx_ok d=8 f=863000000 dr=2 -> 1
+rx_ok d=8 f=863000000 dr=4 -> 1
+rx_ok d=8 f=863000000 dr=6 -> 0
+rx_ok d=8 f=863000000 dr=8 -> 0
+rx_ok d=8 f=868100000 dr=0 -> 1
+rx_ok d=8 f=868100000 dr=2 -> 1
+rx_ok d=8 f=868100000 dr=4 -> 1
+rx_ok d=8 f=868100000 dr=6 -> 0
+rx_ok d=8 f=868100000 dr=8 -> 0
+rx_ok d=8 f=869525000 dr=0 -> 1
+rx_ok d=8 f=869525000 dr=2 -> 1
+rx_ok d=8 f=869525000 dr=4 -> 1
+rx_ok d=8 f=869525000 dr=6 -> 0
+rx_ok d=8 f=869525000 dr=8 -> 0
+rx_ok d=8 f=870000000 dr=0 -> 1
+rx_ok d=8 f=870000000 dr=2 -> 1
+rx_ok d=8 f=870000000 dr=4 -> 1
+rx_ok d=8 f=870000000 dr=6 -> 0
+rx_ok d=8 f=870000000 dr=8 -> 0
+rx_ok d=8 f=870000001 dr=0 -> 0
+rx_ok d=8 f=870000001 dr=2 -> 0
+rx_ok d=8 f=870000001 dr=4 -> 0
+rx_ok d=8 f=870000001 dr=6 -> 0
+rx_ok d=8 f=870000001 dr=8 -> 0
+rx_ok d=12 f=862999999 dr=0 -> 0
+rx_ok d=12 f=862999999 dr=2 -> 0
+rx_ok d=12 f=862999999 dr=4 -> 0
+rx_ok d=12 f=862999999 dr=6 -> 0
+rx_ok d=12 f=862999999 dr=8 -> 0
+rx_ok d=12 f=863000000 dr=0 -> 1
+rx_ok d=12 f=863000000 dr=2 -> 1
+rx_ok d=12 f=863000000 dr=4 -> 1
+rx_ok d=12 f=863000000 dr=6 -> 0
+rx_ok d=12 f=863000000 dr=8 -> 0
+rx_ok d=12 f=868100000 dr=0 -> 1
+rx_ok d=12 f=868100000 dr=2 -> 1
+rx_ok d=12 f=868100000 dr=4 -> 1
+rx_ok d=12 f=868100000 dr=6 -> 0
+rx_ok d=12 f=868100000 dr=8 -> 0
+rx_ok d=12 f=869525000 dr=0 -> 1
+rx_ok d=12 f=869525000 dr=2 -> 1
+rx_ok d=12 f=869525000 dr=4 -> 1
+rx_ok d=12 f=869525000 dr=6 -> 0
+rx_ok d=12 f=869525000 dr=8 -> 0
+rx_ok d=12 f=870000000 dr=0 -> 1
+rx_ok d=12 f=870000000 dr=2 -> 1
+rx_ok d=12 f=870000000 dr=4 -> 1
+rx_ok d=12 f=870000000 dr=6 -> 0
+rx_ok d=12 f=870000000 dr=8 -> 0
+rx_ok d=12 f=870000001 dr=0 -> 0
+rx_ok d=12 f=870000001 dr=2 -> 0
+rx_ok d=12 f=870000001 dr=4 -> 0
+rx_ok d=12 f=870000001 dr=6 -> 0
+rx_ok d=12 f=870000001 dr=8 -> 0
+rx_ok d=16 f=862999999 dr=0 -> 0
+rx_ok d=16 f=862999999 dr=2 -> 0
+rx_ok d=16 f=862999999 dr=4 -> 0
+rx_ok d=16 f=862999999 dr=6 -> 0
+rx_ok d=16 f=862999999 dr=8 -> 0
+rx_ok d=16 f=863000000 dr=0 -> 0
+rx_ok d=16 f=863000000 dr=2 -> 0
+rx_ok d=16 f=863000000 dr=4 -> 0
+rx_ok d=16 f=863000000 dr=6 -> 0
+rx_ok d=16 f=863000000 dr=8 -> 0
+rx_ok d=16 f=868100000 dr=0 -> 0
+rx_ok d=16 f=868100000 dr=2 -> 0
+rx_ok d=16 f=868100000 dr=4 -> 0
+rx_ok d=16 f=868100000 dr=6 -> 0
+rx_ok d=16 f=868100000 dr=8 -> 0
+rx_ok d=16 f=869525000 dr=0 -> 0
+rx_ok d=16 f=869525000 dr=2 -> 0
+rx_ok d=16 f=869525000 dr=4 -> 0
+rx_ok d=16 f=869525000 dr=6 -> 0
+rx_ok d=16 f=869525000 dr=8 -> 0
+rx_ok d=16 f=870000000 dr=0 -> 0
+rx_ok d=16 f=870000000 dr=2 -> 0
+rx_ok d=16 f=870000000 dr=4 -> 0
+rx_ok d=16 f=870000000 dr=6 -> 0
+rx_ok d=16 f=870000000 dr=8 -> 0
+rx_ok d=16 f=870000001 dr=0 -> 0
+rx_ok d=16 f=870000001 dr=2 -> 0
+rx_ok d=16 f=870000001 dr=4 -> 0
+rx_ok d=16 f=870000001 dr=6 -> 0
+rx_ok d=16 f=870000001 dr=8 -> 0
+dc_band f=862900000 -> -1 permille=0
+dc_band f=862950000 -> -1 permille=0
+dc_band f=863000000 -> 0 permille=1
+dc_band f=863050000 -> 0 permille=1
+dc_band f=863100000 -> 0 permille=1
+dc_band f=863150000 -> 0 permille=1
+dc_band f=863200000 -> 0 permille=1
+dc_band f=863250000 -> 0 permille=1
+dc_band f=863300000 -> 0 permille=1
+dc_band f=863350000 -> 0 permille=1
+dc_band f=863400000 -> 0 permille=1
+dc_band f=863450000 -> 0 permille=1
+dc_band f=863500000 -> 0 permille=1
+dc_band f=863550000 -> 0 permille=1
+dc_band f=863600000 -> 0 permille=1
+dc_band f=863650000 -> 0 permille=1
+dc_band f=863700000 -> 0 permille=1
+dc_band f=863750000 -> 0 permille=1
+dc_band f=863800000 -> 0 permille=1
+dc_band f=863850000 -> 0 permille=1
+dc_band f=863900000 -> 0 permille=1
+dc_band f=863950000 -> 0 permille=1
+dc_band f=864000000 -> 0 permille=1
+dc_band f=864050000 -> 0 permille=1
+dc_band f=864100000 -> 0 permille=1
+dc_band f=864150000 -> 0 permille=1
+dc_band f=864200000 -> 0 permille=1
+dc_band f=864250000 -> 0 permille=1
+dc_band f=864300000 -> 0 permille=1
+dc_band f=864350000 -> 0 permille=1
+dc_band f=864400000 -> 0 permille=1
+dc_band f=864450000 -> 0 permille=1
+dc_band f=864500000 -> 0 permille=1
+dc_band f=864550000 -> 0 permille=1
+dc_band f=864600000 -> 0 permille=1
+dc_band f=864650000 -> 0 permille=1
+dc_band f=864700000 -> 0 permille=1
+dc_band f=864750000 -> 0 permille=1
+dc_band f=864800000 -> 0 permille=1
+dc_band f=864850000 -> 0 permille=1
+dc_band f=864900000 -> 0 permille=1
+dc_band f=864950000 -> 0 permille=1
+dc_band f=865000000 -> 1 permille=10
+dc_band f=865050000 -> 1 permille=10
+dc_band f=865100000 -> 1 permille=10
+dc_band f=865150000 -> 1 permille=10
+dc_band f=865200000 -> 1 permille=10
+dc_band f=865250000 -> 1 permille=10
+dc_band f=865300000 -> 1 permille=10
+dc_band f=865350000 -> 1 permille=10
+dc_band f=865400000 -> 1 permille=10
+dc_band f=865450000 -> 1 permille=10
+dc_band f=865500000 -> 1 permille=10
+dc_band f=865550000 -> 1 permille=10
+dc_band f=865600000 -> 1 permille=10
+dc_band f=865650000 -> 1 permille=10
+dc_band f=865700000 -> 1 permille=10
+dc_band f=865750000 -> 1 permille=10
+dc_band f=865800000 -> 1 permille=10
+dc_band f=865850000 -> 1 permille=10
+dc_band f=865900000 -> 1 permille=10
+dc_band f=865950000 -> 1 permille=10
+dc_band f=866000000 -> 1 permille=10
+dc_band f=866050000 -> 1 permille=10
+dc_band f=866100000 -> 1 permille=10
+dc_band f=866150000 -> 1 permille=10
+dc_band f=866200000 -> 1 permille=10
+dc_band f=866250000 -> 1 permille=10
+dc_band f=866300000 -> 1 permille=10
+dc_band f=866350000 -> 1 permille=10
+dc_band f=866400000 -> 1 permille=10
+dc_band f=866450000 -> 1 permille=10
+dc_band f=866500000 -> 1 permille=10
+dc_band f=866550000 -> 1 permille=10
+dc_band f=866600000 -> 1 permille=10
+dc_band f=866650000 -> 1 permille=10
+dc_band f=866700000 -> 1 permille=10
+dc_band f=866750000 -> 1 permille=10
+dc_band f=866800000 -> 1 permille=10
+dc_band f=866850000 -> 1 permille=10
+dc_band f=866900000 -> 1 permille=10
+dc_band f=866950000 -> 1 permille=10
+dc_band f=867000000 -> 1 permille=10
+dc_band f=867050000 -> 1 permille=10
+dc_band f=867100000 -> 1 permille=10
+dc_band f=867150000 -> 1 permille=10
+dc_band f=867200000 -> 1 permille=10
+dc_band f=867250000 -> 1 permille=10
+dc_band f=867300000 -> 1 permille=10
+dc_band f=867350000 -> 1 permille=10
+dc_band f=867400000 -> 1 permille=10
+dc_band f=867450000 -> 1 permille=10
+dc_band f=867500000 -> 1 permille=10
+dc_band f=867550000 -> 1 permille=10
+dc_band f=867600000 -> 1 permille=10
+dc_band f=867650000 -> 1 permille=10
+dc_band f=867700000 -> 1 permille=10
+dc_band f=867750000 -> 1 permille=10
+dc_band f=867800000 -> 1 permille=10
+dc_band f=867850000 -> 1 permille=10
+dc_band f=867900000 -> 1 permille=10
+dc_band f=867950000 -> 1 permille=10
+dc_band f=868000000 -> 2 permille=10
+dc_band f=868050000 -> 2 permille=10
+dc_band f=868100000 -> 2 permille=10
+dc_band f=868150000 -> 2 permille=10
+dc_band f=868200000 -> 2 permille=10
+dc_band f=868250000 -> 2 permille=10
+dc_band f=868300000 -> 2 permille=10
+dc_band f=868350000 -> 2 permille=10
+dc_band f=868400000 -> 2 permille=10
+dc_band f=868450000 -> 2 permille=10
+dc_band f=868500000 -> 2 permille=10
+dc_band f=868550000 -> 2 permille=10
+dc_band f=868600000 -> -1 permille=0
+dc_band f=868650000 -> -1 permille=0
+dc_band f=868700000 -> 3 permille=1
+dc_band f=868750000 -> 3 permille=1
+dc_band f=868800000 -> 3 permille=1
+dc_band f=868850000 -> 3 permille=1
+dc_band f=868900000 -> 3 permille=1
+dc_band f=868950000 -> 3 permille=1
+dc_band f=869000000 -> 3 permille=1
+dc_band f=869050000 -> 3 permille=1
+dc_band f=869100000 -> 3 permille=1
+dc_band f=869150000 -> 3 permille=1
+dc_band f=869200000 -> -1 permille=0
+dc_band f=869250000 -> -1 permille=0
+dc_band f=869300000 -> -1 permille=0
+dc_band f=869350000 -> -1 permille=0
+dc_band f=869400000 -> 4 permille=100
+dc_band f=869450000 -> 4 permille=100
+dc_band f=869500000 -> 4 permille=100
+dc_band f=869550000 -> 4 permille=100
+dc_band f=869600000 -> 4 permille=100
+dc_band f=869650000 -> -1 permille=0
+dc_band f=869700000 -> 5 permille=10
+dc_band f=869750000 -> 5 permille=10
+dc_band f=869800000 -> 5 permille=10
+dc_band f=869850000 -> 5 permille=10
+dc_band f=869900000 -> 5 permille=10
+dc_band f=869950000 -> 5 permille=10
+dc_band f=870000000 -> -1 permille=0
+dc_band f=870050000 -> -1 permille=0
+dc_band f=870100000 -> -1 permille=0
+dc_take t=0 f=868100000 air=50000 -> 1
+dc_take t=1000000 f=869525000 air=87000 -> 1
+dc_take t=2250000 f=868800000 air=124000 -> 1
+dc_take t=3750000 f=867100000 air=161000 -> 1
+dc_take t=5500000 f=869525000 air=198000 -> 1
+dc_take t=7500000 f=868100000 air=235000 -> 1
+dc_take t=9750000 f=869525000 air=272000 -> 1
+dc_take t=12250000 f=868800000 air=309000 -> 1
+dc_take t=15000000 f=867100000 air=346000 -> 1
+dc_take t=18000000 f=869525000 air=383000 -> 1
+dc_take t=21250000 f=868100000 air=420000 -> 1
+dc_take t=24750000 f=869525000 air=457000 -> 1
+dc_take t=28500000 f=868800000 air=494000 -> 1
+dc_take t=32500000 f=867100000 air=531000 -> 1
+dc_take t=36750000 f=869525000 air=568000 -> 1
+dc_take t=41250000 f=868100000 air=605000 -> 1
+dc_take t=46000000 f=869525000 air=642000 -> 1
+dc_take t=51000000 f=868800000 air=679000 -> 1
+dc_take t=56250000 f=867100000 air=716000 -> 1
+dc_take t=61750000 f=869525000 air=753000 -> 1
+dc_take t=67500000 f=868100000 air=790000 -> 1
+dc_take t=73500000 f=869525000 air=827000 -> 1
+dc_take t=79750000 f=868800000 air=864000 -> 1
+dc_take t=86250000 f=867100000 air=901000 -> 1
+dc_take t=93000000 f=869525000 air=938000 -> 1
+dc_take t=100000000 f=868100000 air=975000 -> 1
+dc_take t=107250000 f=869525000 air=1012000 -> 1
+dc_take t=114750000 f=868800000 air=1049000 -> 1
+dc_take t=122500000 f=867100000 air=1086000 -> 1
+dc_take t=130500000 f=869525000 air=1123000 -> 1
+dc_take t=138750000 f=868100000 air=1160000 -> 1
+dc_take t=147250000 f=869525000 air=1197000 -> 1
+dc_take t=156000000 f=868800000 air=1234000 -> 0
+dc_take t=165000000 f=867100000 air=1271000 -> 1
+dc_take t=174250000 f=869525000 air=1308000 -> 1
+dc_take t=183750000 f=868100000 air=1345000 -> 1
+dc_take t=193500000 f=869525000 air=1382000 -> 1
+dc_take t=203500000 f=868800000 air=1419000 -> 0
+dc_take t=213750000 f=867100000 air=1456000 -> 1
+dc_take t=224250000 f=869525000 air=1493000 -> 1
+dc_take t=235000000 f=868100000 air=1530000 -> 1
+dc_take t=246000000 f=869525000 air=1567000 -> 1
+dc_take t=257250000 f=868800000 air=1604000 -> 0
+dc_take t=268750000 f=867100000 air=1641000 -> 1
+dc_take t=280500000 f=869525000 air=1678000 -> 1
+dc_take t=292500000 f=868100000 air=1715000 -> 1
+dc_take t=304750000 f=869525000 air=1752000 -> 1
+dc_take t=317250000 f=868800000 air=1789000 -> 0
+dc_take t=330000000 f=867100000 air=1826000 -> 1
+dc_take t=343000000 f=869525000 air=1863000 -> 1
+dc_take t=356250000 f=868100000 air=1900000 -> 1
+dc_take t=369750000 f=869525000 air=1937000 -> 1
+dc_take t=383500000 f=868800000 air=1974000 -> 0
+dc_take t=397500000 f=867100000 air=2011000 -> 1
+dc_take t=411750000 f=869525000 air=2048000 -> 1
+dc_take t=426250000 f=868100000 air=2085000 -> 1
+dc_take t=441000000 f=869525000 air=2122000 -> 1
+dc_take t=456000000 f=868800000 air=2159000 -> 0
+dc_take t=471250000 f=867100000 air=2196000 -> 1
+dc_take t=486750000 f=869525000 air=2233000 -> 1
+plan_check -> 0
+plan_pack 01E0FFB4332042C433010180E5F9FF0101C0F2FCFF010100000000010080E5F9FF0100C0F2FCFF0100000000000100400D03000100801A06000101C0F2FCFF07FA000001E0930400
+plan_cflist n=5 867100000 867300000 867500000 867700000 867900000
+cflist_bytes 184F84E85684B85E84886684586E8400
+adr snr=-200 dr=0 pw=0 -> dr=0 pw=0
+adr snr=-200 dr=0 pw=5 -> dr=0 pw=2
+adr snr=-200 dr=1 pw=0 -> dr=1 pw=0
+adr snr=-200 dr=1 pw=5 -> dr=1 pw=1
+adr snr=-200 dr=2 pw=0 -> dr=2 pw=0
+adr snr=-200 dr=2 pw=5 -> dr=2 pw=0
+adr snr=-200 dr=3 pw=0 -> dr=3 pw=0
+adr snr=-200 dr=3 pw=5 -> dr=3 pw=0
+adr snr=-200 dr=4 pw=0 -> dr=4 pw=0
+adr snr=-200 dr=4 pw=5 -> dr=4 pw=0
+adr snr=-200 dr=5 pw=0 -> dr=5 pw=0
+adr snr=-200 dr=5 pw=5 -> dr=5 pw=0
+adr snr=-175 dr=0 pw=0 -> dr=0 pw=0
+adr snr=-175 dr=0 pw=5 -> dr=0 pw=3
+adr snr=-175 dr=1 pw=0 -> dr=1 pw=0
+adr snr=-175 dr=1 pw=5 -> dr=1 pw=2
+adr snr=-175 dr=2 pw=0 -> dr=2 pw=0
+adr snr=-175 dr=2 pw=5 -> dr=2 pw=1
+adr snr=-175 dr=3 pw=0 -> dr=3 pw=0
+adr snr=-175 dr=3 pw=5 -> dr=3 pw=0
+adr snr=-175 dr=4 pw=0 -> dr=4 pw=0
+adr snr=-175 dr=4 pw=5 -> dr=4 pw=0
+adr snr=-175 dr=5 pw=0 -> dr=5 pw=0
+adr snr=-175 dr=5 pw=5 -> dr=5 pw=0
+adr snr=-150 dr=0 pw=0 -> dr=0 pw=0
+adr snr=-150 dr=0 pw=5 -> dr=0 pw=4
+adr snr=-150 dr=1 pw=0 -> dr=1 pw=0
+adr snr=-150 dr=1 pw=5 -> dr=1 pw=3
+adr snr=-150 dr=2 pw=0 -> dr=2 pw=0
+adr snr=-150 dr=2 pw=5 -> dr=2 pw=2
+adr snr=-150 dr=3 pw=0 -> dr=3 pw=0
+adr snr=-150 dr=3 pw=5 -> dr=3 pw=1
+adr snr=-150 dr=4 pw=0 -> dr=4 pw=0
+adr snr=-150 dr=4 pw=5 -> dr=4 pw=0
+adr snr=-150 dr=5 pw=0 -> dr=5 pw=0
+adr snr=-150 dr=5 pw=5 -> dr=5 pw=0
+adr snr=-125 dr=0 pw=0 -> dr=0 pw=0
+adr snr=-125 dr=0 pw=5 -> dr=0 pw=5
+adr snr=-125 dr=1 pw=0 -> dr=1 pw=0
+adr snr=-125 dr=1 pw=5 -> dr=1 pw=4
+adr snr=-125 dr=2 pw=0 -> dr=2 pw=0
+adr snr=-125 dr=2 pw=5 -> dr=2 pw=3
+adr snr=-125 dr=3 pw=0 -> dr=3 pw=0
+adr snr=-125 dr=3 pw=5 -> dr=3 pw=2
+adr snr=-125 dr=4 pw=0 -> dr=4 pw=0
+adr snr=-125 dr=4 pw=5 -> dr=4 pw=1
+adr snr=-125 dr=5 pw=0 -> dr=5 pw=0
+adr snr=-125 dr=5 pw=5 -> dr=5 pw=0
+adr snr=-100 dr=0 pw=0 -> dr=0 pw=0
+adr snr=-100 dr=0 pw=5 -> dr=0 pw=5
+adr snr=-100 dr=1 pw=0 -> dr=1 pw=0
+adr snr=-100 dr=1 pw=5 -> dr=1 pw=5
+adr snr=-100 dr=2 pw=0 -> dr=2 pw=0
+adr snr=-100 dr=2 pw=5 -> dr=2 pw=4
+adr snr=-100 dr=3 pw=0 -> dr=3 pw=0
+adr snr=-100 dr=3 pw=5 -> dr=3 pw=3
+adr snr=-100 dr=4 pw=0 -> dr=4 pw=0
+adr snr=-100 dr=4 pw=5 -> dr=4 pw=2
+adr snr=-100 dr=5 pw=0 -> dr=5 pw=0
+adr snr=-100 dr=5 pw=5 -> dr=5 pw=1
+adr snr=-75 dr=0 pw=0 -> dr=0 pw=0
+adr snr=-75 dr=0 pw=5 -> dr=0 pw=5
+adr snr=-75 dr=1 pw=0 -> dr=1 pw=0
+adr snr=-75 dr=1 pw=5 -> dr=1 pw=5
+adr snr=-75 dr=2 pw=0 -> dr=2 pw=0
+adr snr=-75 dr=2 pw=5 -> dr=2 pw=5
+adr snr=-75 dr=3 pw=0 -> dr=3 pw=0
+adr snr=-75 dr=3 pw=5 -> dr=3 pw=4
+adr snr=-75 dr=4 pw=0 -> dr=4 pw=0
+adr snr=-75 dr=4 pw=5 -> dr=4 pw=3
+adr snr=-75 dr=5 pw=0 -> dr=5 pw=0
+adr snr=-75 dr=5 pw=5 -> dr=5 pw=2
+adr snr=-50 dr=0 pw=0 -> dr=1 pw=0
+adr snr=-50 dr=0 pw=5 -> dr=1 pw=5
+adr snr=-50 dr=1 pw=0 -> dr=1 pw=0
+adr snr=-50 dr=1 pw=5 -> dr=1 pw=5
+adr snr=-50 dr=2 pw=0 -> dr=2 pw=0
+adr snr=-50 dr=2 pw=5 -> dr=2 pw=5
+adr snr=-50 dr=3 pw=0 -> dr=3 pw=0
+adr snr=-50 dr=3 pw=5 -> dr=3 pw=5
+adr snr=-50 dr=4 pw=0 -> dr=4 pw=0
+adr snr=-50 dr=4 pw=5 -> dr=4 pw=4
+adr snr=-50 dr=5 pw=0 -> dr=5 pw=0
+adr snr=-50 dr=5 pw=5 -> dr=5 pw=3
+adr snr=-25 dr=0 pw=0 -> dr=2 pw=0
+adr snr=-25 dr=0 pw=5 -> dr=2 pw=5
+adr snr=-25 dr=1 pw=0 -> dr=2 pw=0
+adr snr=-25 dr=1 pw=5 -> dr=2 pw=5
+adr snr=-25 dr=2 pw=0 -> dr=2 pw=0
+adr snr=-25 dr=2 pw=5 -> dr=2 pw=5
+adr snr=-25 dr=3 pw=0 -> dr=3 pw=0
+adr snr=-25 dr=3 pw=5 -> dr=3 pw=5
+adr snr=-25 dr=4 pw=0 -> dr=4 pw=0
+adr snr=-25 dr=4 pw=5 -> dr=4 pw=5
+adr snr=-25 dr=5 pw=0 -> dr=5 pw=0
+adr snr=-25 dr=5 pw=5 -> dr=5 pw=4
+adr snr=0 dr=0 pw=0 -> dr=3 pw=0
+adr snr=0 dr=0 pw=5 -> dr=3 pw=5
+adr snr=0 dr=1 pw=0 -> dr=3 pw=0
+adr snr=0 dr=1 pw=5 -> dr=3 pw=5
+adr snr=0 dr=2 pw=0 -> dr=3 pw=0
+adr snr=0 dr=2 pw=5 -> dr=3 pw=5
+adr snr=0 dr=3 pw=0 -> dr=3 pw=0
+adr snr=0 dr=3 pw=5 -> dr=3 pw=5
+adr snr=0 dr=4 pw=0 -> dr=4 pw=0
+adr snr=0 dr=4 pw=5 -> dr=4 pw=5
+adr snr=0 dr=5 pw=0 -> dr=5 pw=0
+adr snr=0 dr=5 pw=5 -> dr=5 pw=5
+adr snr=25 dr=0 pw=0 -> dr=4 pw=0
+adr snr=25 dr=0 pw=5 -> dr=4 pw=5
+adr snr=25 dr=1 pw=0 -> dr=4 pw=0
+adr snr=25 dr=1 pw=5 -> dr=4 pw=5
+adr snr=25 dr=2 pw=0 -> dr=4 pw=0
+adr snr=25 dr=2 pw=5 -> dr=4 pw=5
+adr snr=25 dr=3 pw=0 -> dr=4 pw=0
+adr snr=25 dr=3 pw=5 -> dr=4 pw=5
+adr snr=25 dr=4 pw=0 -> dr=4 pw=0
+adr snr=25 dr=4 pw=5 -> dr=4 pw=5
+adr snr=25 dr=5 pw=0 -> dr=5 pw=0
+adr snr=25 dr=5 pw=5 -> dr=5 pw=5
+adr snr=50 dr=0 pw=0 -> dr=5 pw=0
+adr snr=50 dr=0 pw=5 -> dr=5 pw=5
+adr snr=50 dr=1 pw=0 -> dr=5 pw=0
+adr snr=50 dr=1 pw=5 -> dr=5 pw=5
+adr snr=50 dr=2 pw=0 -> dr=5 pw=0
+adr snr=50 dr=2 pw=5 -> dr=5 pw=5
+adr snr=50 dr=3 pw=0 -> dr=5 pw=0
+adr snr=50 dr=3 pw=5 -> dr=5 pw=5
+adr snr=50 dr=4 pw=0 -> dr=5 pw=0
+adr snr=50 dr=4 pw=5 -> dr=5 pw=5
+adr snr=50 dr=5 pw=0 -> dr=5 pw=0
+adr snr=50 dr=5 pw=5 -> dr=5 pw=5
+adr snr=75 dr=0 pw=0 -> dr=5 pw=0
+adr snr=75 dr=0 pw=5 -> dr=5 pw=5
+adr snr=75 dr=1 pw=0 -> dr=5 pw=1
+adr snr=75 dr=1 pw=5 -> dr=5 pw=5
+adr snr=75 dr=2 pw=0 -> dr=5 pw=1
+adr snr=75 dr=2 pw=5 -> dr=5 pw=5
+adr snr=75 dr=3 pw=0 -> dr=5 pw=1
+adr snr=75 dr=3 pw=5 -> dr=5 pw=5
+adr snr=75 dr=4 pw=0 -> dr=5 pw=1
+adr snr=75 dr=4 pw=5 -> dr=5 pw=5
+adr snr=75 dr=5 pw=0 -> dr=5 pw=1
+adr snr=75 dr=5 pw=5 -> dr=5 pw=5
+adr snr=100 dr=0 pw=0 -> dr=5 pw=1
+adr snr=100 dr=0 pw=5 -> dr=5 pw=5
+adr snr=100 dr=1 pw=0 -> dr=5 pw=1
+adr snr=100 dr=1 pw=5 -> dr=5 pw=5
+adr snr=100 dr=2 pw=0 -> dr=5 pw=2
+adr snr=100 dr=2 pw=5 -> dr=5 pw=5
+adr snr=100 dr=3 pw=0 -> dr=5 pw=2
+adr snr=100 dr=3 pw=5 -> dr=5 pw=5
+adr snr=100 dr=4 pw=0 -> dr=5 pw=2
+adr snr=100 dr=4 pw=5 -> dr=5 pw=5
+adr snr=100 dr=5 pw=0 -> dr=5 pw=2
+adr snr=100 dr=5 pw=5 -> dr=5 pw=5
+adr snr=125 dr=0 pw=0 -> dr=5 pw=2
+adr snr=125 dr=0 pw=5 -> dr=5 pw=5
+adr snr=125 dr=1 pw=0 -> dr=5 pw=2
+adr snr=125 dr=1 pw=5 -> dr=5 pw=5
+adr snr=125 dr=2 pw=0 -> dr=5 pw=2
+adr snr=125 dr=2 pw=5 -> dr=5 pw=5
+adr snr=125 dr=3 pw=0 -> dr=5 pw=3
+adr snr=125 dr=3 pw=5 -> dr=5 pw=5
+adr snr=125 dr=4 pw=0 -> dr=5 pw=3
+adr snr=125 dr=4 pw=5 -> dr=5 pw=5
+adr snr=125 dr=5 pw=0 -> dr=5 pw=3
+adr snr=125 dr=5 pw=5 -> dr=5 pw=5
+adr snr=150 dr=0 pw=0 -> dr=5 pw=3
+adr snr=150 dr=0 pw=5 -> dr=5 pw=5
+adr snr=150 dr=1 pw=0 -> dr=5 pw=3
+adr snr=150 dr=1 pw=5 -> dr=5 pw=5
+adr snr=150 dr=2 pw=0 -> dr=5 pw=3
+adr snr=150 dr=2 pw=5 -> dr=5 pw=5
+adr snr=150 dr=3 pw=0 -> dr=5 pw=3
+adr snr=150 dr=3 pw=5 -> dr=5 pw=5
+adr snr=150 dr=4 pw=0 -> dr=5 pw=4
+adr snr=150 dr=4 pw=5 -> dr=5 pw=5
+adr snr=150 dr=5 pw=0 -> dr=5 pw=4
+adr snr=150 dr=5 pw=5 -> dr=5 pw=5
+link_adr_req 0303FF0001
+link_adr_req 0333FF0001
+link_adr_req 0363FF0001
+downlink rx2=0 sf=7 mode=0 tmst=2000000 freq=868300000 rfch=0 powe=14 sf=7 bw=125 cr=5 ipol=1 ncrc=1 prea=0 size=12
+downlink rx2=0 sf=9 mode=0 tmst=2000000 freq=868300000 rfch=0 powe=14 sf=9 bw=125 cr=5 ipol=1 ncrc=1 prea=0 size=12
+downlink rx2=0 sf=12 mode=0 tmst=2000000 freq=868300000 rfch=0 powe=14 sf=12 bw=125 cr=5 ipol=1 ncrc=1 prea=0 size=12
+downlink rx2=1 sf=7 mode=0 tmst=3000000 freq=869525000 rfch=0 powe=14 sf=12 bw=125 cr=5 ipol=1 ncrc=1 prea=0 size=12
+downlink rx2=1 sf=9 mode=0 tmst=3000000 freq=869525000 rfch=0 powe=14 sf=12 bw=125 cr=5 ipol=1 ncrc=1 prea=0 size=12
+downlink rx2=1 sf=12 mode=0 tmst=3000000 freq=869525000 rfch=0 powe=14 sf=12 bw=125 cr=5 ipol=1 ncrc=1 prea=0 size=12
+join -> 0 len=33 addr=00000001 rx1=1 rx2=869525000 dr=0
+join_accept 204B6641472700329A5DDCCF579DE6333295CFC00F6A76073FA2C07CD9E5031D14
+lbs_dn_txpk -> 0
+lbs_first mode=0 tmst=1000001 freq=868100000 rfch=0 powe=16 sf=7 bw=125 cr=5 ipol=1 ncrc=1 prea=8 size=2
+lbs_alt mode=0 tmst=2000001 freq=869525000 rfch=0 powe=27 sf=12 bw=125 cr=5 ipol=1 ncrc=1 prea=8 size=2
