@@ -1,6 +1,6 @@
 # ADR-0019: MQTT over TLS (server authentication)
 
-- Status: accepted (built; negative paths tested on the board, a trusted broker not yet)
+- Status: accepted (built and tested on the board)
 - Date: 2026-11-25
 
 ## Context
@@ -64,4 +64,5 @@ and plain MQTT kept as an option.
 | TLS on, against a self-signed `openssl s_server` | refused (the server saw "bad certificate"); `state=tls_error`; one line: "broker certificate not accepted ..." |
 | Transport log lines during 5 minutes of failed TLS retries | 0 (was 3 every 15 s); the Basics Station link still connected |
 | Stacks and heap during the failed handshakes | `mqtt_task` 6692 of 8192 B free; internal heap 205 KB free, lowest 196 KB, with the Basics Station session up |
-| Broker with a Let's Encrypt certificate | not yet tested |
+| Public test broker `test.mosquitto.org:8886` (Let's Encrypt YR2 → Root YR, cross-signed by ISRG Root X1 in the bundle), no login, a random gateway id, local transmit off | connected over TLS; retained `online` seen by a subscriber; a downlink sent through the broker came back as `refused` ("local transmit is off") with its `id`; retained topic cleared afterwards |
+| Stacks and heap with both TLS sessions up (Basics Station and MQTT) | `mqtt_task` 5928 of 8192 B free, `mqttc` 2536 of 4096 B free; internal heap 180 KB free, lowest 153 KB |
