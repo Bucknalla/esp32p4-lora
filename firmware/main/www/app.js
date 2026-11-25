@@ -123,6 +123,7 @@ function renderOverview() {
   else if (upNeeded && !up) notes.push(notice('warn', 'alert', 'Not connected to ' + srvName(g.server) + ': frames are not forwarded.', gotoBtn('setup', 'Check setup')));
   const mq = S.mqtt || {};
   if (mq.state === 'refused') notes.push(notice('warn', 'alert', 'The MQTT broker refused the user or password: nothing is published.', gotoBtn('setup', 'Check setup')));
+  else if (mq.state === 'tls_error') notes.push(notice('warn', 'alert', 'TLS to the MQTT broker failed (certificate or host name): nothing is published.', gotoBtn('setup', 'Check setup')));
   else if (mq.state === 'connecting' || mq.state === 'no_host') notes.push(notice('warn', 'alert', 'Not connected to the MQTT broker: uplinks are not published.', gotoBtn('setup', 'Check setup')));
   if (lb && lb.plan === 'differs') notes.push(notice('warn', 'alert', 'The network server sent a channel plan this radio cannot use: the radio keeps its own.', gotoBtn('radio', 'Open Radio')));
   if (o.state && o.state !== 'valid') notes.push(notice('warn', 'alert', 'New firmware on trial: it rolls back unless its health check passes.'));
@@ -391,6 +392,7 @@ function renderMqtt() {
   const st = q.state || 'off';
   if (st === 'connected') stepState('#step-mqtt', 'done', 'Connected to ' + q.host, 'ok');
   else if (st === 'refused') stepState('#step-mqtt', 'todo', 'Broker refused the user or password', 'bad');
+  else if (st === 'tls_error') stepState('#step-mqtt', 'todo', 'TLS failed: check the host name and the broker certificate', 'bad');
   else if (st === 'connecting') stepState('#step-mqtt', 'todo', 'Connecting to ' + q.host, 'warn');
   else if (st === 'no_host') stepState('#step-mqtt', 'todo', 'No broker set', 'warn');
   else if (q.on === 'on') stepState('#step-mqtt', 'todo', 'Restart to connect', 'warn');
@@ -408,8 +410,10 @@ function renderMqtt() {
     $('#mqtt-port').value = q.port || 1883;
     $('#mqtt-user').value = q.user && q.user !== '-' ? q.user : '';
     $('#mqtt-gwid').value = q.gw_id || '';
+    $('#mqtt-tls').checked = q.tls === 'on';
     f.mqtt_pass.placeholder = q.pass === 'set' ? 'Leave empty to keep the stored password' : 'Not set';
   }
+  $('#mqtt-plain-note').hidden = $('#mqtt-tls').checked;
   const id = $('#mqtt-gwid').value || q.gw_id || '<gateway id>';
   $('#mqtt-topics').textContent = 'lora/' + id + '/status, lora/' + id + '/<DevEUI>/up, …/join, …/down/result; in: …/down';
 }
@@ -815,6 +819,12 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   $('#mqtt-form').addEventListener('input', (ev) => { ev.currentTarget.dataset.dirty = '1'; renderMqtt(); });
+  /* the usual port follows the TLS switch, unless another port was typed */
+  $('#mqtt-tls').addEventListener('change', (ev) => {
+    const p = $('#mqtt-port');
+    if (ev.target.checked && (p.value === '' || p.value === '1883')) p.value = '8883';
+    else if (!ev.target.checked && p.value === '8883') p.value = '1883';
+  });
   $('#mqtt-form').addEventListener('submit', async (ev) => {
     ev.preventDefault();
     const f = ev.target, q = S.mqtt || {};
@@ -828,6 +838,7 @@ document.addEventListener('DOMContentLoaded', () => {
     body.set('mqtt_user', f.mqtt_user.value.trim());
     if (f.mqtt_pass.value) body.set('mqtt_pass', f.mqtt_pass.value);
     if (f.mqtt_gw_id.value !== q.gw_id) body.set('mqtt_gw_id', f.mqtt_gw_id.value);
+    body.set('mqtt_tls', $('#mqtt-tls').checked ? 'on' : 'off');
     if (!confirm('Save the MQTT settings and restart the gateway?')) return;
     try {
       const msg = await post('/api/settings', body);

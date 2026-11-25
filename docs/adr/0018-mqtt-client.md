@@ -114,8 +114,8 @@ today.
   - Counters: `down_queued`, `down_refused`, `results`, `results_dropped`
     (mqtt) and `app_waiting`, `app_queued`, `app_sent`, `app_acked`,
     `app_nacked`, `app_dropped` (lns).
-- **Plain MQTT only.** The Setup tab says to use it on the local network.
-  TLS and the design plan's central-broker mTLS stay open.
+- **Plain MQTT** here; TLS with server authentication is ADR-0019. The
+  design plan's central-broker mTLS stays open.
 
 ## Consequences
 

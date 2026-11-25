@@ -108,10 +108,16 @@ static void quiet_transport_logs(void)
 {
     /* the TAGs of esp_websocket_client 1.8 and ESP-IDF 6.1 tcp_transport/esp-tls (debug output
      * is compiled out at CONFIG_LOG_MAXIMUM_LEVEL INFO anyway; this holds if that is raised) */
-    static const char *const tags[] = {"websocket_client", "transport_ws",    "transport_base", "transport",
-                                       "transport_proxy",  "esp-tls",         "esp-tls-mbedtls"};
-    for (size_t i = 0; i < sizeof tags / sizeof tags[0]; i++) {
-        esp_log_level_set(tags[i], ESP_LOG_WARN);
+    static const char *const warn[] = {"websocket_client", "transport_ws", "transport_proxy"};
+    for (size_t i = 0; i < sizeof warn / sizeof warn[0]; i++) {
+        esp_log_level_set(warn[i], ESP_LOG_WARN);
+    }
+    /* esp-tls and the transport base log three lines on every failed retry;
+     * this file and the MQTT client (mqttc.c) log each failure themselves,
+     * with the esp-tls and mbedTLS codes. Same levels in both places. */
+    static const char *const none[] = {"transport_base", "transport", "esp-tls", "esp-tls-mbedtls"};
+    for (size_t i = 0; i < sizeof none / sizeof none[0]; i++) {
+        esp_log_level_set(none[i], ESP_LOG_NONE);
     }
 }
 
@@ -298,8 +304,13 @@ static void ws_event(void *arg, esp_event_base_t base, int32_t id, void *data)
             ESP_LOGE(TAG, "server refused the connection: HTTP %d%s; retry in %d s", st,
                      st == 401 || st == 403 ? " (check the LNS API key and its rights)" : "", s_retry_ms / 1000);
         } else if (ev != NULL) {
-            ESP_LOGW(TAG, "connection error (tls 0x%x, socket errno %d); retry in %d s",
-                     ev->error_handle.esp_tls_last_esp_err, ev->error_handle.esp_transport_sock_errno,
+            /* the transport layers are silent (mqttc.c): their detail is here */
+            ESP_LOGW(TAG, "connection error (tls 0x%x, mbedTLS -0x%04x, certificate flags 0x%x, socket errno %d); "
+                          "retry in %d s",
+                     ev->error_handle.esp_tls_last_esp_err,
+                     (unsigned)(ev->error_handle.esp_tls_stack_err < 0 ? -ev->error_handle.esp_tls_stack_err
+                                                                       : ev->error_handle.esp_tls_stack_err),
+                     (unsigned)ev->error_handle.esp_tls_cert_verify_flags, ev->error_handle.esp_transport_sock_errno,
                      s_retry_ms / 1000);
         }
         break;

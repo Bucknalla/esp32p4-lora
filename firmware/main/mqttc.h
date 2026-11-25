@@ -62,6 +62,7 @@ typedef struct {
     char user[MQTTC_USER_MAX];
     bool pass_set;
     char gw_id[MQTTC_GWID_MAX]; /* the stored id, or the default (lower-case gateway EUI) */
+    bool tls;                    /* TLS, the server checked against the public CA bundle */
 } mqttc_cfg_t;
 
 void mqttc_get(mqttc_cfg_t *c);
@@ -73,7 +74,7 @@ void mqttc_get(mqttc_cfg_t *c);
  * ESP_ERR_INVALID_ARG for a value that does not fit these rules.
  */
 esp_err_t mqttc_set(const bool *on, const char *host, uint16_t port, const char *user, const char *pass,
-                    const char *gw_id);
+                    const char *gw_id, const bool *tls);
 
 /** Start the client and its task when MQTT is on and a host is set. */
 esp_err_t mqttc_start(void);
@@ -86,6 +87,6 @@ void mqttc_post(const mqttc_ev_t *ev);
  *  off, not connected, or the result queue is full. */
 void mqttc_result(const mqttc_res_t *r);
 
-/** state=off|no_host|connecting|connected|refused host=.. port=.. user=.. pass=set|none
+/** state=off|no_host|connecting|connected|refused|tls_error tls=on|off host=.. port=.. user=.. pass=set|none
  *  gw_id=.. published=N dropped=N failed=N connects=N down_queued=N down_refused=N results=N results_dropped=N */
 void mqttc_status_line(char *buf, size_t len);
