@@ -45,7 +45,13 @@ bool lwc_plan_default(lwc_plan_t *p, const lwc_region_t *r)
         return false;
     }
     memset(p, 0, sizeof *p);
-    if (r == NULL || r->fixed || r->n_default == 0U) {
+    if (r == NULL) {
+        return false;
+    }
+    if (r->fixed) {
+        return lwc_plan_subband(p, r, lwc_plan_default_subband(r));
+    }
+    if (r->n_default == 0U) {
         return false;
     }
     if (is_eu868(r)) {
@@ -73,6 +79,70 @@ bool lwc_plan_default(lwc_plan_t *p, const lwc_region_t *r)
     p->std_sf = 7;
     p->std_bw_khz = 125;
     return k == r->n_default;
+}
+
+uint8_t lwc_plan_default_subband(const lwc_region_t *r)
+{
+    if (r == NULL || !r->fixed) {
+        return 0;
+    }
+    return r->id == LWC_REGION_CN470 ? 10U : 1U;
+}
+
+bool lwc_plan_subband(lwc_plan_t *p, const lwc_region_t *r, uint8_t sb)
+{
+    if (p == NULL) {
+        return false;
+    }
+    memset(p, 0, sizeof *p);
+    if (r == NULL || !r->fixed || sb >= lwc_region_subbands(r)) {
+        return false;
+    }
+    /* 4 channels per radio. With a 500 kHz channel (it lies between channels
+     * 3 and 4 of the sub-band), radio 0 sits on channel 2 so the 500 kHz
+     * channel fits at IF +300 kHz; otherwise both radios are centred. */
+    const uint32_t step = r->up125.step_hz;
+    const uint32_t c0 = r->up125.base_hz + 8U * sb * step;
+    const bool wide = r->n_up500 > 0U;
+    p->radio_hz[0] = wide ? c0 + 2U * step : c0 + 3U * step / 2U;
+    p->radio_hz[1] = c0 + 11U * step / 2U;
+    for (uint8_t k = 0; k < LWC_PLAN_MULTISF; k++) {
+        const uint8_t radio = k < 4U ? 0U : 1U;
+        p->multisf[k] = (lwc_plan_chan_t){true, radio, (int32_t)(c0 + k * step) - (int32_t)p->radio_hz[radio]};
+    }
+    p->std_sf = 7;
+    p->std_bw_khz = 125;
+    if (wide) {
+        const lwc_region_dr_t *d = &r->dr[r->up500.min_dr];
+        const uint32_t hz = r->up500.base_hz + sb * r->up500.step_hz;
+        p->std = (lwc_plan_chan_t){true, 0, (int32_t)hz - (int32_t)p->radio_hz[0]};
+        p->std_sf = d->sf;
+        p->std_bw_khz = d->bw_khz;
+    }
+    return true;
+}
+
+int lwc_plan_subband_of(const lwc_plan_t *p, const lwc_region_t *r)
+{
+    if (p == NULL || r == NULL || !r->fixed) {
+        return -1;
+    }
+    for (uint8_t sb = 0; sb < lwc_region_subbands(r); sb++) {
+        size_t found = 0;
+        for (size_t k = 0; k < 8U; k++) {
+            const uint32_t hz = r->up125.base_hz + (8U * sb + (uint32_t)k) * r->up125.step_hz;
+            for (size_t i = 0; i < LWC_PLAN_MULTISF; i++) {
+                if (lwc_plan_hz(p, &p->multisf[i]) == hz) {
+                    found++;
+                    break;
+                }
+            }
+        }
+        if (found == 8U) {
+            return sb;
+        }
+    }
+    return -1;
 }
 
 uint32_t lwc_plan_hz(const lwc_plan_t *p, const lwc_plan_chan_t *c)
@@ -104,12 +174,36 @@ static bool chan_ok(const lwc_plan_t *p, const lwc_plan_chan_t *c, bool band, ui
     return true;
 }
 
-lwc_plan_err_t lwc_plan_check(const lwc_plan_t *p, const lwc_region_t *rg)
+/* fixed regions: every channel on the uplink grid, std at an uplink DR */
+static lwc_plan_err_t fixed_ok(const lwc_plan_t *p, const lwc_region_t *rg)
 {
-    if (p == NULL || rg == NULL) {
+    for (size_t i = 0; i < LWC_PLAN_MULTISF; i++) {
+        if (p->multisf[i].enable && lwc_region_channel(rg, lwc_plan_hz(p, &p->multisf[i]), 125) < 0) {
+            return LWC_PLAN_ERR_CHANNEL;
+        }
+    }
+    if (p->std.enable) {
+        if (p->std_bw_khz != 500U || lwc_region_channel(rg, lwc_plan_hz(p, &p->std), 500) < 0) {
+            return LWC_PLAN_ERR_CHANNEL;
+        }
+        if (lwc_region_dr_of(rg, p->std_sf, 500, false) < 0) {
+            return LWC_PLAN_ERR_STD;
+        }
+    }
+    return p->fsk.enable ? LWC_PLAN_ERR_CHANNEL : LWC_PLAN_OK;
+}
+
+static bool card_fits(const lwc_plan_t *p, const lwc_plan_chan_t *ch, uint32_t bw_hz, const lwc_card_t *c)
+{
+    return !ch->enable || lwc_card_fits(c, lwc_plan_hz(p, ch), bw_hz);
+}
+
+lwc_plan_err_t lwc_plan_check(const lwc_plan_t *p, const lwc_region_t *rg, const lwc_card_t *card)
+{
+    if (p == NULL || rg == NULL || card == NULL) {
         return LWC_PLAN_ERR_ARG;
     }
-    if (rg->fixed) {
+    if (!lwc_card_region_ok(card, rg)) {
         return LWC_PLAN_ERR_REGION;
     }
     const bool band = is_eu868(rg);
@@ -137,6 +231,9 @@ lwc_plan_err_t lwc_plan_check(const lwc_plan_t *p, const lwc_region_t *rg)
     if (!chan_ok(p, &p->fsk, band, 125000U, 925000U, &e)) { /* HAL: FSK at its 125 kHz default */
         return e;
     }
+    if (rg->fixed && (e = fixed_ok(p, rg)) != LWC_PLAN_OK) {
+        return e;
+    }
     for (size_t d = 0; d < rg->n_default; d++) {
         bool found = false;
         for (size_t i = 0; i < LWC_PLAN_MULTISF && !found; i++) {
@@ -145,6 +242,14 @@ lwc_plan_err_t lwc_plan_check(const lwc_plan_t *p, const lwc_region_t *rg)
         if (!found) {
             return LWC_PLAN_ERR_DEFAULT;
         }
+    }
+    for (size_t i = 0; i < LWC_PLAN_MULTISF; i++) {
+        if (!card_fits(p, &p->multisf[i], 125000U, card)) {
+            return LWC_PLAN_ERR_CARD;
+        }
+    }
+    if (!card_fits(p, &p->std, (uint32_t)p->std_bw_khz * 1000U, card) || !card_fits(p, &p->fsk, 125000U, card)) {
+        return LWC_PLAN_ERR_CARD;
     }
     return LWC_PLAN_OK;
 }
@@ -265,7 +370,7 @@ bool lwc_plan_pack(const lwc_plan_t *p, uint8_t *out, size_t cap)
     return (size_t)(o - out) == LWC_PLAN_PACKED;
 }
 
-bool lwc_plan_unpack(const uint8_t *in, size_t n, const lwc_region_t *r, lwc_plan_t *p)
+bool lwc_plan_unpack(const uint8_t *in, size_t n, const lwc_region_t *r, const lwc_card_t *card, lwc_plan_t *p)
 {
     if (in == NULL || p == NULL || n != LWC_PLAN_PACKED || in[0] != LWC_PLAN_VERSION) {
         return false;
@@ -284,7 +389,7 @@ bool lwc_plan_unpack(const uint8_t *in, size_t n, const lwc_region_t *r, lwc_pla
     t.std_bw_khz = (uint16_t)(i[0] | (uint16_t)(i[1] << 8));
     i += 2;
     ok = get_chan(&i, &t.fsk) && ok;
-    if (!ok || lwc_plan_check(&t, r) != LWC_PLAN_OK) {
+    if (!ok || lwc_plan_check(&t, r, card) != LWC_PLAN_OK) {
         return false;
     }
     *p = t;

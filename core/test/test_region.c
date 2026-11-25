@@ -56,6 +56,21 @@ static void spot_values(void)
     CHECK(in->rx2_hz == 866550000U && in->rx2_dr == 2 && in->max_eirp_dbm == 30);
     CHECK(ru->rx2_hz == 869100000U && ru->n_default == 2);
     CHECK(lwc_region_rx1_hz(eu, 868300000U, 125) == 868300000U && lwc_region_channel(eu, 868300000U, 125) == -1);
+    /* CN470 (LoRaWAN 1.0.2rB: 96 uplink, 48 downlink channels) and EU433 */
+    const lwc_region_t *cn = R(LWC_REGION_CN470), *e4 = R(LWC_REGION_EU433);
+    CHECK(cn && strcmp(cn->name, "CN470") == 0 && cn->fixed && cn->rx2_hz == 505300000U && cn->rx2_dr == 0);
+    CHECK(cn->n_up125 == 96 && cn->n_up500 == 0 && cn->n_down == 48 && lwc_region_subbands(cn) == 12U);
+    CHECK(lwc_region_max_n(cn, 0, false) == 51U && lwc_region_max_n(cn, 3, false) == 115U && cn->dr[6].kind == LWC_DR_NONE);
+    CHECK(lwc_region_channel(cn, 470300000U, 125) == 0 && lwc_region_channel(cn, 489300000U, 125) == 95);
+    CHECK(lwc_region_channel(cn, 489500000U, 125) == -1 && lwc_region_channel(cn, 470300000U, 500) == -1);
+    CHECK(lwc_region_rx1_hz(cn, 470300000U, 125) == 500300000U && lwc_region_rx1_hz(cn, 489300000U, 125) == 509700000U);
+    CHECK(lwc_region_rx1_hz(cn, 479900000U, 125) == 500300000U); /* channel 48: downlink channel 0 */
+    CHECK(lwc_region_dr_of(cn, 12, 125, true) == 0 && lwc_region_dr_of(cn, 7, 125, false) == 5); /* same DRs both ways */
+    CHECK(lwc_region_rx1_dr(cn, 5, 2, false) == 3 && !cn->tx_param_setup);
+    CHECK(e4 && strcmp(e4->name, "EU433") == 0 && !e4->fixed && e4->n_default == 3 && e4->rx2_hz == 434665000U);
+    CHECK(e4->default_ch[0].hz == 433175000U && e4->default_ch[2].hz == 433575000U && e4->max_eirp_dbm == 12);
+    CHECK(e4->dr[6].sf == 7 && e4->dr[6].bw_khz == 250 && e4->tx_powers == 6 && lwc_region_max_n(e4, 0, false) == 51U);
+    CHECK(lwc_region_subbands(us) == 8U && lwc_region_subbands(au) == 8U && lwc_region_subbands(eu) == 0U);
     /* TX power */
     CHECK(lwc_region_tx_power_dbm(eu, 0) == 16 && lwc_region_tx_power_dbm(eu, 7) == 2 && lwc_region_tx_power_dbm(eu, 8) == INT8_MIN);
     CHECK(lwc_region_tx_power_dbm(us, 10) == 10 && lwc_region_tx_power_dbm(NULL, 0) == INT8_MIN);
@@ -83,7 +98,7 @@ static void consistency(void)
 {
     for (int i = 0; i < (int)LWC_REGIONS; i++) {
         const lwc_region_t *r = R((lwc_region_id_t)i);
-        CHECK(r != NULL && r->id == (lwc_region_id_t)i && r->tx_powers >= 8U);
+        CHECK(r != NULL && r->id == (lwc_region_id_t)i && r->tx_powers >= 6U); /* EU433: TXPower 0-5 */
         CHECK(r->dr[r->rx2_dr].kind == LWC_DR_LORA && r->rx2_hz != 0U);
         for (int dr = 0; dr < 16; dr++) {
             const lwc_region_dr_t *d = &r->dr[dr];
@@ -99,11 +114,14 @@ static void consistency(void)
             }
         }
         if (r->fixed) {
-            for (uint8_t sb = 0; sb < 8U; sb++) { /* every channel of a sub-band answers on a downlink channel */
-                for (uint32_t k = 0; k < 8U; k++) {
-                    const uint32_t up = r->up125.base_hz + (8U * sb + k) * r->up125.step_hz;
-                    CHECK(lwc_region_rx1_hz(r, up, 125) == r->down.base_hz + k * r->down.step_hz);
-                }
+            /* every uplink channel answers on downlink channel (channel % n_down) */
+            CHECK(r->n_up125 % 8U == 0U && r->n_down > 0U && lwc_region_subbands(r) == r->n_up125 / 8U);
+            for (uint32_t ch = 0; ch < (uint32_t)r->n_up125 + r->n_up500; ch++) {
+                const bool wide = ch >= r->n_up125;
+                const uint32_t up = wide ? r->up500.base_hz + (ch - r->n_up125) * r->up500.step_hz
+                                         : r->up125.base_hz + ch * r->up125.step_hz;
+                CHECK(lwc_region_channel(r, up, wide ? 500 : 125) == (int)ch);
+                CHECK(lwc_region_rx1_hz(r, up, wide ? 500 : 125) == r->down.base_hz + (ch % r->n_down) * r->down.step_hz);
             }
         } else {
             CHECK(r->n_default >= 2U && r->n_default <= 3U);
@@ -166,6 +184,59 @@ static void subbands(void)
     uint16_t m[2];
     uint8_t cn[2];
     CHECK(!lwc_region_cflist_subband(R(LWC_REGION_US915), 8, cf) && !lwc_region_link_adr_subband(R(LWC_REGION_US915), 8, m, cn));
+    /* CN470's original plan has no CFList, and moving it to a sub-band takes 6 LinkADRReq: not provided */
+    CHECK(!lwc_region_cflist_subband(R(LWC_REGION_CN470), 0, cf) && !lwc_region_link_adr_subband(R(LWC_REGION_CN470), 0, m, cn));
+}
+
+/* ADR-0025: which card serves which region, and the band check. */
+static void cards(void)
+{
+    static const struct {
+        lwc_card_id_t card;
+        const char *regions;
+    } want[] = {
+        {LWC_CARD_868, "EU868 IN865 RU864"},
+        {LWC_CARD_915, "US915 AU915 AS923-1 AS923-2 AS923-3 AS923-4 KR920"},
+        {LWC_CARD_433, "EU433"},
+        {LWC_CARD_470, "CN470"},
+    };
+    int served[LWC_REGIONS] = {0};
+    for (size_t k = 0; k < sizeof want / sizeof want[0]; k++) {
+        const lwc_card_t *c = lwc_card(want[k].card);
+        char got[128] = "";
+        for (int i = 0; i < (int)LWC_REGIONS; i++) {
+            if (lwc_card_region_ok(c, R((lwc_region_id_t)i))) {
+                if (got[0] != '\0') {
+                    strcat(got, " ");
+                }
+                strcat(got, R((lwc_region_id_t)i)->name);
+                served[i]++;
+            }
+        }
+        CHECK(strcmp(got, want[k].regions) == 0);
+        lwc_card_id_t id;
+        CHECK(c != NULL && c->id == want[k].card && lwc_card_parse(c->name, &id) && id == want[k].card);
+    }
+    for (int i = 0; i < (int)LWC_REGIONS; i++) {
+        CHECK(served[i] == 1); /* every region: exactly one card */
+        const lwc_card_t *c = lwc_card_for_region(R((lwc_region_id_t)i));
+        CHECK(c != NULL && lwc_card_region_ok(c, R((lwc_region_id_t)i)));
+    }
+    /* an upgrade from ADR-0024 keeps a 9xx region on the 915 card (not EU868 on the 868 card) */
+    CHECK(lwc_card_for_region(R(LWC_REGION_AS923_1))->id == LWC_CARD_915);
+    CHECK(lwc_card_for_region(R(LWC_REGION_KR920))->id == LWC_CARD_915);
+    CHECK(lwc_card_for_region(R(LWC_REGION_EU868))->id == LWC_CARD_868 && lwc_card_for_region(NULL) == NULL);
+    const lwc_card_t *c868 = lwc_card(LWC_CARD_868), *c433 = lwc_card(LWC_CARD_433);
+    CHECK(c868->radio == LWC_RADIO_SX1257 && lwc_card(LWC_CARD_915)->radio == LWC_RADIO_SX1257);
+    CHECK(c433->radio == LWC_RADIO_SX1255 && lwc_card(LWC_CARD_470)->radio == LWC_RADIO_SX1255);
+    /* band edges: the whole channel inside */
+    CHECK(lwc_card_fits(c868, 863062500U, 125000U) && !lwc_card_fits(c868, 863062499U, 125000U));
+    CHECK(lwc_card_fits(c868, 869937500U, 125000U) && !lwc_card_fits(c868, 869937501U, 125000U));
+    CHECK(lwc_card_fits(c433, 434727500U, 125000U) && !lwc_card_fits(c433, 434775000U, 125000U));
+    CHECK(!lwc_card_fits(c868, 10U, 125000U) && !lwc_card_fits(NULL, 868100000U, 125000U));
+    lwc_card_id_t id;
+    CHECK(!lwc_card_parse("900", &id) && !lwc_card_parse(NULL, &id) && lwc_card(LWC_CARDS) == NULL);
+    CHECK(!lwc_card_region_ok(NULL, R(LWC_REGION_EU868)) && !lwc_card_region_ok(c868, NULL));
 }
 
 /* ADR-0024: what the server code assumes of every dynamic-channel region. */
@@ -196,6 +267,7 @@ int main(void)
     lookup();
     consistency();
     subbands();
+    cards();
     if (failures != 0) {
         fprintf(stderr, "test_region: %d failure(s)\n", failures);
         return 1;

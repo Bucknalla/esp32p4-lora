@@ -789,26 +789,44 @@ static esp_err_t api_radio_post(httpd_req_t *req)
         return send_status(req, "400 Bad Request", "bad body\n");
     }
     char g[12], tx[8], ltx[8], v[16];
-    /* region (ADR-0024): its own save, then a restart */
-    if (lwc_form_get(body, got, "region", v, sizeof v) >= 0) {
-        lwc_region_id_t id;
-        if (!lwc_region_parse(v, &id)) {
-            return send_status(req, "400 Bad Request", "region: EU868, AS923-1..4, IN865, KR920 or RU864\n");
+    /* card (ADR-0025) and region (ADR-0024): their own save, then a restart */
+    const bool has_card = lwc_form_get(body, got, "card", g, sizeof g) >= 0;
+    const bool has_region = lwc_form_get(body, got, "region", v, sizeof v) >= 0;
+    if (has_card || has_region) {
+        const lwc_card_t *card = radioplan_card();
+        const lwc_region_t *rg = radioplan_region();
+        lwc_card_id_t cid;
+        lwc_region_id_t rid;
+        if (has_card) {
+            if (!lwc_card_parse(g, &cid)) {
+                return send_status(req, "400 Bad Request", "card: 868, 915, 433 or 470\n");
+            }
+            card = lwc_card(cid);
         }
-        const lwc_region_t *rg = lwc_region(id);
-        if (rg == radioplan_region()) {
+        if (has_region) {
+            if (!lwc_region_parse(v, &rid)) {
+                return send_status(req, "400 Bad Request",
+                                   "region: EU868, US915, AU915, AS923-1..4, IN865, KR920, RU864, CN470 or EU433\n");
+            }
+            rg = lwc_region(rid);
+        }
+        if (!lwc_card_region_ok(card, rg)) {
+            char m[96];
+            snprintf(m, sizeof m, "%s is not on the %s MHz card: choose a region for this card\n", rg->name,
+                     card->name);
+            return send_status(req, "400 Bad Request", m);
+        }
+        if (card == radioplan_card() && rg == radioplan_region()) {
             return send_status(req, "200 OK", "unchanged\n");
         }
-        r = radioplan_set_region(rg);
-        if (r == ESP_ERR_NOT_SUPPORTED) {
-            return send_status(req, "400 Bad Request", "US915 and AU915 are not supported yet\n");
-        }
+        r = radioplan_set_region(card, rg);
         if (r != ESP_OK) {
             return send_status(req, "500 Internal Server Error", esp_err_to_name(r));
         }
-        return reboot_soon(req, "region changed",
-                           lwc_region_tx_enabled(rg) ? "saved: restarting\n"
-                                                     : "saved: restarting; this region is receive-only\n");
+        return reboot_soon(req, "card or region changed",
+                           lwc_region_tx_enabled(rg) && card->id == LWC_CARD_868
+                               ? "saved: restarting\n"
+                               : "saved: restarting; receive only, the radio transmits nothing\n");
     }
     /* receive windows (rx1_delay, rx2_hz, rx2_dr): their own save */
     const int rl = lwc_form_get(body, got, "rx1_delay", v, sizeof v);
@@ -864,8 +882,9 @@ static esp_err_t api_radio_post(httpd_req_t *req)
 
 /* Channel plan editor (ADR-0017, admin): r0, r1 = radio centres in Hz;
  * m0..m7 = "enable:radio:if_hz"; std = "enable:radio:if_hz:sf:bw_khz";
- * fsk = "enable:radio:if_hz"; or reset=1 for the built-in plan. Stored as
- * "local"; a connected network server replaces it with its own. */
+ * fsk = "enable:radio:if_hz"; or reset=1 for the built-in plan; or (fixed
+ * regions, ADR-0025) subband=1..8 (CN470 1..12) for that sub-band's plan.
+ * Stored as "local"; a connected network server replaces it with its own. */
 static bool parse_chan(const char *s, lwc_plan_chan_t *c, int *sf, int *bw)
 {
     int en = 0, radio = 0;
@@ -893,7 +912,9 @@ static const char *plan_err_text(lwc_plan_err_t e)
            : e == LWC_PLAN_ERR_BAND    ? "a channel reaches outside 863-870 MHz\n"
            : e == LWC_PLAN_ERR_DEFAULT ? "the region's default channels must stay\n"
            : e == LWC_PLAN_ERR_STD     ? "std channel: SF7-12, 125/250/500 kHz\n"
-           : e == LWC_PLAN_ERR_REGION  ? "this region is not supported yet\n"
+           : e == LWC_PLAN_ERR_REGION  ? "the card cannot serve this region\n"
+           : e == LWC_PLAN_ERR_CHANNEL ? "a channel is not one of the region's uplink channels (FSK off)\n"
+           : e == LWC_PLAN_ERR_CARD    ? "a channel is outside the card's band\n"
                                        : "plan not valid\n";
 }
 
@@ -914,6 +935,11 @@ static esp_err_t api_radio_plan(httpd_req_t *req)
     if (lwc_form_get(body, got, "reset", v, sizeof v) >= 0 && strcmp(v, "1") == 0) {
         (void)lwc_plan_default(&p, radioplan_region());
         src = RADIOPLAN_DEFAULT;
+    } else if (lwc_form_get(body, got, "subband", v, sizeof v) >= 0) {
+        const int sb = atoi(v);
+        if (sb < 1 || !lwc_plan_subband(&p, radioplan_region(), (uint8_t)(sb - 1))) {
+            return send_status(req, "400 Bad Request", "subband: 1-8 (CN470 1-12), fixed-plan regions only\n");
+        }
     } else {
         radioplan_get(&p);
         for (int i = 0; i < 2; i++) {
@@ -940,7 +966,7 @@ static esp_err_t api_radio_plan(httpd_req_t *req)
             return send_status(req, "400 Bad Request", "fsk: enable:radio:if_hz\n");
         }
     }
-    const lwc_plan_err_t pe = lwc_plan_check(&p, radioplan_region());
+    const lwc_plan_err_t pe = lwc_plan_check(&p, radioplan_region(), radioplan_card());
     if (pe != LWC_PLAN_OK) {
         return send_status(req, "400 Bad Request", plan_err_text(pe));
     }

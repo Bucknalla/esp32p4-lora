@@ -56,7 +56,7 @@ type sub struct {
 
 func main() {
 	regions := []band.Name{band.EU868, band.US915, band.AU915, band.AS923, band.AS923_2, band.AS923_3, band.AS923_4,
-		band.IN865, band.KR920, band.RU864, band.CN470}
+		band.IN865, band.KR920, band.RU864, band.CN470, band.EU433}
 	var all []out
 	for _, proto := range []string{band.LoRaWAN_1_0_2, band.LoRaWAN_1_0_4} {
 		rev := band.RegParamRevB

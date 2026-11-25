@@ -671,9 +671,7 @@ bool lwc_lbs_router_drs_ok(const lwc_lbs_router_config_t *c, const lwc_region_t 
         if (d->kind != LWC_DR_LORA) {
             continue;
         }
-        const bool dnonly = r->fixed && i >= 8U;
-        if (i >= c->n_drs || c->drs[i].sf != (int8_t)d->sf || c->drs[i].bw_khz != d->bw_khz ||
-            c->drs[i].dnonly != dnonly) {
+        if (i >= c->n_drs || c->drs[i].sf != (int8_t)d->sf || c->drs[i].bw_khz != d->bw_khz) {
             return false;
         }
     }
@@ -748,7 +746,8 @@ lwc_lbs_err_t lwc_lbs_parse_router_config(const char *json, size_t len, lwc_lbs_
     return is_rc ? LWC_LBS_OK : LWC_LBS_ERR_FIELD;
 }
 
-bool lwc_lbs_router_plan(const lwc_lbs_router_config_t *c, const lwc_region_t *r, lwc_plan_t *out)
+bool lwc_lbs_router_plan(const lwc_lbs_router_config_t *c, const lwc_region_t *r, const lwc_card_t *card,
+                         lwc_plan_t *out)
 {
     if (c == NULL || out == NULL || !c->have_sx1301) {
         return false;
@@ -764,7 +763,7 @@ bool lwc_lbs_router_plan(const lwc_lbs_router_config_t *c, const lwc_region_t *r
     p.std_sf = c->std_on ? c->std_sf : 7U;
     p.std_bw_khz = c->std_on ? (uint16_t)(c->std_bw_hz / 1000U) : 250U;
     p.fsk = (lwc_plan_chan_t){c->fsk_on, c->fsk_radio, c->fsk_if};
-    if (lwc_plan_check(&p, r) != LWC_PLAN_OK) {
+    if (lwc_plan_check(&p, r, card) != LWC_PLAN_OK) {
         return false;
     }
     *out = p;

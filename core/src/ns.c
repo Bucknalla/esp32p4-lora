@@ -25,7 +25,7 @@ void lwc_ns_init(lwc_ns_t *ns)
 bool lwc_ns_set_region(lwc_ns_t *ns, const lwc_region_t *r)
 {
     lwc_plan_t p;
-    if (ns == NULL || !lwc_plan_default(&p, r)) {
+    if (ns == NULL || r == NULL || r->fixed || !lwc_plan_default(&p, r)) {
         return false;
     }
     ns->region = r;

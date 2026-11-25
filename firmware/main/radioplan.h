@@ -1,7 +1,8 @@
 /* The radio's channel plan (ADR-0017): read by the concentrator set-up, the
  * local server's join-accepts and the Basics Station check. Stored in NVS
  * ("radio"/"plan"); the region's default plan when nothing valid is stored.
- * The region (ADR-0024) is "radio"/"region"; absent means EU868. */
+ * The region (ADR-0024) is "radio"/"region", the card (ADR-0025) "radio"/"card";
+ * absent means the 868 MHz card and EU868. */
 #pragma once
 
 #include <stdbool.h>
@@ -14,11 +15,14 @@
 /** The gateway's region (any task): EU868 unless another is stored. */
 const lwc_region_t *radioplan_region(void);
 
-/** Store a new region for the next start (the caller restarts the gateway):
- *  the stored plan and receive windows go back to that region's defaults.
- *  ESP_ERR_NOT_SUPPORTED for US915 and AU915 (not yet). Only EU868 transmits
- *  (lwc_region_tx_enabled). */
-esp_err_t radioplan_set_region(const lwc_region_t *r);
+/** The concentrator card (any task): 868 MHz unless another is stored. */
+const lwc_card_t *radioplan_card(void);
+
+/** Store a card and region for the next start (the caller restarts the
+ *  gateway): if either changes, the stored plan and receive windows go back
+ *  to the region's defaults. ESP_ERR_INVALID_ARG if the card cannot serve the
+ *  region (lwc_card_region_ok). Only EU868 transmits (lwc_region_tx_enabled). */
+esp_err_t radioplan_set_region(const lwc_card_t *c, const lwc_region_t *r);
 
 typedef enum {
     RADIOPLAN_DEFAULT = 0, /* the region's built-in plan */
@@ -33,7 +37,7 @@ const char *radioplan_source_name(radioplan_src_t s);
 
 /** Check and store a plan for the radio's next start. `*changed` (may be
  *  NULL): it differs from the stored one. ESP_ERR_INVALID_ARG if it fails
- *  lwc_plan_check for the gateway's region. */
+ *  lwc_plan_check for the gateway's region and card. */
 esp_err_t radioplan_store(const lwc_plan_t *p, radioplan_src_t src, bool *changed);
 /* ESP_ERR_INVALID_STATE: this plan was rejected by the radio earlier. */
 

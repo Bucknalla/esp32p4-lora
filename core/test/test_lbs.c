@@ -9,6 +9,7 @@
 
 #include "lwc/region.h"
 #define EU lwc_region(LWC_REGION_EU868)
+#define C868 lwc_card(LWC_CARD_868)
 
 static int failures;
 
@@ -317,20 +318,75 @@ static void router_config_ttn(void)
     CHECK(c.std_on && c.std_bw_hz == 250000 && c.std_sf == 7 && c.std_radio == 1 && c.std_if == -200000);
     CHECK(c.fsk_on && c.fsk_radio == 1 && c.fsk_if == 300000);
     lwc_plan_t p, d;
-    CHECK(lwc_lbs_router_plan(&c, EU, &p));
+    CHECK(lwc_lbs_router_plan(&c, EU, C868, &p));
     /* TTN's plan is the built-in one plus FSK at 868.8 MHz */
     (void)lwc_plan_default(&d, EU);
     CHECK(!lwc_plan_equal(&p, &d));
     d.fsk.enable = true;
     CHECK(lwc_plan_equal(&p, &d) && lwc_plan_hz(&p, &p.fsk) == 868800000);
     /* ADR-0024: the same router_config for a gateway set to another region. AS923
-     * DR0-6 equal EU868's, so the DRs pass; the plan does not (default channels). */
+     * DR0-6 equal EU868's, so the DRs pass; the plan does not (default channels,
+     * checked before the card's band). */
     const lwc_region_t *as1 = lwc_region(LWC_REGION_AS923_1);
-    CHECK(lwc_lbs_router_drs_ok(&c, as1) && !lwc_lbs_router_plan(&c, as1, &p));
+    CHECK(lwc_lbs_router_drs_ok(&c, as1) && !lwc_lbs_router_plan(&c, as1, lwc_card(LWC_CARD_915), &p));
+    CHECK(!lwc_lbs_router_plan(&c, EU, lwc_card(LWC_CARD_915), &p)); /* EU868 on the 915 card */
     CHECK(!lwc_lbs_router_drs_ok(&c, lwc_region(LWC_REGION_US915)) && !lwc_lbs_router_drs_ok(&c, NULL));
     /* no sx1301_conf: no plan */
     static const char bare[] = "{\"msgtype\":\"router_config\",\"region\":\"EU863\"}";
-    CHECK(lwc_lbs_parse_router_config(bare, strlen(bare), &c) == LWC_LBS_OK && !lwc_lbs_router_plan(&c, EU, &p));
+    CHECK(lwc_lbs_parse_router_config(bare, strlen(bare), &c) == LWC_LBS_OK && !lwc_lbs_router_plan(&c, EU, C868, &p));
+}
+
+/* ADR-0025: US915 router_configs. ChirpStack: its gateway bridge's router_config
+ * test (internal/backend/basicstation/structs, "US915 0 - 7 + 64"). The Things
+ * Stack: the DRs of its lbslns test (pkg/pfconfig/lbslns, US_902_928) with the
+ * radios and channels of TTN's US_902_928_FSB_2 frequency plan. */
+static void router_config_us915(void)
+{
+    static const char cs[] =
+        "{\"msgtype\":\"router_config\",\"NetID\":[66051],\"JoinEui\":[[0,72623859790382856]],\"region\":"
+        "\"US902\",\"hwspec\":\"sx1301/1\",\"freq_range\":[902000000,928000000],\"DRs\":[[10,125,0],[9,125,0],"
+        "[8,125,0],[7,125,0],[8,500,0],[-1,0,0],[-1,0,0],[-1,0,0],[12,500,1],[11,500,1],[10,500,1],[9,500,1],"
+        "[8,500,0],[7,500,1],[-1,0,0],[-1,0,0]],\"sx1301_conf\":[{\"radio_0\":{\"enable\":true,\"freq\":"
+        "902700000},\"radio_1\":{\"enable\":true,\"freq\":903700000},\"chan_FSK\":{\"enable\":false,\"radio\":0,"
+        "\"if\":0},\"chan_Lora_std\":{\"enable\":true,\"radio\":0,\"if\":300000,\"bandwidth\":500000,"
+        "\"spread_factor\":8},\"chan_multiSF_0\":{\"enable\":true,\"radio\":0,\"if\":-400000},"
+        "\"chan_multiSF_1\":{\"enable\":true,\"radio\":0,\"if\":-200000},\"chan_multiSF_2\":{\"enable\":true,"
+        "\"radio\":0,\"if\":0},\"chan_multiSF_3\":{\"enable\":true,\"radio\":0,\"if\":200000},"
+        "\"chan_multiSF_4\":{\"enable\":true,\"radio\":0,\"if\":400000},\"chan_multiSF_5\":{\"enable\":true,"
+        "\"radio\":1,\"if\":-400000},\"chan_multiSF_6\":{\"enable\":true,\"radio\":1,\"if\":-200000},"
+        "\"chan_multiSF_7\":{\"enable\":true,\"radio\":1,\"if\":0}}]}";
+    static const char tts[] =
+        "{\"msgtype\":\"router_config\",\"region\":\"US902\",\"hwspec\":\"sx1301/1\",\"freq_range\":"
+        "[902000000,928000000],\"DRs\":[[10,125,0],[9,125,0],[8,125,0],[7,125,0],[8,500,0],[0,0,0],[0,0,0],"
+        "[0,0,0],[12,500,0],[11,500,0],[10,500,0],[9,500,0],[8,500,0],[7,500,0]],\"nocca\":true,\"nodc\":true,"
+        "\"nodwell\":true,\"sx1301_conf\":[{\"radio_0\":{\"enable\":true,\"freq\":904300000},\"radio_1\":"
+        "{\"enable\":true,\"freq\":905000000},\"chan_multiSF_0\":{\"enable\":true,\"radio\":0,\"if\":-400000},"
+        "\"chan_multiSF_1\":{\"enable\":true,\"radio\":0,\"if\":-200000},\"chan_multiSF_2\":{\"enable\":true,"
+        "\"radio\":0,\"if\":0},\"chan_multiSF_3\":{\"enable\":true,\"radio\":0,\"if\":200000},"
+        "\"chan_multiSF_4\":{\"enable\":true,\"radio\":1,\"if\":-300000},\"chan_multiSF_5\":{\"enable\":true,"
+        "\"radio\":1,\"if\":-100000},\"chan_multiSF_6\":{\"enable\":true,\"radio\":1,\"if\":100000},"
+        "\"chan_multiSF_7\":{\"enable\":true,\"radio\":1,\"if\":300000},\"chan_Lora_std\":{\"enable\":true,"
+        "\"radio\":0,\"if\":300000,\"bandwidth\":500000,\"spread_factor\":8},\"chan_FSK\":{\"enable\":false}}]}";
+    const lwc_region_t *us = lwc_region(LWC_REGION_US915);
+    const lwc_card_t *c915 = lwc_card(LWC_CARD_915);
+    lwc_lbs_router_config_t c;
+    lwc_plan_t p, d;
+    /* ChirpStack: DNONLY 1 on DR8-11 and DR13, 0 on DR12 (SF8/500 like DR4); sub-band 1 */
+    CHECK(lwc_lbs_parse_router_config(cs, strlen(cs), &c) == LWC_LBS_OK && c.n_drs == 16);
+    CHECK(lwc_lbs_router_drs_ok(&c, us) && !lwc_lbs_router_drs_ok(&c, EU));
+    CHECK(lwc_lbs_router_drs_ok(&c, lwc_region(LWC_REGION_AU915)) == false); /* AU915 DR0 is SF12 */
+    CHECK(lwc_lbs_router_plan(&c, us, c915, &p) && lwc_plan_subband_of(&p, us) == 0);
+    CHECK(!lwc_lbs_router_plan(&c, us, C868, &p)); /* US915 on the 868 card */
+    /* The Things Stack: DNONLY 0 everywhere, RFU as [0,0,0], 14 entries; TTN's FSB2 = the default plan */
+    CHECK(lwc_lbs_parse_router_config(tts, strlen(tts), &c) == LWC_LBS_OK && c.n_drs == 14);
+    CHECK(lwc_lbs_router_drs_ok(&c, us) && lwc_lbs_router_plan(&c, us, c915, &p));
+    CHECK(lwc_plan_default(&d, us) && lwc_plan_equal(&p, &d) && lwc_plan_subband_of(&p, us) == 1);
+    /* uplink SF8/500 kHz is DR4 (not the downlink DR12 with the same pair); downlink DRs map back */
+    CHECK(lwc_lbs_dr(us, 8, 500) == 4 && lwc_lbs_dr(us, 10, 125) == 0 && lwc_lbs_dr(us, 12, 125) == -1);
+    uint8_t sf = 0;
+    uint16_t bw = 0;
+    CHECK(lwc_lbs_dr_params(us, 12, &sf, &bw) && sf == 8 && bw == 500);
+    CHECK(lwc_lbs_dr_params(us, 8, &sf, &bw) && sf == 12 && bw == 500);
 }
 
 int main(void)
@@ -343,6 +399,7 @@ int main(void)
     msgtypes();
     dnmsgs();
     router_config();
+    router_config_us915();
     router_config_ttn();
     if (failures != 0) {
         fprintf(stderr, "test_lbs: %d failure(s)\n", failures);

@@ -44,7 +44,6 @@ radio_stats_t g_radio_stats;
 
 #if CONFIG_GW_CONC_SX1301
 
-#define SX1257_RSSI_OFFSET (-158.0f) /* Nebra global_conf.json.EU868 */
 #define RX_BATCH 8
 #define RX_POLL_MS 10
 #define BACKOFF_MIN_MS 2000U
@@ -52,8 +51,8 @@ radio_stats_t g_radio_stats;
 #define WALLCLOCK_VALID_S 1700000000LL /* after 2023-11: SNTP has set the clock */
 
 /* Channel plan (ADR-0017, radioplan.c): IF chains 0-7 multi-SF 125 kHz, chain
- * 8 LoRa std, chain 9 FSK. Board settings (clock source, RSSI offset, radio
- * type, TX chain) stay here. */
+ * 8 LoRa std, chain 9 FSK. The card (ADR-0025) gives the radio type and RSSI
+ * offset; board settings (clock source, TX chain) stay here. */
 static uint8_t bw_code_of(uint16_t khz)
 {
     return khz == 500U ? BW_500KHZ : khz == 250U ? BW_250KHZ : BW_125KHZ;
@@ -71,8 +70,12 @@ void conc_hal_restart(void)
     atomic_store(&s_restart_req, true);
 }
 
-static int configure_sx1301(const lwc_plan_t *pp)
+static int configure_sx1301(const lwc_plan_t *pp, const lwc_card_t *card, const lwc_region_t *rg)
 {
+    /* The TX chain is enabled only where the radio may transmit (ADR-0024,
+     * ADR-0025): with it, lgw_start also runs the TX DC-offset calibration on
+     * that radio, at its centre frequency. */
+    const bool tx = CONFIG_GW_TX_ENABLE && lwc_region_tx_enabled(rg) && card->id == LWC_CARD_868;
     struct lgw_conf_board_s board;
     memset(&board, 0, sizeof board);
     board.lorawan_public = true;
@@ -88,9 +91,9 @@ static int configure_sx1301(const lwc_plan_t *pp)
         memset(&rf, 0, sizeof rf);
         rf.enable = true;
         rf.freq_hz = plan.radio_hz[chain];
-        rf.rssi_offset = SX1257_RSSI_OFFSET;
-        rf.type = LGW_RADIO_TYPE_SX1257;
-        rf.tx_enable = (chain == 0) && CONFIG_GW_TX_ENABLE; /* Nebra: TX on radio_0 */
+        rf.rssi_offset = (float)card->rssi_offset_db;
+        rf.type = card->radio == LWC_RADIO_SX1255 ? LGW_RADIO_TYPE_SX1255 : LGW_RADIO_TYPE_SX1257;
+        rf.tx_enable = (chain == 0) && tx; /* Nebra: TX on radio_0 */
         if (lgw_rxrf_setconf(chain, rf) != LGW_HAL_SUCCESS) {
             ESP_LOGE(TAG, "lgw_rxrf_setconf(%u) failed", chain);
             return -1;
@@ -133,7 +136,9 @@ static int configure_sx1301(const lwc_plan_t *pp)
         ESP_LOGE(TAG, "lgw_rxif_setconf(9) failed");
         return -1;
     }
-    ESP_LOGI(TAG, "channel plan: radios %" PRIu32 "/%" PRIu32 " Hz", plan.radio_hz[0], plan.radio_hz[1]);
+    ESP_LOGI(TAG, "channel plan: %s MHz card (%s), %s, radios %" PRIu32 "/%" PRIu32 " Hz, TX chain %s", card->name,
+             card->radio == LWC_RADIO_SX1255 ? "SX1255" : "SX1257", rg->name, plan.radio_hz[0], plan.radio_hz[1],
+             tx ? "on" : "off");
     return 0;
 }
 
@@ -257,14 +262,15 @@ static void radio_task(void *arg)
         lwc_plan_t plan;
         radioplan_get(&plan);
         const lwc_region_t *rg = radioplan_region();
-        const lwc_plan_err_t pe = lwc_plan_check(&plan, rg);
+        const lwc_card_t *card = radioplan_card();
+        const lwc_plan_err_t pe = lwc_plan_check(&plan, rg, card);
         if (pe != LWC_PLAN_OK) {
             ESP_LOGE(TAG, "channel plan rejected (%d): using the %s default", (int)pe, rg->name);
             (void)lwc_plan_default(&plan, rg);
         }
         bool started = false;
         s_planned = false;
-        if (conc_reset() == ESP_OK && configure_sx1301(&plan) == 0 && conc_tx_configure() == 0) {
+        if (conc_reset() == ESP_OK && configure_sx1301(&plan, card, rg) == 0 && conc_tx_configure() == 0) {
             const TickType_t t0 = xTaskGetTickCount();
             if (lgw_start() == LGW_HAL_SUCCESS) {
                 started = true;
@@ -272,8 +278,8 @@ static void radio_task(void *arg)
                 have_good = true;
                 (void)conc_tx_after_start();
                 atomic_fetch_add(&g_radio_stats.starts, 1U);
-                ESP_LOGI(TAG, "lgw_start OK in %" PRIu32 " ms; receiving on EU868",
-                         (uint32_t)((xTaskGetTickCount() - t0) * portTICK_PERIOD_MS));
+                ESP_LOGI(TAG, "lgw_start OK in %" PRIu32 " ms; receiving on %s",
+                         (uint32_t)((xTaskGetTickCount() - t0) * portTICK_PERIOD_MS), rg->name);
                 ESP_LOGI(TAG, "stack high-water mark: %u bytes free of %u",
                          (unsigned)uxTaskGetStackHighWaterMark(NULL), (unsigned)HAL_TASK_STACK);
                 backoff = BACKOFF_MIN_MS;

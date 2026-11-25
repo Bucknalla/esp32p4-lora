@@ -175,7 +175,7 @@ static void on_router_config(const char *json, size_t len)
      * radio's, if it is valid for the gateway's region (ADR-0024: its data rates and
      * default channels); the radio restarts only when it differs. */
     lwc_plan_t plan;
-    bool ok = drs_ok && lwc_lbs_router_plan(&c, rg, &plan);
+    bool ok = drs_ok && lwc_lbs_router_plan(&c, rg, radioplan_card(), &plan);
     if (!ok) {
         ESP_LOGW(TAG, "the server's channel plan is not usable here (%s checks): keeping the radio's", rg->name);
     } else {
