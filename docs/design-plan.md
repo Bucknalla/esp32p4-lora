@@ -235,7 +235,7 @@ With one gateway there is no deduplication, so the network server reduces to per
 
 ## Application layer and integrations
 
-The gateway publishes standard formats so existing tools (Node-RED, Grafana, Home Assistant) connect without anything extra running on the P4.
+The gateway publishes plain JSON over standard protocols, so any application that speaks MQTT or HTTP can consume it without anything extra running on the P4.
 
 **Payload handling:** decrypt FRMPayload with the device's AppSKey, then pass it to the codec (if one is set) and the integrations.
 
@@ -243,9 +243,8 @@ The gateway publishes standard formats so existing tools (Node-RED, Grafana, Hom
 
 | Integration | Direction | Format | Phase |
 | --- | --- | --- | --- |
-| MQTT | Out: uplinks, joins, status. In: downlink queue | ChirpStack-compatible JSON event topics | 3 |
+| MQTT | Out: uplinks, joins, status. In: downlink queue | JSON on `lora/<gateway_id>/…` topics (ADR-0018) | 3 |
 | HTTP webhook | Out | Same JSON as MQTT, POSTed per event | 5 |
-| Home Assistant | Out | MQTT discovery messages per device | 5 |
 
 **Codecs:** decode and encode functions in JavaScript, compatible with ChirpStack and TTN codecs, run in an embedded QuickJS engine on PSRAM with a time and memory limit per call. Until then, raw payloads go out as base64 and are decoded downstream.
 

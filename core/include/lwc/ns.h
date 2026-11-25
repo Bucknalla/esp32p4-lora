@@ -196,7 +196,7 @@ typedef struct {
     uint32_t now_s;  /* monotonic seconds */
 } lwc_ns_rx_t;
 
-#define LWC_NS_DL_MAX 32U
+#define LWC_NS_DL_MAX 256U /* MHDR + FHDR with 15 B FOpts + FPort + 222 B + MIC = 250 */
 
 typedef struct {
     uint8_t frame[LWC_NS_DL_MAX];
@@ -208,6 +208,8 @@ typedef struct {
     bool device_time;
     bool dev_status;
     bool link_adr;   /* LinkADRReq to adr_dr / adr_power */
+    bool app;        /* the application payload is in it */
+    bool app_too_big; /* it was offered, but does not fit at these data rates */
     uint8_t adr_dr;
     uint8_t adr_power;
 } lwc_ns_dl_t;
@@ -222,6 +224,31 @@ typedef struct {
  */
 bool lwc_ns_answer(lwc_ns_t *ns, lwc_ns_up_res_t res, const lwc_ns_uplink_t *up, const lwc_ns_rx_t *rx,
                    lwc_ns_dl_t *dl);
+
+/** An application downlink to send with the answer (ADR-0018). */
+typedef struct {
+    uint8_t port; /* 1..223 */
+    const uint8_t *data;
+    size_t len;
+    bool more; /* more are queued: sets FPending */
+} lwc_ns_app_t;
+
+/**
+ * lwc_ns_answer, with an optional application payload (NULL: none). A payload
+ * makes a downlink needed. It is sent only if it fits both receive windows
+ * (EU868 maximum FRMPayload for the uplink's data rate in RX1 and the device's
+ * RX2 data rate, less the MAC commands); otherwise dl->app_too_big is set and
+ * the answer is built as without it. The daily DevStatusReq rides along only
+ * if it still fits.
+ */
+bool lwc_ns_answer_app(lwc_ns_t *ns, lwc_ns_up_res_t res, const lwc_ns_uplink_t *up, const lwc_ns_rx_t *rx,
+                       const lwc_ns_app_t *app, lwc_ns_dl_t *dl);
+
+/** EU868 data rate of an SF and bandwidth (DR0-DR6), or -1. */
+int lwc_ns_dr(uint8_t sf, uint16_t bw_khz);
+
+/** EU868 maximum FRMPayload with no FOpts (RP002 "N"), 0 for an unknown data rate. */
+size_t lwc_ns_max_frm(int dr);
 
 /** Demodulation floor for an SF at 125 kHz, in 0.1 dB (SF7 -7.5 dB ... SF12 -20 dB). */
 int16_t lwc_ns_required_snr10(uint8_t sf);

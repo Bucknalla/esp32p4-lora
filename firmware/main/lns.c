@@ -27,6 +27,7 @@
 #include <sys/time.h>
 
 #include "esp_check.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/semphr.h"
@@ -39,7 +40,7 @@
 #include "radio_pkt.h"
 #include "radio_tx.h"
 #include "sdkconfig.h"
-#include "mqttha.h"
+#include "mqttc.h"
 #include "sv.h"
 
 static bool lns_tx(void)
@@ -157,6 +158,59 @@ static QueueHandle_t s_fwd_q;
 static atomic_bool s_running;
 static atomic_uint s_joins, s_uplinks, s_downs, s_fwd, s_fwd_drop;
 static uint16_t s_tx_token;
+
+/* Application downlinks from MQTT (ADR-0018): a few per device, in PSRAM, sent
+ * with the next class A answer. The head stays until the device sends a new
+ * uplink after it went out (a repeated uplink means it missed it: sent again
+ * with a new counter). Keyed by DevEUI as well, so a reused slot never gets
+ * an old payload. Guarded by s_lock. */
+#define DLQ_DEPTH 4
+#define DLQ_DATA_MAX 222U /* the largest EU868 FRMPayload */
+typedef struct {
+    uint64_t dev_eui;
+    uint8_t port;
+    uint8_t len;
+    bool sent;
+    uint16_t token; /* the radio request it went out in */
+    uint8_t data[DLQ_DATA_MAX];
+} dlq_item_t;
+typedef struct {
+    uint8_t n;
+    dlq_item_t item[DLQ_DEPTH];
+} dlq_t;
+static dlq_t *s_dlq; /* [LWC_NS_MAX_DEVICES] */
+static atomic_uint s_app_queued, s_app_sent, s_app_dropped;
+
+/* Radio requests the radio refused (duty cycle, too late, ...): reported by
+ * the TX task without waiting (lns_tx_result); a refused payload is offered
+ * again instead of being released. */
+#define TX_FAILED_N 8
+static _Atomic uint16_t s_tx_failed[TX_FAILED_N];
+static atomic_uint s_tx_failed_pos;
+
+void lns_tx_result(uint16_t token, bool ok)
+{
+    if (!ok && token != 0U) {
+        atomic_store(&s_tx_failed[atomic_fetch_add(&s_tx_failed_pos, 1U) % TX_FAILED_N], token);
+    }
+}
+
+static bool tx_failed(uint16_t token)
+{
+    for (size_t i = 0; i < TX_FAILED_N; i++) {
+        if (atomic_load(&s_tx_failed[i]) == token) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void dlq_pop(dlq_t *q)
+{
+    memmove(&q->item[0], &q->item[1], sizeof q->item[0] * (size_t)(DLQ_DEPTH - 1));
+    memset(&q->item[DLQ_DEPTH - 1], 0, sizeof q->item[0]);
+    q->n--;
+}
 
 bool lns_running(void)
 {
@@ -310,13 +364,17 @@ static int32_t since_uplink_ms(const radio_pkt_t *p)
 
 /* Queue a class A downlink: RX1 `delay_us` after the uplink, RX2 one second
  * later if RX1 is refused. `what` names it in the log. */
-static void send_down(const radio_pkt_t *p, const uint8_t *frame, size_t len, uint32_t delay_us, uint32_t rx2_hz,
-                      uint8_t rx2_dr, const char *what, uint64_t dev_eui)
+/* Returns the radio request token, 0 when nothing was handed to the radio. */
+static uint16_t send_down(const radio_pkt_t *p, const uint8_t *frame, size_t len, uint32_t delay_us,
+                          uint32_t rx2_hz, uint8_t rx2_dr, const char *what, uint64_t dev_eui)
 {
     static radio_tx_req_t req;
     memset(&req, 0, sizeof req);
     req.source = RADIO_SRC_LNS;
     req.token = ++s_tx_token;
+    if (req.token == 0U) {
+        req.token = ++s_tx_token; /* 0: no request */
+    }
     lwc_ns_downlink(false, p->tmst, p->freq_hz, p->sf, p->bw_khz, delay_us, rx2_hz, rx2_dr, DOWN_POWER_DBM, frame, len,
                     &req.pk);
     lwc_txpk_t rx2;
@@ -330,21 +388,23 @@ static void send_down(const radio_pkt_t *p, const uint8_t *frame, size_t len, ui
         ESP_LOGW(TAG, "DRY RUN: %s for %s (%u B) at RX1 %" PRIu32 " Hz SF%u tmst %" PRIu32 ", %" PRId32
                       " ms after the uplink, not sent (local transmit off)",
                  what, eui_str(dev_eui, e), (unsigned)len, req.pk.freq_hz, req.pk.sf, req.pk.tmst, late);
-        return;
+        return 0;
     }
     if (g_radio_tx_req == NULL || xQueueSend(g_radio_tx_req, &req, pdMS_TO_TICKS(10)) != pdTRUE) {
         ESP_LOGW(TAG, "%s for %s: radio queue full", what, eui_str(dev_eui, e));
-        return;
+        return 0;
     }
     atomic_fetch_add(&s_downs, 1U);
     ESP_LOGI(TAG, "%s %u for %s: RX1 %" PRIu32 " Hz SF%u, queued %" PRId32 " ms after the uplink", what,
              (unsigned)req.token, eui_str(dev_eui, e), req.pk.freq_hz, req.pk.sf, late);
+    return req.token;
 }
 
 /* After an accepted or repeated uplink: build the class A answer if the
  * device needs one (this advances the downlink counter). Called with s_lock
  * held; the caller stores the counters before sending. */
-static bool answer(const radio_pkt_t *p, lwc_ns_up_res_t r, const lwc_ns_uplink_t *up, lwc_ns_dl_t *dl)
+static bool answer(const radio_pkt_t *p, lwc_ns_up_res_t r, const lwc_ns_uplink_t *up, const lwc_ns_app_t *app,
+                   lwc_ns_dl_t *dl)
 {
     lwc_ns_rx_t rx = {
         .snr10 = (int16_t)lroundf(p->lsnr * 10.0f),
@@ -353,7 +413,7 @@ static bool answer(const radio_pkt_t *p, lwc_ns_up_res_t r, const lwc_ns_uplink_
         .now_s = (uint32_t)(esp_timer_get_time() / 1000000LL),
     };
     rx.time_ok = lwc_gps_from_unix_us(p->time_unix_us, &rx.gps_s, &rx.gps_frac);
-    return lwc_ns_answer(&s_ns, r, up, &rx, dl);
+    return lwc_ns_answer_app(&s_ns, r, up, &rx, app, dl);
 }
 
 static void describe(const lwc_ns_dl_t *dl, char *out, size_t cap)
@@ -362,14 +422,22 @@ static void describe(const lwc_ns_dl_t *dl, char *out, size_t cap)
     if (dl->link_adr) {
         (void)snprintf(adr, sizeof adr, " LinkADRReq(DR%u, power -%u dB)", dl->adr_dr, 2U * dl->adr_power);
     }
-    (void)snprintf(out, cap, "downlink FCnt %" PRIu32 "%s%s%s%s%s", dl->fcnt, dl->ack ? " ACK" : "",
+    char app[32] = "";
+    if (dl->app) {
+        lwc_lw_data_t d;
+        if (lwc_lw_data_parse(dl->frame, dl->len, &d) == LWC_LW_OK) {
+            (void)snprintf(app, sizeof app, " port %u %u B%s", d.fport, (unsigned)d.frm_len,
+                           (d.fctrl & LWC_LW_FCTRL_FPENDING) != 0U ? " FPending" : "");
+        }
+    }
+    (void)snprintf(out, cap, "downlink FCnt %" PRIu32 "%s%s%s%s%s%s", dl->fcnt, dl->ack ? " ACK" : "",
                    dl->link_check ? " LinkCheckAns" : "", dl->device_time ? " DeviceTimeAns" : "", adr,
-                   dl->dev_status ? " DevStatusReq" : "");
+                   dl->dev_status ? " DevStatusReq" : "", app);
 }
 
 /* Returns true when the frame was handled here (not to be forwarded). */
 /* Radio fields of an MQTT event (ADR-0018). */
-static void ev_radio(mqttha_ev_t *ev, const radio_pkt_t *p, const lwc_ns_dev_t *d)
+static void ev_radio(mqttc_ev_t *ev, const radio_pkt_t *p, const lwc_ns_dev_t *d)
 {
     memset(ev, 0, sizeof *ev);
     ev->dev_eui = d->dev_eui;
@@ -391,7 +459,7 @@ static bool handle(const radio_pkt_t *p)
         return false;
     }
     static uint8_t acc[40];
-    static mqttha_ev_t ev;
+    static mqttc_ev_t ev;
     bool post = false;
     static lwc_ns_uplink_t up;
     static lwc_ns_dl_t dl;
@@ -433,15 +501,15 @@ static bool handle(const radio_pkt_t *p)
                      s_ns.dev[idx].name, s_ns.dev[idx].dev_addr, p->rssi, (double)p->lsnr);
             if (handled && err == ESP_OK) {
                 ev_radio(&ev, p, &s_ns.dev[idx]);
-                ev.kind = MQTTHA_JOIN;
+                ev.kind = MQTTC_JOIN;
                 post = true;
             }
             xSemaphoreGive(s_lock);
             if (err == ESP_OK) {
                 /* the device learns its windows from this frame: it uses the defaults for it */
-                send_down(p, acc, alen, LWC_NS_JOIN_DELAY_US, LWC_NS_RX2_FREQ_HZ, 0, "join-accept", eui);
+                (void)send_down(p, acc, alen, LWC_NS_JOIN_DELAY_US, LWC_NS_RX2_FREQ_HZ, 0, "join-accept", eui);
                 if (post) {
-                    mqttha_post(&ev);
+                    mqttc_post(&ev);
                 }
             } else {
                 ESP_LOGE(TAG, "join not answered: storing the device failed (%s)", esp_err_to_name(err));
@@ -479,7 +547,38 @@ static bool handle(const radio_pkt_t *p)
                 ESP_LOGI(TAG, "uplink %s FCnt %" PRIu32 " repeated%s", who, up.fcnt,
                          up.confirmed ? " (ACK missed?)" : "");
             }
-            bool send = answer(p, r, &up, &dl);
+            /* application downlink: release the one the device has moved past, offer the next */
+            dlq_t *q = s_dlq != NULL ? &s_dlq[up.idx] : NULL;
+            const uint64_t dev_eui = s_ns.dev[up.idx].dev_eui;
+            if (q != NULL && q->n > 0U && q->item[0].dev_eui != dev_eui) {
+                memset(q, 0, sizeof *q); /* the slot has a new device */
+            }
+            if (q != NULL && q->n > 0U && q->item[0].sent && tx_failed(q->item[0].token)) {
+                q->item[0].sent = false; /* the radio refused it: offer it again */
+            }
+            if (q != NULL && r == LWC_NS_UP_OK && q->n > 0U && q->item[0].sent) {
+                dlq_pop(q);
+            }
+            if (q != NULL && q->n > 0U && !lns_tx()) {
+                /* local transmit was switched off after they were queued: never sent late */
+                ESP_LOGW(TAG, "%u downlink(s) for %s dropped: local transmit is off", q->n, who);
+                atomic_fetch_add(&s_app_dropped, q->n);
+                memset(q, 0, sizeof *q);
+            }
+            lwc_ns_app_t app;
+            const bool offer = q != NULL && q->n > 0U;
+            if (offer) {
+                app = (lwc_ns_app_t){.port = q->item[0].port, .data = q->item[0].data, .len = q->item[0].len,
+                                     .more = q->n > 1U};
+            }
+            bool send = answer(p, r, &up, offer ? &app : NULL, &dl);
+            if (offer && dl.app_too_big) {
+                /* does not fit at this data rate: dropped, or it would block the queue */
+                ESP_LOGW(TAG, "downlink for %s on port %u (%u B) dropped: too big for SF%u and RX2 DR%u", who,
+                         q->item[0].port, q->item[0].len, p->sf, s_ns.dev[up.idx].rx2_dr);
+                dlq_pop(q);
+                atomic_fetch_add(&s_app_dropped, 1U);
+            }
             /* One write for both counters; the downlink counter is stored
              * before the frame goes out, so it is never reused. */
             if (r == LWC_NS_UP_OK || send) {
@@ -492,7 +591,7 @@ static bool handle(const radio_pkt_t *p)
             if (r == LWC_NS_UP_OK) {
                 /* copied now: `up` is wiped below */
                 ev_radio(&ev, p, &s_ns.dev[up.idx]);
-                ev.kind = MQTTHA_UP;
+                ev.kind = MQTTC_UP;
                 ev.fcnt = up.fcnt;
                 ev.confirmed = up.confirmed;
                 ev.port = up.has_port ? (int16_t)up.port : -1;
@@ -500,19 +599,31 @@ static bool handle(const radio_pkt_t *p)
                 memcpy(ev.data, up.payload, ev.len);
                 post = true;
             }
-            const uint64_t eui = s_ns.dev[up.idx].dev_eui;
+            const uint64_t eui = dev_eui;
+            const size_t up_idx = up.idx;
             const uint32_t rx1_us = lwc_ns_rx1_delay_us(&s_ns.dev[up.idx]);
             const uint32_t rx2_hz = s_ns.dev[up.idx].rx2_hz != 0U ? s_ns.dev[up.idx].rx2_hz : LWC_NS_RX2_FREQ_HZ;
             const uint8_t rx2_dr = s_ns.dev[up.idx].rx2_dr;
             memset(&up, 0, sizeof up);
             xSemaphoreGive(s_lock);
             if (send) {
-                char what[128];
+                char what[160];
                 describe(&dl, what, sizeof what);
-                send_down(p, dl.frame, dl.len, rx1_us, rx2_hz, rx2_dr, what, eui);
+                const uint16_t token = send_down(p, dl.frame, dl.len, rx1_us, rx2_hz, rx2_dr, what, eui);
+                if (token != 0U && dl.app) {
+                    /* on its way: released by the next new uplink. Only this
+                     * task takes from the head; lns_remove may have emptied it. */
+                    xSemaphoreTake(s_lock, portMAX_DELAY);
+                    if (s_dlq[up_idx].n > 0U && s_dlq[up_idx].item[0].dev_eui == eui) {
+                        s_dlq[up_idx].item[0].sent = true;
+                        s_dlq[up_idx].item[0].token = token;
+                    }
+                    xSemaphoreGive(s_lock);
+                    atomic_fetch_add(&s_app_sent, 1U);
+                }
             }
             if (post) {
-                mqttha_post(&ev); /* after the answer is queued: never delays it */
+                mqttc_post(&ev); /* after the answer is queued: never delays it */
                 memset(ev.data, 0, sizeof ev.data);
             }
             return handled;
@@ -562,6 +673,8 @@ esp_err_t lns_start(QueueHandle_t radio_q, QueueHandle_t *fwd_q)
     }
     ESP_RETURN_ON_FALSE(radio_q != NULL, ESP_ERR_INVALID_STATE, TAG, "no radio: local server not started");
     s_radio_q = radio_q;
+    s_dlq = heap_caps_calloc(LWC_NS_MAX_DEVICES, sizeof(dlq_t), MALLOC_CAP_SPIRAM);
+    ESP_RETURN_ON_FALSE(s_dlq != NULL, ESP_ERR_NO_MEM, TAG, "downlink queue");
     if (gwmode() == LWC_MODE_HYBRID) {
         s_fwd_q = xQueueCreate(RADIO_QUEUE_LEN, sizeof(radio_pkt_t));
         ESP_RETURN_ON_FALSE(s_fwd_q != NULL, ESP_ERR_NO_MEM, TAG, "forward queue");
@@ -613,6 +726,9 @@ lwc_ns_err_t lns_remove(uint64_t dev_eui)
     if (i >= 0) {
         r = lwc_ns_remove(&s_ns, dev_eui);
         memset(&s_stat[i], 0, sizeof s_stat[i]);
+        if (s_dlq != NULL) {
+            memset(&s_dlq[i], 0, sizeof s_dlq[i]);
+        }
         nvs_handle_t h;
         if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
             char k[4];
@@ -628,32 +744,8 @@ lwc_ns_err_t lns_remove(uint64_t dev_eui)
     char e[17];
     if (r == LWC_NS_OK) {
         ESP_LOGI(TAG, "device %s removed", eui_str(dev_eui, e));
-        static mqttha_ev_t ev; /* web server task; one request at a time */
-        memset(&ev, 0, sizeof ev);
-        ev.kind = MQTTHA_REMOVED;
-        ev.dev_eui = dev_eui;
-        mqttha_post(&ev);
     }
     return r;
-}
-
-size_t lns_device_names(uint64_t *euis, char (*names)[LWC_NS_NAME_MAX + 1U], size_t max)
-{
-    if (s_lock == NULL) {
-        return 0;
-    }
-    size_t n = 0;
-    xSemaphoreTake(s_lock, portMAX_DELAY);
-    for (size_t i = 0; i < LWC_NS_MAX_DEVICES && n < max; i++) {
-        if (s_ns.dev[i].used) {
-            euis[n] = s_ns.dev[i].dev_eui;
-            memcpy(names[n], s_ns.dev[i].name, LWC_NS_NAME_MAX + 1U);
-            names[n][LWC_NS_NAME_MAX] = '\0';
-            n++;
-        }
-    }
-    xSemaphoreGive(s_lock);
-    return n;
 }
 
 static size_t put(char *out, size_t cap, size_t o, const char *fmt, ...) __attribute__((format(printf, 4, 5)));
@@ -723,18 +815,61 @@ size_t lns_devices_json(char *out, size_t cap)
 
 void lns_status_line(char *buf, size_t len)
 {
-    unsigned devs = 0, joined = 0;
+    unsigned devs = 0, joined = 0, waiting = 0;
     if (s_lock != NULL) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
         for (size_t i = 0; i < LWC_NS_MAX_DEVICES; i++) {
             devs += s_ns.dev[i].used ? 1U : 0U;
             joined += (s_ns.dev[i].used && s_ns.dev[i].joined) ? 1U : 0U;
+            waiting += s_dlq != NULL ? s_dlq[i].n : 0U;
         }
         xSemaphoreGive(s_lock);
     }
     snprintf(buf, len,
-             "mode=%s local=%s devices=%u joined=%u joins=%u uplinks=%u downlinks=%u forwarded=%u fwd_dropped=%u tx=%s",
+             "mode=%s local=%s devices=%u joined=%u joins=%u uplinks=%u downlinks=%u forwarded=%u fwd_dropped=%u tx=%s"
+             " app_waiting=%u app_queued=%u app_sent=%u app_dropped=%u",
              gwmode_name(gwmode()), lns_running() ? "on" : "off", devs, joined, atomic_load(&s_joins),
              atomic_load(&s_uplinks), atomic_load(&s_downs), atomic_load(&s_fwd), atomic_load(&s_fwd_drop),
-             lns_tx() ? "on" : "dry-run");
+             lns_tx() ? "on" : "dry-run", waiting, atomic_load(&s_app_queued), atomic_load(&s_app_sent),
+             atomic_load(&s_app_dropped));
+}
+
+esp_err_t lns_queue_down(uint64_t dev_eui, uint8_t port, const uint8_t *data, size_t len)
+{
+    if (!lns_running() || s_dlq == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!lns_tx()) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+    if (port < 1U || port > 223U || (len > 0U && data == NULL)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(200)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    esp_err_t err = ESP_OK;
+    const int i = lwc_ns_find(&s_ns, dev_eui);
+    if (i < 0) {
+        err = ESP_ERR_NOT_FOUND;
+    } else if (len > lwc_ns_max_frm(s_ns.dev[i].rx2_dr)) {
+        err = ESP_ERR_INVALID_SIZE; /* never fits the RX2 window */
+    } else {
+        dlq_t *q = &s_dlq[i];
+        if (q->n > 0U && q->item[0].dev_eui != dev_eui) {
+            memset(q, 0, sizeof *q);
+        }
+        if (q->n >= DLQ_DEPTH) {
+            err = ESP_ERR_NO_MEM;
+        } else {
+            dlq_item_t *it = &q->item[q->n++];
+            *it = (dlq_item_t){.dev_eui = dev_eui, .port = port, .len = (uint8_t)len};
+            if (len > 0U) {
+                memcpy(it->data, data, len);
+            }
+            atomic_fetch_add(&s_app_queued, 1U);
+        }
+    }
+    xSemaphoreGive(s_lock);
+    return err;
 }

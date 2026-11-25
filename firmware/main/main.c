@@ -9,7 +9,7 @@
 #include "board.h"
 #include "gwmode.h"
 #include "lns.h"
-#include "mqttha.h"
+#include "mqttc.h"
 #include "conc.h"
 #include "conc_hal.h"
 #include "lbsfwd.h"
@@ -208,8 +208,8 @@ void app_main(void)
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "local network server: %s", esp_err_to_name(err));
     }
-    /* MQTT to Home Assistant (ADR-0018): events from the local server. */
-    err = mqttha_start();
+    /* MQTT client (ADR-0018): events out, downlinks in. */
+    err = mqttc_start();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "MQTT: %s", esp_err_to_name(err));
     }

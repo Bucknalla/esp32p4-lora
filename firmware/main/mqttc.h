@@ -1,5 +1,5 @@
-/* MQTT to Home Assistant (ADR-0018): uplink and join events from the local
- * network server, gateway online/offline, and MQTT discovery. */
+/* MQTT client (ADR-0018): uplink and join events from the local network
+ * server out, downlinks in, and the gateway's online state. */
 #pragma once
 
 #include <stdbool.h>
@@ -9,21 +9,19 @@
 #include "esp_err.h"
 #include "lwc/ns.h"
 
-#define MQTTHA_HOST_MAX 64 /* with the NUL */
-#define MQTTHA_USER_MAX 64
-#define MQTTHA_PASS_MAX 64
-#define MQTTHA_GWID_MAX 32
-#define MQTTHA_EXPIRE_MAX (7U * 24U * 3600U)
+#define MQTTC_HOST_MAX 64 /* with the NUL */
+#define MQTTC_USER_MAX 64
+#define MQTTC_PASS_MAX 64
+#define MQTTC_GWID_MAX 32
 
 typedef enum {
-    MQTTHA_UP = 1,
-    MQTTHA_JOIN,
-    MQTTHA_REMOVED,
-} mqttha_kind_t;
+    MQTTC_UP = 1,
+    MQTTC_JOIN,
+} mqttc_kind_t;
 
 /** One event from the local network server. Copied into the queue. */
 typedef struct {
-    uint8_t kind; /* mqttha_kind_t */
+    uint8_t kind; /* mqttc_kind_t */
     bool confirmed;
     int16_t port; /* -1: no FPort */
     uint64_t dev_eui;
@@ -38,38 +36,36 @@ typedef struct {
     int64_t time_unix_s; /* < 0: wall clock not set */
     uint8_t len;
     uint8_t data[242];
-} mqttha_ev_t;
+} mqttc_ev_t;
 
 /** Settings for display (no password). */
 typedef struct {
     bool on;
-    char host[MQTTHA_HOST_MAX];
+    char host[MQTTC_HOST_MAX];
     uint16_t port;
-    char user[MQTTHA_USER_MAX];
+    char user[MQTTC_USER_MAX];
     bool pass_set;
-    char gw_id[MQTTHA_GWID_MAX]; /* the stored id, or the default (lower-case gateway EUI) */
-    uint32_t expire_s;
-} mqttha_cfg_t;
+    char gw_id[MQTTC_GWID_MAX]; /* the stored id, or the default (lower-case gateway EUI) */
+} mqttc_cfg_t;
 
-void mqttha_get(mqttha_cfg_t *c);
+void mqttc_get(mqttc_cfg_t *c);
 
 /**
- * Store settings for the next boot. NULL (or 0 for the port, a negative value
- * for `expire_s`) leaves a value as it is. `host`: a host name or IPv4
+ * Store settings for the next boot. NULL (or 0 for the port) leaves a value as it is. `host`: a host name or IPv4
  * address; `user`/`pass`: printable ASCII; an empty `pass` erases it; an empty
  * `gw_id` returns to the default; otherwise [a-z0-9_], at most 31.
  * ESP_ERR_INVALID_ARG for a value that does not fit these rules.
  */
-esp_err_t mqttha_set(const bool *on, const char *host, uint16_t port, const char *user, const char *pass,
-                     const char *gw_id, int32_t expire_s);
+esp_err_t mqttc_set(const bool *on, const char *host, uint16_t port, const char *user, const char *pass,
+                    const char *gw_id);
 
 /** Start the client and its task when MQTT is on and a host is set. */
-esp_err_t mqttha_start(void);
+esp_err_t mqttc_start(void);
 
 /** Queue an event; never blocks. Dropped (and counted) when MQTT is off, not
  *  connected, or the queue is full. */
-void mqttha_post(const mqttha_ev_t *ev);
+void mqttc_post(const mqttc_ev_t *ev);
 
 /** state=off|no_host|connecting|connected|refused host=.. port=.. user=.. pass=set|none
- *  gw_id=.. published=N dropped=N failed=N connects=N */
-void mqttha_status_line(char *buf, size_t len);
+ *  gw_id=.. published=N dropped=N failed=N connects=N down_queued=N down_refused=N */
+void mqttc_status_line(char *buf, size_t len);

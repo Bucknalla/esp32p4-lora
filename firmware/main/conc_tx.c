@@ -23,6 +23,7 @@
 #include "loragw_hal.h"
 #include "loragw_reg.h"
 #include "lwc/txpk.h"
+#include "lns.h"
 #include "radio_tx.h"
 #include "radioplan.h"
 #include "sdkconfig.h"
@@ -188,6 +189,7 @@ static void reply(const radio_tx_req_t *r, radio_tx_result_t res, int8_t pw, boo
     if (r->source == RADIO_SRC_LNS) {
         ESP_LOGI(TAG, "local server downlink %u: %s%s", (unsigned)r->token, radio_tx_result_str(res),
                  capped ? " (power capped)" : "");
+        lns_tx_result(r->token, res == RADIO_TX_OK);
         return;
     }
     const radio_tx_res_t out = {r->token, res, pw, capped, false, 0};

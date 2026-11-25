@@ -135,6 +135,111 @@ static void answers(size_t idx, uint32_t addr, const uint8_t nwk[16], const uint
     CHECK(!lwc_ns_answer(&ns, LWC_NS_UP_REPLAY, &up, &rx, &dl));
 }
 
+/* Application downlinks (ADR-0018), decoded the way the device reads them. */
+static bool app_ok(const lwc_ns_dl_t *dl, const uint8_t nwk[16], const uint8_t app[16], uint32_t addr, uint8_t port,
+                   const uint8_t *data, size_t len, bool fpending)
+{
+    lwc_lw_data_t d;
+    uint8_t plain[LWC_NS_DL_MAX];
+    if (lwc_lw_data_parse(dl->frame, dl->len, &d) != LWC_LW_OK || d.mtype != LWC_LW_UNCONFIRMED_DOWN ||
+        d.dev_addr != addr || !d.has_port || d.fport != port || d.frm_len != len ||
+        ((d.fctrl & LWC_LW_FCTRL_FPENDING) != 0U) != fpending ||
+        !lwc_lw_data_mic_ok(nwk, true, addr, dl->fcnt, dl->frame, dl->len)) {
+        return false;
+    }
+    lwc_lw_crypt(app, true, addr, dl->fcnt, d.frm, d.frm_len, plain);
+    return len == 0U || memcmp(plain, data, len) == 0;
+}
+
+static void app_downlinks(size_t idx, uint32_t addr, const uint8_t nwk[16], const uint8_t app[16], uint32_t fcnt)
+{
+    uint8_t f[64], big[230];
+    for (size_t i = 0; i < sizeof big; i++) {
+        big[i] = (uint8_t)(i * 7U + 1U);
+    }
+    lwc_ns_uplink_t up;
+    lwc_ns_dl_t dl;
+    lwc_ns_rx_t rx = {.snr10 = 0, .sf = 9, .bw_khz = 125, .now_s = 2000}; /* RX1 DR3: 115 B */
+    ns.dev[idx].rx2_dr = 3;                                                 /* RX2 DR3: 115 B */
+    ns.link[idx].status_asked = true;
+    ns.link[idx].status_req_s = rx.now_s;
+
+    CHECK(lwc_ns_dr(12, 125) == 0 && lwc_ns_dr(7, 125) == 5 && lwc_ns_dr(7, 250) == 6 && lwc_ns_dr(6, 125) == -1);
+    CHECK(lwc_ns_max_frm(0) == 51U && lwc_ns_max_frm(2) == 51U && lwc_ns_max_frm(3) == 115U &&
+          lwc_ns_max_frm(5) == 222U && lwc_ns_max_frm(-1) == 0U && lwc_ns_max_frm(8) == 0U);
+
+    /* unconfirmed uplink, the largest payload, more queued: FPending */
+    size_t n = uplink_mac(f, nwk, addr, ++fcnt, NULL, 0, 0, false);
+    lwc_ns_up_res_t r = lwc_ns_uplink(&ns, f, n, &up);
+    lwc_ns_app_t a = {.port = 10, .data = big, .len = 115, .more = true};
+    uint32_t down = ns.dev[idx].fcnt_down;
+    CHECK(r == LWC_NS_UP_OK && lwc_ns_answer_app(&ns, r, &up, &rx, &a, &dl) && dl.app && !dl.app_too_big);
+    CHECK(!dl.ack && !dl.dev_status && dl.fcnt == down && ns.dev[idx].fcnt_down == down + 1U);
+    CHECK(app_ok(&dl, nwk, app, addr, 10, big, 115, true));
+
+    /* one byte more: not sent; nothing else to say, so no downlink and no counter used */
+    n = uplink_mac(f, nwk, addr, ++fcnt, NULL, 0, 0, false);
+    r = lwc_ns_uplink(&ns, f, n, &up);
+    a = (lwc_ns_app_t){.port = 10, .data = big, .len = 116};
+    down = ns.dev[idx].fcnt_down;
+    CHECK(r == LWC_NS_UP_OK && !lwc_ns_answer_app(&ns, r, &up, &rx, &a, &dl) && dl.app_too_big && !dl.app);
+    CHECK(ns.dev[idx].fcnt_down == down);
+
+    /* confirmed uplink: ACK and payload together; the repeat gets them again with a new counter */
+    n = uplink(f, nwk, app, addr, ++fcnt, 3, "c", true);
+    r = lwc_ns_uplink(&ns, f, n, &up);
+    a = (lwc_ns_app_t){.port = 1, .data = big, .len = 4};
+    CHECK(r == LWC_NS_UP_OK && lwc_ns_answer_app(&ns, r, &up, &rx, &a, &dl) && dl.ack && dl.app);
+    CHECK(app_ok(&dl, nwk, app, addr, 1, big, 4, false));
+    r = lwc_ns_uplink(&ns, f, n, &up);
+    CHECK(r == LWC_NS_UP_RETRANS && lwc_ns_answer_app(&ns, r, &up, &rx, &a, &dl) && dl.ack && dl.app);
+    CHECK(dl.fcnt == ns.dev[idx].fcnt_down - 1U && app_ok(&dl, nwk, app, addr, 1, big, 4, false));
+
+    /* MAC answers share the room: LinkCheckAns (3 B) + 112 B fits at 115, 113 B does not */
+    static const uint8_t lcr[] = {0x02};
+    n = uplink_mac(f, nwk, addr, ++fcnt, lcr, 1, 0, false);
+    r = lwc_ns_uplink(&ns, f, n, &up);
+    a = (lwc_ns_app_t){.port = 2, .data = big, .len = 112};
+    CHECK(r == LWC_NS_UP_OK && lwc_ns_answer_app(&ns, r, &up, &rx, &a, &dl) && dl.link_check && dl.app);
+    CHECK(app_ok(&dl, nwk, app, addr, 2, big, 112, false));
+    n = uplink_mac(f, nwk, addr, ++fcnt, lcr, 1, 0, false);
+    r = lwc_ns_uplink(&ns, f, n, &up);
+    a.len = 113;
+    CHECK(r == LWC_NS_UP_OK && lwc_ns_answer_app(&ns, r, &up, &rx, &a, &dl) && dl.link_check && !dl.app &&
+          dl.app_too_big);
+
+    /* RX2 at DR0 limits both windows to 51 B, even at SF7 */
+    ns.dev[idx].rx2_dr = 0;
+    rx.sf = 7;
+    n = uplink_mac(f, nwk, addr, ++fcnt, NULL, 0, 0, false);
+    r = lwc_ns_uplink(&ns, f, n, &up);
+    a = (lwc_ns_app_t){.port = 3, .data = big, .len = 52};
+    CHECK(r == LWC_NS_UP_OK && !lwc_ns_answer_app(&ns, r, &up, &rx, &a, &dl) && dl.app_too_big);
+    a.len = 51;
+    CHECK(lwc_ns_answer_app(&ns, r, &up, &rx, &a, &dl) && app_ok(&dl, nwk, app, addr, 3, big, 51, false));
+
+    /* the daily DevStatusReq rides along only when there is room for it */
+    rx.now_s += LWC_NS_STATUS_PERIOD_S;
+    n = uplink_mac(f, nwk, addr, ++fcnt, NULL, 0, 0, false);
+    r = lwc_ns_uplink(&ns, f, n, &up);
+    CHECK(r == LWC_NS_UP_OK && lwc_ns_answer_app(&ns, r, &up, &rx, &a, &dl) && dl.app && !dl.dev_status);
+    a.len = 50;
+    CHECK(lwc_ns_answer_app(&ns, r, &up, &rx, &a, &dl) && dl.app && dl.dev_status);
+    CHECK(app_ok(&dl, nwk, app, addr, 3, big, 50, false));
+
+    /* an empty payload on a port; ports 0 and 224 are never sent */
+    n = uplink_mac(f, nwk, addr, ++fcnt, NULL, 0, 0, false);
+    r = lwc_ns_uplink(&ns, f, n, &up);
+    a = (lwc_ns_app_t){.port = 5, .data = NULL, .len = 0};
+    CHECK(r == LWC_NS_UP_OK && lwc_ns_answer_app(&ns, r, &up, &rx, &a, &dl));
+    CHECK(app_ok(&dl, nwk, app, addr, 5, NULL, 0, false));
+    a = (lwc_ns_app_t){.port = 0, .data = big, .len = 1};
+    CHECK(!lwc_ns_answer_app(&ns, r, &up, &rx, &a, &dl) && dl.app_too_big);
+    a.port = 224;
+    CHECK(!lwc_ns_answer_app(&ns, r, &up, &rx, &a, &dl) && dl.app_too_big);
+    CHECK(!lwc_ns_answer_app(&ns, LWC_NS_UP_REPLAY, &up, &rx, &a, &dl));
+}
+
 static void adr_step(void)
 {
     uint8_t dr, pw;
@@ -410,6 +515,7 @@ int main(void)
     CHECK(lwc_ns_uplink(&ns, f, n, &up) == LWC_NS_UP_BAD_MIC);
 
     answers(idx, addr, nwk, app, 0x10002);
+    app_downlinks(idx, addr, nwk, app, 0x10100);
     CHECK(ns.link[idx].has_status);
 
     /* rejoin keeps the address, resets counters */
