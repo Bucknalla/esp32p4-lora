@@ -122,7 +122,7 @@ function renderOverview() {
   if (upNeeded && g.lns_key === 'none') notes.push(notice('warn', 'alert', 'No API key: the gateway cannot connect to ' + srvName(g.server) + '.', gotoBtn('setup', 'Add the key')));
   else if (upNeeded && !up) notes.push(notice('warn', 'alert', 'Not connected to ' + srvName(g.server) + ': frames are not forwarded.', gotoBtn('setup', 'Check setup')));
   const mq = S.mqtt || {};
-  if (mq.state === 'refused') notes.push(notice('warn', 'alert', 'The MQTT broker refused the user or password: nothing reaches Home Assistant.', gotoBtn('setup', 'Check setup')));
+  if (mq.state === 'refused') notes.push(notice('warn', 'alert', 'The MQTT broker refused the user or password: nothing is published.', gotoBtn('setup', 'Check setup')));
   else if (mq.state === 'connecting' || mq.state === 'no_host') notes.push(notice('warn', 'alert', 'Not connected to the MQTT broker: uplinks are not published.', gotoBtn('setup', 'Check setup')));
   if (lb && lb.plan === 'differs') notes.push(notice('warn', 'alert', 'The network server sent a channel plan this radio cannot use: the radio keeps its own.', gotoBtn('radio', 'Open Radio')));
   if (o.state && o.state !== 'valid') notes.push(notice('warn', 'alert', 'New firmware on trial: it rolls back unless its health check passes.'));
@@ -408,11 +408,10 @@ function renderMqtt() {
     $('#mqtt-port').value = q.port || 1883;
     $('#mqtt-user').value = q.user && q.user !== '-' ? q.user : '';
     $('#mqtt-gwid').value = q.gw_id || '';
-    $('#mqtt-expire').value = q.expire_s != null ? q.expire_s : 3600;
     f.mqtt_pass.placeholder = q.pass === 'set' ? 'Leave empty to keep the stored password' : 'Not set';
   }
   const id = $('#mqtt-gwid').value || q.gw_id || '<gateway id>';
-  $('#mqtt-topics').textContent = 'lora/' + id + '/status, lora/' + id + '/<DevEUI>/up';
+  $('#mqtt-topics').textContent = 'lora/' + id + '/status, lora/' + id + '/<DevEUI>/up, …/join; in: …/down';
 }
 
 /* The server picker: TTN presets (port 8887) or another host and port; the
@@ -829,7 +828,6 @@ document.addEventListener('DOMContentLoaded', () => {
     body.set('mqtt_user', f.mqtt_user.value.trim());
     if (f.mqtt_pass.value) body.set('mqtt_pass', f.mqtt_pass.value);
     if (f.mqtt_gw_id.value !== q.gw_id) body.set('mqtt_gw_id', f.mqtt_gw_id.value);
-    body.set('mqtt_expire', f.mqtt_expire.value || '0');
     if (!confirm('Save the MQTT settings and restart the gateway?')) return;
     try {
       const msg = await post('/api/settings', body);

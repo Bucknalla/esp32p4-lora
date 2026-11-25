@@ -87,5 +87,5 @@ CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE=6144
 # Security 1 (X25519 + AES-CTR) without PoP: no label or display to show a PoP.
 CONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_1=y
 
-# MQTT client outbox (retained discovery messages awaiting PUBACK) in PSRAM (ADR-0018)
+# MQTT client outbox (QoS 1 messages awaiting PUBACK) in PSRAM (ADR-0018)
 CONFIG_MQTT_OUTBOX_DATA_ON_EXTERNAL_MEMORY=y

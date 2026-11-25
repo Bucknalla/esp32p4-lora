@@ -25,8 +25,18 @@ lwc_ns_err_t lns_add(uint64_t dev_eui, uint64_t join_eui, const uint8_t app_key[
                      const char *name);
 lwc_ns_err_t lns_remove(uint64_t dev_eui);
 
-/** DevEUIs and names of the local devices (for MQTT discovery); returns the count. */
-size_t lns_device_names(uint64_t *euis, char (*names)[LWC_NS_NAME_MAX + 1U], size_t max);
+/**
+ * Queue an application downlink for a local device (MQTT, ADR-0018); it goes
+ * out with the device's next class A answer. Never waits long (200 ms at most
+ * for the lock). ESP_ERR_INVALID_STATE: the local server is not running;
+ * ESP_ERR_NOT_SUPPORTED: local transmit is off; ESP_ERR_NOT_FOUND: no such
+ * device; ESP_ERR_INVALID_SIZE: larger than the device's RX2 window allows;
+ * ESP_ERR_NO_MEM: its queue is full.
+ */
+esp_err_t lns_queue_down(uint64_t dev_eui, uint8_t port, const uint8_t *data, size_t len);
+
+/** The radio's answer to a local server request (from the TX task; never waits). */
+void lns_tx_result(uint16_t token, bool ok);
 
 /** JSON array of devices (no keys) into `out`; returns its length. */
 size_t lns_devices_json(char *out, size_t cap);

@@ -382,8 +382,28 @@ static bool adr_want(lwc_ns_link_t *l, const lwc_ns_uplink_t *up, const lwc_ns_r
     return *dr != cur || *pw != l->tx_power;
 }
 
+int lwc_ns_dr(uint8_t sf, uint16_t bw_khz)
+{
+    if (bw_khz == 125U && sf >= 7U && sf <= 12U) {
+        return 12 - (int)sf;
+    }
+    return bw_khz == 250U && sf == 7U ? 6 : -1;
+}
+
+size_t lwc_ns_max_frm(int dr)
+{
+    /* RP002-1.0.3 EU868: N = 51 (DR0-DR2), 115 (DR3), 222 (DR4-DR7) */
+    return dr < 0 || dr > 7 ? 0U : dr <= 2 ? 51U : dr == 3 ? 115U : 222U;
+}
+
 bool lwc_ns_answer(lwc_ns_t *ns, lwc_ns_up_res_t res, const lwc_ns_uplink_t *up, const lwc_ns_rx_t *rx,
                    lwc_ns_dl_t *dl)
+{
+    return lwc_ns_answer_app(ns, res, up, rx, NULL, dl);
+}
+
+bool lwc_ns_answer_app(lwc_ns_t *ns, lwc_ns_up_res_t res, const lwc_ns_uplink_t *up, const lwc_ns_rx_t *rx,
+                       const lwc_ns_app_t *app, lwc_ns_dl_t *dl)
 {
     if (ns == NULL || up == NULL || rx == NULL || dl == NULL || up->idx >= LWC_NS_MAX_DEVICES ||
         (res != LWC_NS_UP_OK && res != LWC_NS_UP_RETRANS)) {
@@ -431,11 +451,23 @@ bool lwc_ns_answer(lwc_ns_t *ns, lwc_ns_up_res_t res, const lwc_ns_uplink_t *up,
             need = true;
         }
     }
+    size_t lim = 0;
+    if (app != NULL && app->port >= 1U && app->port <= 223U && (app->len == 0U || app->data != NULL)) {
+        const size_t n1 = lwc_ns_max_frm(lwc_ns_dr(rx->sf, rx->bw_khz));
+        const size_t n2 = lwc_ns_max_frm(d->rx2_dr);
+        lim = n1 < n2 ? n1 : n2;
+        dl->app = app->len + fo <= lim;
+        dl->app_too_big = !dl->app;
+    } else if (app != NULL) {
+        dl->app_too_big = true; /* not sendable at all */
+    }
+    need = need || dl->app;
     if (!need) {
         return false;
     }
-    /* ride along: battery and margin once a day */
-    if (!l->status_asked || rx->now_s - l->status_req_s >= LWC_NS_STATUS_PERIOD_S) {
+    /* ride along: battery and margin once a day (one byte; not if it would crowd out the payload) */
+    if ((!dl->app || app->len + fo + 1U <= lim) &&
+        (!l->status_asked || rx->now_s - l->status_req_s >= LWC_NS_STATUS_PERIOD_S)) {
         dl->dev_status = lwc_mac_dev_status_req(fopts, sizeof fopts, &fo);
         if (dl->dev_status) {
             l->status_asked = true;
@@ -445,9 +477,13 @@ bool lwc_ns_answer(lwc_ns_t *ns, lwc_ns_up_res_t res, const lwc_ns_uplink_t *up,
     dl->ack = up->confirmed;
     dl->fcnt = d->fcnt_down;
     /* FCtrl.ADR: this network controls the data rate (when the device lets it) */
-    const uint8_t fctrl = (uint8_t)(LWC_LW_FCTRL_ADR | (dl->ack ? LWC_LW_FCTRL_ACK : 0U));
-    dl->len = lwc_lw_data_build(LWC_LW_UNCONFIRMED_DOWN, d->dev_addr, fctrl, dl->fcnt, fopts, fo, false, 0, NULL,
-                                0, d->nwk_s_key, NULL, dl->frame, sizeof dl->frame);
+    const uint8_t fctrl = (uint8_t)(LWC_LW_FCTRL_ADR | (dl->ack ? LWC_LW_FCTRL_ACK : 0U) |
+                                    (dl->app && app->more ? LWC_LW_FCTRL_FPENDING : 0U));
+    dl->len = dl->app ? lwc_lw_data_build(LWC_LW_UNCONFIRMED_DOWN, d->dev_addr, fctrl, dl->fcnt, fopts, fo, true,
+                                          app->port, app->data, app->len, d->nwk_s_key, d->app_s_key, dl->frame,
+                                          sizeof dl->frame)
+                      : lwc_lw_data_build(LWC_LW_UNCONFIRMED_DOWN, d->dev_addr, fctrl, dl->fcnt, fopts, fo, false, 0,
+                                          NULL, 0, d->nwk_s_key, NULL, dl->frame, sizeof dl->frame);
     if (dl->len == 0U) {
         return false;
     }
