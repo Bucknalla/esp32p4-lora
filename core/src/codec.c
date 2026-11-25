@@ -29,11 +29,13 @@ static void *m_calloc(void *o, size_t count, size_t size)
     return p;
 }
 
+// cppcheck-suppress constParameterCallback
 static void *m_malloc(void *o, size_t size)
 {
     return ((const run_t *)o)->env->malloc_fn(size);
 }
 
+// cppcheck-suppress constParameterCallback
 static void m_free(void *o, void *ptr)
 {
     if (ptr != NULL) {
@@ -41,6 +43,7 @@ static void m_free(void *o, void *ptr)
     }
 }
 
+// cppcheck-suppress constParameterCallback
 static void *m_realloc(void *o, void *ptr, size_t size)
 {
     return ((const run_t *)o)->env->realloc_fn(ptr, size);
