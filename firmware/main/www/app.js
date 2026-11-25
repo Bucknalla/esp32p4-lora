@@ -309,6 +309,8 @@ async function diagnostics(redact) {
   const typed = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, v !== '' && !isNaN(+v) && !/^0[0-9]/.test(v) && !/^[0-9A-Fa-f]{16}$/.test(v) ? +v : v]));
   const out = { generated: new Date().toISOString(), page: location.host, status: {} };
   for (const [k, v] of Object.entries(S)) out.status[k] = typed(v);
+  /* the gateway's position never goes into a report (ADR-0022) */
+  if (out.status.gps) { delete out.status.gps.lat; delete out.status.gps.lon; delete out.status.gps.alt; }
   try { out.tasks = await (await api('/api/tasks')).json(); } catch (e) { out.tasks = 'unavailable: ' + e.message; }
   try { out.radio = await (await api('/api/radio')).json(); } catch (e) { out.radio = 'unavailable: ' + e.message; }
   try {
@@ -447,7 +449,29 @@ async function refreshStatus() {
     renderGateway();
     renderSetup();
     renderSystem();
+    renderGps();
   } catch (e) { /* shown at the next login */ }
+}
+
+/* ---- GPS (ADR-0022) ----------------------------------------------------------- */
+function renderGps() {
+  const g = S.gps || {};
+  const mode = g.mode || 'off';
+  const fix = g.fix === 'yes';
+  const CLOCK = { gps: 'Clock from GPS', sntp: 'Clock from network time', none: 'Clock not set' };
+  $('#gps-chips').replaceChildren(
+    el('span', { class: 'chip dot ' + (mode === 'off' ? '' : fix ? 'ok' : 'warn'), text: mode === 'off' ? 'No receiver' : fix ? 'Fix' : 'No fix' }),
+    el('span', { class: 'chip', text: CLOCK[g.clock] || CLOCK.none }));
+  const facts = [];
+  if (mode !== 'off') {
+    facts.push(['Satellites', g.sats || '0'], ['Position', g.lat && g.lat !== '-' ? g.lat + ', ' + g.lon : '–'],
+      ['Altitude', g.alt && g.alt !== '-' ? g.alt + ' m' : '–'], ['GPS time', g.utc && g.utc !== '-' ? g.utc : '–'],
+      ['Sentences', (g.sentences || 0) + (n(g.bad) ? ', ' + g.bad + ' bad' : '') + (+g.last_s >= 0 ? ', last ' + g.last_s + ' s ago' : '')],
+      ['PPS', 'not used yet']);
+  }
+  $('#gps-facts').replaceChildren(...facts.flatMap(([k, v]) => [el('dt', { text: k }), el('dd', { text: v })]));
+  const f = $('#gps-form');
+  if (!f.dataset.dirty) $('#gps-mode').value = mode;
 }
 
 /* ---- devices ---------------------------------------------------------------- */
@@ -924,6 +948,16 @@ document.addEventListener('DOMContentLoaded', () => {
       out.className = 'codec-out' + (r.ok ? '' : ' bad');
     } catch (e) { out.textContent = e.message; out.className = 'codec-out bad'; }
     out.hidden = false;
+  });
+  $('#gps-form').addEventListener('input', (ev) => { ev.currentTarget.dataset.dirty = '1'; });
+  $('#gps-form').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    if (!confirm('Save the GPS setting and restart the gateway?')) return;
+    try {
+      const msg = await post('/api/settings', 'gps=' + $('#gps-mode').value);
+      delete ev.target.dataset.dirty;
+      if (/restart/.test(msg)) waitRestart('Restarting'); else toast(msg);
+    } catch (e) { toast(e.message, true); }
   });
   const addBox = $('#dev-add-box');
   $('#dev-add-open').addEventListener('click', () => { addBox.hidden = false; $('input', addBox).focus(); });

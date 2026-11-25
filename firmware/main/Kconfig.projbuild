@@ -214,4 +214,18 @@ menu "LoRaWAN gateway board"
             default 52
     endmenu
 
+    menu "GPS receiver (ADR-0022)"
+        config GW_GPS_UART_RX_GPIO
+            int "GPS UART RX GPIO (the receiver's TX); -1 = not wired"
+            default -1
+            help
+                The HAT's or module's GPS pins are not confirmed yet: with -1
+                the setting gps=uart is refused.
+        config GW_GPS_UART_TX_GPIO
+            int "GPS UART TX GPIO (the receiver's RX); -1 = not used"
+            default -1
+        config GW_GPS_BAUD
+            int "GPS UART baud rate"
+            default 9600
+    endmenu
 endmenu

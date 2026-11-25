@@ -19,6 +19,7 @@
 #include "fault.h"
 #include "gwmode.h"
 #include "codecs.h"
+#include "gps.h"
 #include "lns.h"
 #include "lwc/hex.h"
 #include "freertos/FreeRTOS.h"
@@ -360,6 +361,8 @@ static esp_err_t api_status(httpd_req_t *req)
     json_str(out, STATUS_MAX, &o, "mqtt", line);
     codecs_status_line(line, sizeof line);
     json_str(out, STATUS_MAX, &o, "codecs", line);
+    gps_status_line(line, sizeof line);
+    json_str(out, STATUS_MAX, &o, "gps", line);
     lbsfwd_status(line, sizeof line);
     if (line[0] != '\0') {
         json_str(out, STATUS_MAX, &o, "lbs", strncmp(line, "LBS ", 4) == 0 ? line + 4 : line);
@@ -630,6 +633,8 @@ static esp_err_t api_settings(httpd_req_t *req)
     const int pl = lwc_form_get(body, got, "lns_port", port_s, sizeof port_s);
     const long port = pl > 0 ? strtol(port_s, NULL, 10) : 0;
     const int kl = lwc_form_get(body, got, "lns_key", key, sizeof key);
+    char gps_s[8];
+    const int gl = lwc_form_get(body, got, "gps", gps_s, sizeof gps_s);
     const int mq = settings_mqtt(body, got);
     memset(body, 0, sizeof body);
     if (mq < 0) {
@@ -640,13 +645,31 @@ static esp_err_t api_settings(httpd_req_t *req)
                                       "mqtt_tls=on|off\n")
                         : send_status(req, "500 Internal Server Error", "storing the MQTT settings failed\n");
     }
+    gps_mode_t gm = GPS_OFF;
+    if (gl >= 0 && !gps_mode_parse(gps_s, &gm)) {
+        memset(key, 0, sizeof key);
+        return send_status(req, "400 Bad Request", "gps=off|uart\n");
+    }
+    if (gl >= 0) {
+        r = gps_set_mode(gm);
+        if (r == ESP_ERR_NOT_SUPPORTED) {
+            memset(key, 0, sizeof key);
+            return send_status(req, "400 Bad Request",
+                               "gps=uart: no GPS pins in this build (Kconfig GW_GPS_UART_RX_GPIO)\n");
+        }
+        if (r != ESP_OK) {
+            memset(key, 0, sizeof key);
+            return send_status(req, "500 Internal Server Error", esp_err_to_name(r));
+        }
+        ESP_LOGW(TAG, "GPS mode set to %s", gps_s);
+    }
     lwc_mode_t m;
-    if ((ml < 0 && hl < 0 && pl < 0 && kl < 0 && mq == 0) || (ml >= 0 && !gwmode_parse(mode, &m)) ||
+    if ((ml < 0 && hl < 0 && pl < 0 && kl < 0 && mq == 0 && gl < 0) || (ml >= 0 && !gwmode_parse(mode, &m)) ||
         (pl >= 0 && (port < 1 || port > 65535))) {
         memset(key, 0, sizeof key);
         return send_status(req, "400 Bad Request", "mode=ttn|standalone|hybrid, lns_host, lns_port (1-65535), lns_key\n");
     }
-    bool changed = mq > 0;
+    bool changed = mq > 0 || gl >= 0;
     if (ml >= 0 && m != gwmode()) {
         r = gwmode_set(m);
         if (r != ESP_OK) {

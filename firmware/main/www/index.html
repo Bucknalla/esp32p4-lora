@@ -289,6 +289,16 @@
             <div class="actions admin"><button type="submit" class="primary" disabled>Save</button></div>
           </form>
         </div>
+        <div class="panel" id="gps-box">
+          <h2>GPS</h2>
+          <p id="gps-chips"></p>
+          <dl class="facts" id="gps-facts"></dl>
+          <form id="gps-form" class="stack admin" autocomplete="off">
+            <label>Receiver <select name="gps" id="gps-mode"><option value="off">None</option><option value="uart">GPS receiver on the UART</option></select></label>
+            <p class="note">A receiver gives the gateway its position and, with no network time, its clock (so devices still get the time in standalone mode). Network time wins while it is available. The receiver's pins are set in the firmware build.</p>
+            <div class="actions"><button type="submit" class="primary">Save and restart</button></div>
+          </form>
+        </div>
       </div>
 
       <details class="more admin" id="plan-edit">
