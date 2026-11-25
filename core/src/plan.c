@@ -7,18 +7,25 @@
 #define BAND_MIN_HZ 863000000U
 #define BAND_MAX_HZ 870000000U
 
-/* EU868 default channel k (RP002): the region table. */
-static uint32_t k_default(size_t k)
+#define IF_MAX_125 400000 /* |IF| + 62.5 kHz <= 462.5 kHz: chan_ok for a 125 kHz channel */
+
+static bool is_eu868(const lwc_region_t *r)
 {
-    return lwc_region(LWC_REGION_EU868)->default_ch[k].hz;
+    return r->id == LWC_REGION_EU868;
 }
 
-void lwc_plan_default_eu868(lwc_plan_t *p)
+static bool is_default(const lwc_region_t *r, uint32_t hz)
 {
-    if (p == NULL) {
-        return;
+    for (size_t k = 0; k < r->n_default; k++) {
+        if (r->default_ch[k].hz == hz) {
+            return true;
+        }
     }
-    memset(p, 0, sizeof *p);
+    return false;
+}
+
+static void default_eu868(lwc_plan_t *p)
+{
     p->radio_hz[0] = 867500000U;
     p->radio_hz[1] = 868500000U;
     static const lwc_plan_chan_t m[LWC_PLAN_MULTISF] = {
@@ -32,6 +39,42 @@ void lwc_plan_default_eu868(lwc_plan_t *p)
     p->fsk = (lwc_plan_chan_t){false, 1, 300000};
 }
 
+bool lwc_plan_default(lwc_plan_t *p, const lwc_region_t *r)
+{
+    if (p == NULL) {
+        return false;
+    }
+    memset(p, 0, sizeof *p);
+    if (r == NULL || r->fixed || r->n_default == 0U) {
+        return false;
+    }
+    if (is_eu868(r)) {
+        default_eu868(p);
+        return true;
+    }
+    /* The default channels on as few radios as fit (|IF| <= 400 kHz), lowest
+     * first; radio 1 unused stays on radio 0's frequency. */
+    size_t k = 0;
+    for (uint8_t radio = 0; radio < 2U && k < r->n_default; radio++) {
+        const uint32_t lo = r->default_ch[k].hz;
+        size_t last = k;
+        while (last + 1U < r->n_default && r->default_ch[last + 1U].hz - lo <= 2U * IF_MAX_125) {
+            last++;
+        }
+        const uint32_t centre = lo + (r->default_ch[last].hz - lo) / 2U;
+        p->radio_hz[radio] = centre;
+        for (; k <= last; k++) {
+            p->multisf[k] = (lwc_plan_chan_t){true, radio, (int32_t)r->default_ch[k].hz - (int32_t)centre};
+        }
+    }
+    if (p->radio_hz[1] == 0U) {
+        p->radio_hz[1] = p->radio_hz[0];
+    }
+    p->std_sf = 7;
+    p->std_bw_khz = 125;
+    return k == r->n_default;
+}
+
 uint32_t lwc_plan_hz(const lwc_plan_t *p, const lwc_plan_chan_t *c)
 {
     if (p == NULL || c == NULL || !c->enable || c->radio > 1U) {
@@ -42,7 +85,7 @@ uint32_t lwc_plan_hz(const lwc_plan_t *p, const lwc_plan_chan_t *c)
 
 /* SX1301 HAL (loragw_hal.c lgw_rxif_setconf): the channel must fit in the
  * radio's receive band, which depends on the channel bandwidth. */
-static bool chan_ok(const lwc_plan_t *p, const lwc_plan_chan_t *c, uint32_t bw_hz, uint32_t rf_bw_hz,
+static bool chan_ok(const lwc_plan_t *p, const lwc_plan_chan_t *c, bool band, uint32_t bw_hz, uint32_t rf_bw_hz,
                     lwc_plan_err_t *e)
 {
     if (!c->enable) {
@@ -54,26 +97,30 @@ static bool chan_ok(const lwc_plan_t *p, const lwc_plan_chan_t *c, uint32_t bw_h
         return false;
     }
     const uint32_t hz = lwc_plan_hz(p, c);
-    if (hz - bw_hz / 2U < BAND_MIN_HZ || hz + bw_hz / 2U > BAND_MAX_HZ) {
+    if (band && (hz - bw_hz / 2U < BAND_MIN_HZ || hz + bw_hz / 2U > BAND_MAX_HZ)) {
         *e = LWC_PLAN_ERR_BAND;
         return false;
     }
     return true;
 }
 
-lwc_plan_err_t lwc_plan_check(const lwc_plan_t *p)
+lwc_plan_err_t lwc_plan_check(const lwc_plan_t *p, const lwc_region_t *rg)
 {
-    if (p == NULL) {
+    if (p == NULL || rg == NULL) {
         return LWC_PLAN_ERR_ARG;
     }
+    if (rg->fixed) {
+        return LWC_PLAN_ERR_REGION;
+    }
+    const bool band = is_eu868(rg);
     for (size_t r = 0; r < 2U; r++) {
-        if (p->radio_hz[r] < BAND_MIN_HZ || p->radio_hz[r] > BAND_MAX_HZ) {
+        if (band && (p->radio_hz[r] < BAND_MIN_HZ || p->radio_hz[r] > BAND_MAX_HZ)) {
             return LWC_PLAN_ERR_RADIO;
         }
     }
     lwc_plan_err_t e = LWC_PLAN_OK;
     for (size_t i = 0; i < LWC_PLAN_MULTISF; i++) {
-        if (!chan_ok(p, &p->multisf[i], 125000U, 925000U, &e)) {
+        if (!chan_ok(p, &p->multisf[i], band, 125000U, 925000U, &e)) {
             return e;
         }
     }
@@ -83,17 +130,17 @@ lwc_plan_err_t lwc_plan_check(const lwc_plan_t *p)
             return LWC_PLAN_ERR_STD;
         }
         const uint32_t rf = p->std_bw_khz == 125U ? 925000U : p->std_bw_khz == 250U ? 1000000U : 1100000U;
-        if (!chan_ok(p, &p->std, (uint32_t)p->std_bw_khz * 1000U, rf, &e)) {
+        if (!chan_ok(p, &p->std, band, (uint32_t)p->std_bw_khz * 1000U, rf, &e)) {
             return e;
         }
     }
-    if (!chan_ok(p, &p->fsk, 125000U, 925000U, &e)) { /* HAL: FSK at its 125 kHz default */
+    if (!chan_ok(p, &p->fsk, band, 125000U, 925000U, &e)) { /* HAL: FSK at its 125 kHz default */
         return e;
     }
-    for (size_t d = 0; d < 3U; d++) {
+    for (size_t d = 0; d < rg->n_default; d++) {
         bool found = false;
         for (size_t i = 0; i < LWC_PLAN_MULTISF && !found; i++) {
-            found = lwc_plan_hz(p, &p->multisf[i]) == k_default(d);
+            found = lwc_plan_hz(p, &p->multisf[i]) == rg->default_ch[d].hz;
         }
         if (!found) {
             return LWC_PLAN_ERR_DEFAULT;
@@ -102,22 +149,19 @@ lwc_plan_err_t lwc_plan_check(const lwc_plan_t *p)
     return LWC_PLAN_OK;
 }
 
-size_t lwc_plan_cflist(const lwc_plan_t *p, uint32_t out[5])
+size_t lwc_plan_cflist(const lwc_plan_t *p, const lwc_region_t *r, uint32_t out[5])
 {
     if (out == NULL) {
         return 0;
     }
     memset(out, 0, 5U * sizeof out[0]);
-    if (p == NULL) {
+    if (p == NULL || r == NULL || r->fixed) {
         return 0;
     }
     size_t n = 0;
     for (size_t i = 0; i < LWC_PLAN_MULTISF; i++) {
         const uint32_t hz = lwc_plan_hz(p, &p->multisf[i]);
-        bool skip = hz == 0U;
-        for (size_t d = 0; d < 3U && !skip; d++) {
-            skip = hz == k_default(d);
-        }
+        bool skip = hz == 0U || is_default(r, hz);
         for (size_t j = 0; j < n && !skip; j++) {
             skip = out[j] == hz;
         }
@@ -221,7 +265,7 @@ bool lwc_plan_pack(const lwc_plan_t *p, uint8_t *out, size_t cap)
     return (size_t)(o - out) == LWC_PLAN_PACKED;
 }
 
-bool lwc_plan_unpack(const uint8_t *in, size_t n, lwc_plan_t *p)
+bool lwc_plan_unpack(const uint8_t *in, size_t n, const lwc_region_t *r, lwc_plan_t *p)
 {
     if (in == NULL || p == NULL || n != LWC_PLAN_PACKED || in[0] != LWC_PLAN_VERSION) {
         return false;
@@ -240,7 +284,7 @@ bool lwc_plan_unpack(const uint8_t *in, size_t n, lwc_plan_t *p)
     t.std_bw_khz = (uint16_t)(i[0] | (uint16_t)(i[1] << 8));
     i += 2;
     ok = get_chan(&i, &t.fsk) && ok;
-    if (!ok || lwc_plan_check(&t) != LWC_PLAN_OK) {
+    if (!ok || lwc_plan_check(&t, r) != LWC_PLAN_OK) {
         return false;
     }
     *p = t;

@@ -25,6 +25,9 @@ static size_t s_len, s_cap;
 static void emit(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
 #include <stdarg.h>
+
+#include "lwc/region.h"
+#define EU lwc_region(LWC_REGION_EU868)
 static void emit(const char *fmt, ...)
 {
     va_list ap;
@@ -71,22 +74,22 @@ static void grid(void)
     static const uint16_t bws[] = {0, 125, 250, 500};
     for (uint8_t sf = 5; sf <= 13; sf++) {
         for (size_t b = 0; b < 4; b++) {
-            emit("ns_dr sf=%u bw=%u -> %d | lbs_dr -> %d\n", sf, bws[b], lwc_ns_dr(sf, bws[b]), lwc_lbs_dr(sf, bws[b]));
+            emit("ns_dr sf=%u bw=%u -> %d | lbs_dr -> %d\n", sf, bws[b], lwc_ns_dr(EU, sf, bws[b]), lwc_lbs_dr(EU, sf, bws[b]));
         }
         emit("required_snr10 sf=%u -> %d\n", sf, lwc_ns_required_snr10(sf));
     }
     for (int dr = -1; dr <= 16; dr++) {
         uint8_t sf = 0;
         uint16_t bw = 0;
-        const bool ok = dr >= 0 && lwc_lbs_dr_params((uint8_t)dr, &sf, &bw);
-        emit("max_frm dr=%d -> %zu | lbs_dr_params -> %d sf=%u bw=%u\n", dr, lwc_ns_max_frm(dr), ok, sf, bw);
+        const bool ok = dr >= 0 && lwc_lbs_dr_params(EU, (uint8_t)dr, &sf, &bw);
+        emit("max_frm dr=%d -> %zu | lbs_dr_params -> %d sf=%u bw=%u\n", dr, lwc_ns_max_frm(EU, dr), ok, sf, bw);
     }
     /* receive window settings */
     static const uint32_t rxf[] = {862999999, 863000000, 868100000, 869525000, 870000000, 870000001};
     for (uint8_t d = 0; d <= 16; d += 4) {
         for (size_t f = 0; f < 6; f++) {
             for (uint8_t dr = 0; dr <= 8; dr += 2) {
-                emit("rx_ok d=%u f=%" PRIu32 " dr=%u -> %d\n", d, rxf[f], dr, lwc_ns_rx_ok(d, rxf[f], dr));
+                emit("rx_ok d=%u f=%" PRIu32 " dr=%u -> %d\n", d, rxf[f], dr, lwc_ns_rx_ok(EU, d, rxf[f], dr));
             }
         }
     }
@@ -107,14 +110,14 @@ static void grid(void)
     }
     /* the default plan, packed, and its CFList */
     lwc_plan_t p;
-    lwc_plan_default_eu868(&p);
+    (void)lwc_plan_default(&p, EU);
     uint8_t packed[LWC_PLAN_PACKED];
-    emit("plan_check -> %d\n", (int)lwc_plan_check(&p));
+    emit("plan_check -> %d\n", (int)lwc_plan_check(&p, EU));
     if (lwc_plan_pack(&p, packed, sizeof packed)) {
         hex("plan_pack ", packed, sizeof packed);
     }
     uint32_t cf[5];
-    const size_t ncf = lwc_plan_cflist(&p, cf);
+    const size_t ncf = lwc_plan_cflist(&p, EU, cf);
     emit("plan_cflist n=%zu %" PRIu32 " %" PRIu32 " %" PRIu32 " %" PRIu32 " %" PRIu32 "\n", ncf, cf[0], cf[1], cf[2],
          cf[3], cf[4]);
     uint8_t cfb[16];
@@ -134,7 +137,7 @@ static void grid(void)
     for (uint8_t dr = 0; dr <= 6; dr += 3) {
         uint8_t b[8];
         size_t n = 0;
-        if (lwc_mac_link_adr_req(b, sizeof b, &n, dr, 3, LWC_NS_CH_MASK, 0, 1)) {
+        if (lwc_mac_link_adr_req(b, sizeof b, &n, dr, 3, 0x00FFU, 0, 1)) {
             hex("link_adr_req ", b, n);
         }
     }
@@ -177,7 +180,7 @@ static void grid(void)
     lwc_lbs_dnmsg_t d;
     if (lwc_lbs_parse_dnmsg(dn, strlen(dn), &d) == LWC_LBS_OK) {
         lwc_txpk_t a, b;
-        emit("lbs_dn_txpk -> %d\n", (int)lwc_lbs_dn_txpk(&d, 0x11, &a, &b));
+        emit("lbs_dn_txpk -> %d\n", (int)lwc_lbs_dn_txpk(&d, EU, 0x11, &a, &b));
         txpk("lbs_first", &a);
         txpk("lbs_alt", &b);
     }

@@ -244,8 +244,24 @@
     <div id="tab-radio" class="tab" hidden>
       <div class="title-row">
         <h1>Radio</h1>
-        <span id="plan-src" class="chip"></span>
+        <span class="chips"><span id="region-chip" class="chip"></span><span id="plan-src" class="chip"></span></span>
       </div>
+      <form id="region-form" class="panel inline" autocomplete="off">
+        <label>Region <select name="region" id="region">
+          <option value="EU868">EU868: Europe, UK</option>
+          <option value="RU864">RU864: Russia</option>
+          <option value="IN865">IN865: India</option>
+          <option value="KR920">KR920: South Korea</option>
+          <option value="AS923-1">AS923-1: Japan, Singapore, others</option>
+          <option value="AS923-2">AS923-2: Indonesia, Vietnam</option>
+          <option value="AS923-3">AS923-3: Philippines, Cuba</option>
+          <option value="AS923-4">AS923-4: Israel</option>
+          <option value="US915" disabled>US915: not supported yet</option>
+          <option value="AU915" disabled>AU915: not supported yet</option>
+        </select></label>
+        <p class="note" id="region-note">The regional parameters the radio, your devices and the network server use. Only EU868 transmits; the other regions receive only, until their national rules are in place.</p>
+        <div class="actions admin"><button type="submit" class="primary" disabled>Save and restart</button></div>
+      </form>
       <figure class="spectrum">
         <div class="spec-scroll"><svg id="spectrum" viewBox="0 0 1000 220" role="img" aria-labelledby="spec-cap"></svg></div>
         <div id="spec-tip" class="chart-tip" role="tooltip" hidden></div>
@@ -306,8 +322,8 @@
         <p class="note" id="plan-note">A plan saved here is used until the network server sends its own: in network server and hybrid modes, the server's plan replaces it at the next connection. Local devices must join again after a change.</p>
         <form id="plan-form" autocomplete="off">
           <div class="inline">
-            <label>Radio 0 <span class="unit"><input id="pe-r0" type="number" step="0.1" min="863" max="870"> MHz</span></label>
-            <label>Radio 1 <span class="unit"><input id="pe-r1" type="number" step="0.1" min="863" max="870"> MHz</span></label>
+            <label>Radio 0 <span class="unit"><input id="pe-r0" type="number" step="any" min="863" max="870"> MHz</span></label>
+            <label>Radio 1 <span class="unit"><input id="pe-r1" type="number" step="any" min="863" max="870"> MHz</span></label>
             <label>Single-SF channel <select id="pe-sf"><option value="7">SF7</option><option value="8">SF8</option><option value="9">SF9</option><option value="10">SF10</option><option value="11">SF11</option><option value="12">SF12</option></select></label>
             <label>Its bandwidth <select id="pe-bw"><option value="125">125 kHz</option><option value="250">250 kHz</option><option value="500">500 kHz</option></select></label>
           </div>
@@ -317,7 +333,7 @@
           </table></div>
           <div class="actions">
             <button type="submit" class="primary">Save and restart the radio</button>
-            <button type="button" class="ghost" id="pe-reset">Back to built-in EU868</button>
+            <button type="button" class="ghost" id="pe-reset">Back to the built-in plan</button>
           </div>
         </form>
       </details>

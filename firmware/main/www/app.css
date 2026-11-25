@@ -376,3 +376,4 @@ h3.sub { font-size: 14px; margin: 20px 0 0; color: var(--ink); }
 #codec-test textarea { width: 100%; font: 13px/1.4 var(--mono); padding: 8px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--surface); color: var(--ink); box-sizing: border-box; }
 #codec-test .actions { display: flex; gap: 8px; }
 #gps-form { margin-top: 16px; }
+.title-row .chips { display: flex; flex-wrap: wrap; gap: 8px; }

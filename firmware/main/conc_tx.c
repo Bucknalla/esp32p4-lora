@@ -22,6 +22,7 @@
 #include "freertos/task.h"
 #include "loragw_hal.h"
 #include "loragw_reg.h"
+#include "lwc/region.h"
 #include "lwc/txpk.h"
 #include "lns.h"
 #include "radio_tx.h"
@@ -95,6 +96,7 @@ const char *radio_tx_result_str(radio_tx_result_t r)
     case RADIO_TX_DUTY: return "DUTY_CYCLE";
     case RADIO_TX_BUSY: return "BUSY";
     case RADIO_TX_OFF: return "TX_OFF";
+    case RADIO_TX_REGION: return "TX_REGION";
     default: return "TOO_LATE";
     }
 }
@@ -243,6 +245,10 @@ static void admit(const radio_tx_req_t *r)
     }
     if (p->mode == LWC_TXPK_GPS) {
         reply(r, RADIO_TX_GPS, 0, false);
+        return;
+    }
+    if (!lwc_region_tx_enabled(radioplan_region())) { /* ADR-0024: receive-only outside EU868 */
+        reply(r, RADIO_TX_REGION, 0, false);
         return;
     }
     if (lwc_dc_band(p->freq_hz) < 0) { /* inside an EU868 sub-band, so inside 863-870 MHz */

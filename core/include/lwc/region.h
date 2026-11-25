@@ -119,6 +119,11 @@ bool lwc_region_cflist_subband(const lwc_region_t *r, uint8_t sb, uint8_t out[16
  *  other regions or a bad sub-band. */
 bool lwc_region_link_adr_subband(const lwc_region_t *r, uint8_t sb, uint16_t mask[2], uint8_t cntl[2]);
 
+/** This firmware transmits only in EU868 (ADR-0024). Every other region is
+ *  receive-only until its national rules (duty cycle, dwell time, LBT, power
+ *  limits) are in place; the radio refuses every frame there. */
+bool lwc_region_tx_enabled(const lwc_region_t *r);
+
 #ifdef __cplusplus
 }
 #endif

@@ -15,6 +15,7 @@
 #include <stdint.h>
 
 #include "lwc/plan.h"
+#include "lwc/region.h"
 #include "lwc/txpk.h"
 
 #ifdef __cplusplus
@@ -35,12 +36,13 @@ typedef enum {
     LWC_LBS_ERR_SESSION,     /**< xtime from another session (the radio restarted) */
 } lwc_lbs_err_t;
 
-/* ---- data rates (EU868, RP002) ---------------------------------------------- */
+/* ---- data rates (RP002, the gateway's region; ADR-0024) ---------------------- */
 
-/** EU868 data rate for a LoRa SF/BW: 0..6, or -1. */
-int lwc_lbs_dr(uint8_t sf, uint16_t bw_khz);
-/** LoRa SF/BW of an EU868 data rate 0..6; false for any other. */
-bool lwc_lbs_dr_params(uint8_t dr, uint8_t *sf, uint16_t *bw_khz);
+/** Uplink data rate in region `r` for a LoRa SF/BW, or -1. The server's
+ *  router_config must use the same table (lwc_lbs_router_drs_ok). */
+int lwc_lbs_dr(const lwc_region_t *r, uint8_t sf, uint16_t bw_khz);
+/** LoRa SF/BW of a data rate in region `r`; false for any other. */
+bool lwc_lbs_dr_params(const lwc_region_t *r, uint8_t dr, uint8_t *sf, uint16_t *bw_khz);
 
 /* ---- xtime ------------------------------------------------------------------ */
 
@@ -84,8 +86,8 @@ lwc_lbs_err_t lwc_lbs_version(char *out, size_t cap, const char *station, const 
                               const char *package, const char *model, size_t *len);
 
 /** jreq (join-request), updf (data up) or propdf (proprietary) for a raw frame. */
-lwc_lbs_err_t lwc_lbs_uplink(char *out, size_t cap, const uint8_t *phy, size_t n, const lwc_lbs_rx_t *rx,
-                             size_t *len);
+lwc_lbs_err_t lwc_lbs_uplink(char *out, size_t cap, const lwc_region_t *r, const uint8_t *phy, size_t n,
+                             const lwc_lbs_rx_t *rx, size_t *len);
 
 /** dntxed: `dev_eui` is the DevEui string of the dnmsg, echoed as it came. */
 lwc_lbs_err_t lwc_lbs_dntxed(char *out, size_t cap, int64_t diid, const char *dev_eui, int64_t rctx,
@@ -131,11 +133,13 @@ lwc_lbs_err_t lwc_lbs_parse_dnmsg(const char *json, size_t len, lwc_lbs_dnmsg_t 
  * Radio requests for a dnmsg: RX1 (if given) and RX2 (if given), timed on the
  * concentrator counter: xtime + RxDelay for RX1, one second later for RX2.
  * Only the session bits and the low 32 bits of xtime are used (the server may
- * keep its own count of counter wraps). Power is the EU868 default (16 dBm,
- * 27 dBm in 869.4-869.65 MHz); the radio applies its own cap.
- * `*first` is the window to try first, `*alt` the other one (alt->size 0: none).
+ * keep its own count of counter wraps). Data rates are region `r`'s. Power is
+ * the region's MaxEIRP (EU868: 16 dBm, 27 dBm in 869.4-869.65 MHz); the radio
+ * applies its own cap. `*first` is the window to try first, `*alt` the other
+ * one (alt->size 0: none).
  */
-lwc_lbs_err_t lwc_lbs_dn_txpk(const lwc_lbs_dnmsg_t *d, uint8_t sess, lwc_txpk_t *first, lwc_txpk_t *alt);
+lwc_lbs_err_t lwc_lbs_dn_txpk(const lwc_lbs_dnmsg_t *d, const lwc_region_t *r, uint8_t sess, lwc_txpk_t *first,
+                              lwc_txpk_t *alt);
 
 #define LWC_LBS_ASAP_LEAD_US 300000U   /**< an "asap" downlink starts this long after the counter read */
 #define LWC_LBS_ASAP_RETRY_US 1000000U /**< its second try, if the first time is taken */
@@ -147,14 +151,20 @@ lwc_lbs_err_t lwc_lbs_dn_txpk(const lwc_lbs_dnmsg_t *d, uint8_t sess, lwc_txpk_t
  * LWC_LBS_ASAP_RETRY_US later (a clash with another frame). lwc_lbs_dn_txpk
  * refuses these (LWC_LBS_ERR_UNSUPPORTED).
  */
-lwc_lbs_err_t lwc_lbs_dn_txpk_now(const lwc_lbs_dnmsg_t *d, uint32_t now_tmst, lwc_txpk_t *first, lwc_txpk_t *alt);
+lwc_lbs_err_t lwc_lbs_dn_txpk_now(const lwc_lbs_dnmsg_t *d, const lwc_region_t *r, uint32_t now_tmst,
+                                  lwc_txpk_t *first, lwc_txpk_t *alt);
 
 /** What router_config says, as far as this gateway checks it. */
 typedef struct {
     char region[16];
     uint32_t freq_min;
     uint32_t freq_max;
-    bool drs_ok;           /**< DRs 0-6 match EU868 */
+    uint8_t n_drs;         /**< entries in DRs (at most 16 kept) */
+    struct {
+        int8_t sf;         /**< 7..12 LoRa, 0 FSK, -1 not used */
+        uint16_t bw_khz;
+        bool dnonly;
+    } drs[16];
     uint32_t radio_hz[2];  /**< sx1301_conf[0] radio_0/1 freq (0: absent) */
     uint8_t multisf;       /**< bit i: chan_multiSF_i enabled */
     uint8_t chan_radio[8]; /**< chan_multiSF_i radio */
@@ -172,9 +182,14 @@ typedef struct {
 
 lwc_lbs_err_t lwc_lbs_parse_router_config(const char *json, size_t len, lwc_lbs_router_config_t *out);
 
+/** The router_config's DRs give every LoRa data rate of region `r` the same
+ *  SF and bandwidth (downlink-only: DR8 and up in the fixed plans). Its
+ *  `region` name is not checked: servers spell it in their own ways. */
+bool lwc_lbs_router_drs_ok(const lwc_lbs_router_config_t *c, const lwc_region_t *r);
+
 /** The radio plan in a router_config (frequencies and channels only; ADR-0017).
- *  False when it has no sx1301_conf or the plan fails lwc_plan_check. */
-bool lwc_lbs_router_plan(const lwc_lbs_router_config_t *c, lwc_plan_t *out);
+ *  False when it has no sx1301_conf or the plan fails lwc_plan_check for `r`. */
+bool lwc_lbs_router_plan(const lwc_lbs_router_config_t *c, const lwc_region_t *r, lwc_plan_t *out);
 
 #ifdef __cplusplus
 }

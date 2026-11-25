@@ -1,7 +1,8 @@
 /*
  * Local network server and join server for one gateway (ADR-0015): a fixed
  * table of OTAA devices, join handling, uplink checks and the routing rule for
- * the gateway modes. LoRaWAN 1.0.x, EU868, class A. OS-independent, no
+ * the gateway modes. LoRaWAN 1.0.x, class A and C, the dynamic-channel
+ * regions (ADR-0024; EU868 by default). OS-independent, no
  * allocation, no I/O: the firmware stores the table and sends the frames.
  */
 #ifndef LWC_NS_H
@@ -12,6 +13,7 @@
 #include <stdint.h>
 
 #include "lwc/plan.h"
+#include "lwc/region.h"
 
 #include "lwc/txpk.h"
 
@@ -58,7 +60,7 @@ typedef struct {
     uint32_t fcnt_down; /* next downlink counter */
     /* receive windows sent in its join-accept (record version 2, ADR-0017) */
     uint8_t rx1_delay_s; /* RX1 delay, 1..15 s */
-    uint8_t rx2_dr;      /* RX2 data rate, EU868 DR0..DR5 */
+    uint8_t rx2_dr;      /* RX2 data rate (125 kHz LoRa: DR0..DR5 in every dynamic region) */
     uint32_t rx2_hz;     /* RX2 frequency */
     /* record version 3 (ADR-0020) */
     uint8_t dev_class;   /* lwc_ns_class_t */
@@ -72,13 +74,13 @@ typedef struct {
 #define LWC_NS_RETRANS_MAX 7U        /* ACKs again for one repeated confirmed uplink */
 #define LWC_NS_STATUS_PERIOD_S 86400U /* DevStatusReq at most once a day, with another downlink */
 
-/* ADR (after ChirpStack's default algorithm, EU868 DR0-DR5 at 125 kHz) */
+/* ADR (after ChirpStack's default algorithm, DR0-DR5 = SF12-SF7 at 125 kHz, the
+ * same in every dynamic region: test_region checks) */
 #define LWC_NS_ADR_HISTORY 20U     /* SNR history; a full one is needed before raising the power */
 #define LWC_NS_ADR_MARGIN10 100    /* installation margin, 0.1 dB */
 #define LWC_NS_ADR_MAX_DR 5U       /* SF7 */
 #define LWC_NS_ADR_MAX_POWER 5U    /* TXPower index: MaxEIRP - 10 dB (RP002 allows 7; kept low
                                       for older regional parameter versions) */
-#define LWC_NS_CH_MASK 0x00FFU     /* channels 0-7: three defaults and the CFList */
 
 /* Per-device state that is not stored: it is rebuilt after a restart. */
 typedef struct {
@@ -109,25 +111,39 @@ typedef struct {
     lwc_ns_link_t link[LWC_NS_MAX_DEVICES];
     uint32_t join_nonce; /* next JoinNonce: increases on every join (24 bit) */
     uint32_t next_addr;  /* DevAddr allocator */
+    const lwc_region_t *region; /* lwc_ns_set_region; EU868 after lwc_ns_init */
     uint32_t cflist_hz[5]; /* join-accept CFList, from the radio plan (lwc_ns_set_plan) */
     uint8_t rx1_delay_s;   /* receive windows for new joins (lwc_ns_set_rx) */
     uint8_t rx2_dr;
     uint32_t rx2_hz;
 } lwc_ns_t;
 
-/** Empty table; the CFList of the default EU868 plan. */
+/** Empty table; region EU868, its default plan's CFList and receive windows. */
 void lwc_ns_init(lwc_ns_t *ns);
+
+/** Region `r` (a dynamic-channel region; false for US915, AU915 or NULL):
+ *  its default plan's CFList and default receive windows (RX1 1 s, the
+ *  region's RX2). Call before lwc_ns_set_plan and lwc_ns_set_rx. Sessions
+ *  already in the table keep what their join-accept said. */
+bool lwc_ns_set_region(lwc_ns_t *ns, const lwc_region_t *r);
 
 /** The CFList of new join-accepts follows `plan` (ADR-0017). Devices already
  *  joined keep the channels of their join-accept until they join again. */
 void lwc_ns_set_plan(lwc_ns_t *ns, const lwc_plan_t *plan);
 
-/** True for a usable setting: RX1 delay 1..15 s, RX2 DR0..DR5, RX2 in 863-870 MHz. */
-bool lwc_ns_rx_ok(uint8_t rx1_delay_s, uint32_t rx2_hz, uint8_t rx2_dr);
+/** True for a usable setting in region `r`: RX1 delay 1..15 s, an RX2 DR at
+ *  125 kHz LoRa (DR0..DR5); RX2 in 863-870 MHz for EU868, the region's
+ *  default RX2 frequency elsewhere (band edges: ADR-0024). */
+bool lwc_ns_rx_ok(const lwc_region_t *r, uint8_t rx1_delay_s, uint32_t rx2_hz, uint8_t rx2_dr);
 
-/** Receive windows for new joins (default: RX1 1 s, RX2 869.525 MHz DR0).
+/** Receive windows for new joins (default: RX1 1 s, the region's RX2).
  *  Joined devices keep the ones of their join-accept. False if not usable. */
 bool lwc_ns_set_rx(lwc_ns_t *ns, uint8_t rx1_delay_s, uint32_t rx2_hz, uint8_t rx2_dr);
+
+/** LinkADRReq ChMask for ChMaskCntl 0: the region's default channels and the
+ *  CFList channels (bits 0..n-1); a bit for a channel the device does not
+ *  have makes it refuse the whole command. */
+uint16_t lwc_ns_ch_mask(const lwc_ns_t *ns);
 
 typedef enum {
     LWC_NS_OK = 0,
@@ -279,11 +295,14 @@ bool lwc_ns_answer_app(lwc_ns_t *ns, lwc_ns_up_res_t res, const lwc_ns_uplink_t 
  */
 bool lwc_ns_class_c_down(lwc_ns_t *ns, size_t idx, const lwc_ns_app_t *app, lwc_ns_dl_t *dl);
 
-/** EU868 data rate of an SF and bandwidth (DR0-DR6), or -1. */
-int lwc_ns_dr(uint8_t sf, uint16_t bw_khz);
+/** Uplink data rate of an SF and bandwidth in region `r`, or -1. */
+int lwc_ns_dr(const lwc_region_t *r, uint8_t sf, uint16_t bw_khz);
 
-/** EU868 maximum FRMPayload with no FOpts (RP002 "N"), 0 for an unknown data rate. */
-size_t lwc_ns_max_frm(int dr);
+/** Maximum FRMPayload with no FOpts (RP002 "N", repeater-compatible) at `dr`,
+ *  0 for an unknown data rate or LR-FHSS (the SX1302 cannot receive it).
+ *  Where TxParamSetupReq exists (AS923) the 400 ms dwell size: the server does
+ *  not know the device's dwell setting, and the smaller size fits either. */
+size_t lwc_ns_max_frm(const lwc_region_t *r, int dr);
 
 /** Demodulation floor for an SF at 125 kHz, in 0.1 dB (SF7 -7.5 dB ... SF12 -20 dB). */
 int16_t lwc_ns_required_snr10(uint8_t sf);
@@ -313,22 +332,21 @@ typedef enum {
  */
 bool lwc_ns_forward(lwc_mode_t mode, bool handled_locally);
 
-/* ---- downlink timing (EU868, RP002) --------------------------------------- */
+/* ---- downlink timing (RP002, dynamic-channel regions) ------------------------ */
 
 #define LWC_NS_RX1_DELAY_US 1000000U
 #define LWC_NS_JOIN_DELAY_US 5000000U
-#define LWC_NS_RX2_FREQ_HZ 869525000U
-#define LWC_NS_RX2_SF 12U /* DR0 */
 
 /**
  * A class A downlink in RX1 (same frequency and data rate as the uplink,
- * RX1DROffset 0) or RX2 (`rx2_hz` at EU868 `rx2_dr`), `delay_us` after the
- * uplink's concentrator timestamp (one more second for RX2). Inverted
- * polarity, no CRC. A join-accept uses the default RX2 (LWC_NS_RX2_FREQ_HZ,
- * DR0): the device does not know other values yet.
+ * RX1DROffset 0) or RX2 (`rx2_hz` at `rx2_dr`, DR0-DR5 = SF12-SF7 at
+ * 125 kHz), `delay_us` after the uplink's concentrator timestamp (one more
+ * second for RX2). Inverted polarity, no CRC. A join-accept uses the region's
+ * default RX2 (lwc_region_t rx2_hz, rx2_dr): the device does not know other
+ * values yet.
  */
-/** A timed downlink at concentrator time `tmst` on `freq_hz`, EU868 data rate
- *  `dr` (DR0-DR5, 125 kHz): class C. */
+/** A timed downlink at concentrator time `tmst` on `freq_hz`, data rate `dr`
+ *  (DR0-DR5, 125 kHz): class C. */
 void lwc_ns_downlink_at(uint32_t tmst, uint32_t freq_hz, uint8_t dr, int8_t power_dbm, const uint8_t *payload,
                         size_t len, lwc_txpk_t *out);
 

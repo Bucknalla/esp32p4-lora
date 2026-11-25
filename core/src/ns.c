@@ -19,21 +19,47 @@ void lwc_ns_init(lwc_ns_t *ns)
     memset(ns, 0, sizeof *ns);
     ns->join_nonce = 1;
     ns->next_addr = 1;
-    lwc_plan_t p;
-    lwc_plan_default_eu868(&p);
-    lwc_ns_set_plan(ns, &p);
-    const lwc_region_t *r = lwc_region(LWC_REGION_EU868);
-    (void)lwc_ns_set_rx(ns, 1U, r->rx2_hz, r->rx2_dr);
+    (void)lwc_ns_set_region(ns, lwc_region(LWC_REGION_EU868));
 }
 
-bool lwc_ns_rx_ok(uint8_t rx1_delay_s, uint32_t rx2_hz, uint8_t rx2_dr)
+bool lwc_ns_set_region(lwc_ns_t *ns, const lwc_region_t *r)
 {
-    return rx1_delay_s >= 1U && rx1_delay_s <= 15U && rx2_dr <= 5U && rx2_hz >= 863000000U && rx2_hz <= 870000000U;
+    lwc_plan_t p;
+    if (ns == NULL || !lwc_plan_default(&p, r)) {
+        return false;
+    }
+    ns->region = r;
+    lwc_ns_set_plan(ns, &p);
+    return lwc_ns_set_rx(ns, 1U, r->rx2_hz, r->rx2_dr);
+}
+
+bool lwc_ns_rx_ok(const lwc_region_t *r, uint8_t rx1_delay_s, uint32_t rx2_hz, uint8_t rx2_dr)
+{
+    if (r == NULL || r->fixed || rx1_delay_s < 1U || rx1_delay_s > 15U || rx2_dr > 15U ||
+        r->dr[rx2_dr].kind != LWC_DR_LORA || r->dr[rx2_dr].bw_khz != 125U) {
+        return false;
+    }
+    if (r->id == LWC_REGION_EU868) {
+        return rx2_hz >= 863000000U && rx2_hz <= 870000000U;
+    }
+    return rx2_hz == r->rx2_hz;
+}
+
+uint16_t lwc_ns_ch_mask(const lwc_ns_t *ns)
+{
+    if (ns == NULL || ns->region == NULL) {
+        return 0;
+    }
+    unsigned n = ns->region->n_default;
+    for (size_t i = 0; i < 5U; i++) {
+        n += ns->cflist_hz[i] != 0U ? 1U : 0U;
+    }
+    return (uint16_t)((1U << n) - 1U);
 }
 
 bool lwc_ns_set_rx(lwc_ns_t *ns, uint8_t rx1_delay_s, uint32_t rx2_hz, uint8_t rx2_dr)
 {
-    if (ns == NULL || !lwc_ns_rx_ok(rx1_delay_s, rx2_hz, rx2_dr)) {
+    if (ns == NULL || !lwc_ns_rx_ok(ns->region, rx1_delay_s, rx2_hz, rx2_dr)) {
         return false;
     }
     ns->rx1_delay_s = rx1_delay_s;
@@ -51,7 +77,7 @@ uint32_t lwc_ns_rx1_delay_us(const lwc_ns_dev_t *d)
 void lwc_ns_set_plan(lwc_ns_t *ns, const lwc_plan_t *plan)
 {
     if (ns != NULL && plan != NULL) {
-        (void)lwc_plan_cflist(plan, ns->cflist_hz);
+        (void)lwc_plan_cflist(plan, ns->region, ns->cflist_hz);
     }
 }
 
@@ -385,20 +411,19 @@ static bool adr_want(lwc_ns_link_t *l, const lwc_ns_uplink_t *up, const lwc_ns_r
     return *dr != cur || *pw != l->tx_power;
 }
 
-int lwc_ns_dr(uint8_t sf, uint16_t bw_khz)
+int lwc_ns_dr(const lwc_region_t *r, uint8_t sf, uint16_t bw_khz)
 {
-    return lwc_region_dr_of(lwc_region(LWC_REGION_EU868), sf, bw_khz, false);
+    return lwc_region_dr_of(r, sf, bw_khz, false);
 }
 
-size_t lwc_ns_max_frm(int dr)
+size_t lwc_ns_max_frm(const lwc_region_t *r, int dr)
 {
-    /* RP002 EU868, repeater-compatible: 51 (DR0-2), 115 (DR3), 222 (DR4-7). LR-FHSS
-     * (DR8-11) is uplink only and the SX1302 cannot receive it: 0. */
-    const lwc_region_t *r = lwc_region(LWC_REGION_EU868);
-    if (dr < 0 || dr > 15 || (r->dr[dr].kind != LWC_DR_LORA && r->dr[dr].kind != LWC_DR_FSK)) {
+    /* EU868: 51 (DR0-2), 115 (DR3), 222 (DR4-7). LR-FHSS is uplink only and the
+     * SX1302 cannot receive it: 0. */
+    if (r == NULL || dr < 0 || dr > 15 || (r->dr[dr].kind != LWC_DR_LORA && r->dr[dr].kind != LWC_DR_FSK)) {
         return 0U;
     }
-    return lwc_region_max_n(r, dr, false);
+    return lwc_region_max_n(r, dr, r->tx_param_setup);
 }
 
 bool lwc_ns_answer(lwc_ns_t *ns, lwc_ns_up_res_t res, const lwc_ns_uplink_t *up, const lwc_ns_rx_t *rx,
@@ -449,7 +474,7 @@ bool lwc_ns_answer_app(lwc_ns_t *ns, lwc_ns_up_res_t res, const lwc_ns_uplink_t 
         adr_rx(l, &m, up, rx);
         uint8_t dr, pw;
         if (adr_want(l, up, rx, &dr, &pw) &&
-            lwc_mac_link_adr_req(fopts, sizeof fopts, &fo, dr, pw, LWC_NS_CH_MASK, 0, 1)) {
+            lwc_mac_link_adr_req(fopts, sizeof fopts, &fo, dr, pw, lwc_ns_ch_mask(ns), 0, 1)) {
             dl->link_adr = true;
             dl->adr_dr = dr;
             dl->adr_power = pw;
@@ -458,8 +483,10 @@ bool lwc_ns_answer_app(lwc_ns_t *ns, lwc_ns_up_res_t res, const lwc_ns_uplink_t 
     }
     size_t lim = 0;
     if (app != NULL && app->port >= 1U && app->port <= 223U && (app->len == 0U || app->data != NULL)) {
-        const size_t n1 = lwc_ns_max_frm(lwc_ns_dr(rx->sf, rx->bw_khz));
-        const size_t n2 = lwc_ns_max_frm(d->rx2_dr);
+        /* RX1 at RX1DROffset 0 (the join-accept's DLSettings) */
+        const int up_dr = lwc_ns_dr(ns->region, rx->sf, rx->bw_khz);
+        const size_t n1 = lwc_ns_max_frm(ns->region, lwc_region_rx1_dr(ns->region, up_dr, 0, false));
+        const size_t n2 = lwc_ns_max_frm(ns->region, d->rx2_dr);
         lim = n1 < n2 ? n1 : n2;
         dl->app = app->len + fo <= lim;
         dl->app_too_big = !dl->app;
@@ -560,7 +587,7 @@ bool lwc_ns_class_c_down(lwc_ns_t *ns, size_t idx, const lwc_ns_app_t *app, lwc_
         app->port > 223U || (app->len > 0U && app->data == NULL)) {
         return false;
     }
-    if (app->len > lwc_ns_max_frm(d->rx2_dr)) {
+    if (app->len > lwc_ns_max_frm(ns->region, d->rx2_dr)) {
         dl->app_too_big = true;
         return false;
     }

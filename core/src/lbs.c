@@ -10,16 +10,14 @@
 
 /* ---- data rates ------------------------------------------------------------- */
 
-/* EU868 (ADR-0023 region tables): DR0-5 SF12-SF7 at 125 kHz, DR6 SF7 at 250 kHz. */
-int lwc_lbs_dr(uint8_t sf, uint16_t bw_khz)
+int lwc_lbs_dr(const lwc_region_t *r, uint8_t sf, uint16_t bw_khz)
 {
-    return lwc_region_dr_of(lwc_region(LWC_REGION_EU868), sf, bw_khz, false);
+    return lwc_region_dr_of(r, sf, bw_khz, false);
 }
 
-bool lwc_lbs_dr_params(uint8_t dr, uint8_t *sf, uint16_t *bw_khz)
+bool lwc_lbs_dr_params(const lwc_region_t *r, uint8_t dr, uint8_t *sf, uint16_t *bw_khz)
 {
-    const lwc_region_t *r = lwc_region(LWC_REGION_EU868);
-    if (sf == NULL || bw_khz == NULL || dr > 15U || r->dr[dr].kind != LWC_DR_LORA) {
+    if (r == NULL || sf == NULL || bw_khz == NULL || dr > 15U || r->dr[dr].kind != LWC_DR_LORA) {
         return false;
     }
     *sf = r->dr[dr].sf;
@@ -152,8 +150,8 @@ static void sb_radio(lwc_sb_t *b, int dr, const lwc_lbs_rx_t *rx)
     lwc_sb_printf(b, "}}");
 }
 
-lwc_lbs_err_t lwc_lbs_uplink(char *out, size_t cap, const uint8_t *phy, size_t n, const lwc_lbs_rx_t *rx,
-                             size_t *len)
+lwc_lbs_err_t lwc_lbs_uplink(char *out, size_t cap, const lwc_region_t *r, const uint8_t *phy, size_t n,
+                             const lwc_lbs_rx_t *rx, size_t *len)
 {
     if (out == NULL || cap == 0U || phy == NULL || rx == NULL) {
         return LWC_LBS_ERR_ARG;
@@ -161,7 +159,7 @@ lwc_lbs_err_t lwc_lbs_uplink(char *out, size_t cap, const uint8_t *phy, size_t n
     if (n > 255U) {
         return LWC_LBS_ERR_FRAME; /* longer than any LoRa frame */
     }
-    const int dr = lwc_lbs_dr(rx->sf, rx->bw_khz);
+    const int dr = lwc_lbs_dr(r, rx->sf, rx->bw_khz);
     if (dr < 0) {
         return LWC_LBS_ERR_DR;
     }
@@ -433,17 +431,18 @@ lwc_lbs_err_t lwc_lbs_parse_dnmsg(const char *json, size_t len, lwc_lbs_dnmsg_t 
     return LWC_LBS_OK;
 }
 
-static bool fill_txpk(lwc_txpk_t *t, uint32_t tmst, uint32_t freq, uint8_t dr, const lwc_lbs_dnmsg_t *d)
+static bool fill_txpk(lwc_txpk_t *t, const lwc_region_t *r, uint32_t tmst, uint32_t freq, uint8_t dr,
+                      const lwc_lbs_dnmsg_t *d)
 {
     memset(t, 0, sizeof *t);
-    if (!lwc_lbs_dr_params(dr, &t->sf, &t->bw_khz)) {
+    if (!lwc_lbs_dr_params(r, dr, &t->sf, &t->bw_khz)) {
         return false;
     }
     t->mode = LWC_TXPK_TIMED;
     t->tmst = tmst;
     t->freq_hz = freq;
     t->rfch = 0;
-    t->powe = (freq >= 869400000U && freq <= 869650000U) ? 27 : 16;
+    t->powe = (int8_t)(r->id == LWC_REGION_EU868 && freq >= 869400000U && freq <= 869650000U ? 27 : r->max_eirp_dbm);
     t->cr_denom = 5;
     t->ipol = true;
     t->ncrc = true;
@@ -453,7 +452,8 @@ static bool fill_txpk(lwc_txpk_t *t, uint32_t tmst, uint32_t freq, uint8_t dr, c
     return true;
 }
 
-lwc_lbs_err_t lwc_lbs_dn_txpk(const lwc_lbs_dnmsg_t *d, uint8_t sess, lwc_txpk_t *first, lwc_txpk_t *alt)
+lwc_lbs_err_t lwc_lbs_dn_txpk(const lwc_lbs_dnmsg_t *d, const lwc_region_t *r, uint8_t sess, lwc_txpk_t *first,
+                              lwc_txpk_t *alt)
 {
     if (d == NULL || first == NULL || alt == NULL || d->len == 0U || d->len > sizeof d->pdu) {
         return LWC_LBS_ERR_ARG;
@@ -468,30 +468,31 @@ lwc_lbs_err_t lwc_lbs_dn_txpk(const lwc_lbs_dnmsg_t *d, uint8_t sess, lwc_txpk_t
     const uint32_t rx1 = (uint32_t)((uint64_t)d->xtime + (uint64_t)d->rx_delay * 1000000U);
     const uint32_t rx2 = rx1 + 1000000U;
     if (d->rx1) {
-        if (!fill_txpk(first, rx1, d->rx1_freq, d->rx1_dr, d)) {
+        if (!fill_txpk(first, r, rx1, d->rx1_freq, d->rx1_dr, d)) {
             return LWC_LBS_ERR_FIELD;
         }
-        if (d->rx2 && !fill_txpk(alt, rx2, d->rx2_freq, d->rx2_dr, d)) {
+        if (d->rx2 && !fill_txpk(alt, r, rx2, d->rx2_freq, d->rx2_dr, d)) {
             memset(alt, 0, sizeof *alt);
             return LWC_LBS_ERR_FIELD;
         }
         return LWC_LBS_OK;
     }
-    if (d->rx2 && fill_txpk(first, rx2, d->rx2_freq, d->rx2_dr, d)) {
+    if (d->rx2 && fill_txpk(first, r, rx2, d->rx2_freq, d->rx2_dr, d)) {
         return LWC_LBS_OK;
     }
     return LWC_LBS_ERR_FIELD;
 }
 
-lwc_lbs_err_t lwc_lbs_dn_txpk_now(const lwc_lbs_dnmsg_t *d, uint32_t now_tmst, lwc_txpk_t *first, lwc_txpk_t *alt)
+lwc_lbs_err_t lwc_lbs_dn_txpk_now(const lwc_lbs_dnmsg_t *d, const lwc_region_t *r, uint32_t now_tmst,
+                                  lwc_txpk_t *first, lwc_txpk_t *alt)
 {
     if (d == NULL || first == NULL || alt == NULL || d->len == 0U || d->len > sizeof d->pdu || !d->asap || !d->rx2) {
         return LWC_LBS_ERR_ARG;
     }
     memset(alt, 0, sizeof *alt);
     const uint32_t t = now_tmst + LWC_LBS_ASAP_LEAD_US;
-    if (!fill_txpk(first, t, d->rx2_freq, d->rx2_dr, d) ||
-        !fill_txpk(alt, t + LWC_LBS_ASAP_RETRY_US, d->rx2_freq, d->rx2_dr, d)) {
+    if (!fill_txpk(first, r, t, d->rx2_freq, d->rx2_dr, d) ||
+        !fill_txpk(alt, r, t + LWC_LBS_ASAP_RETRY_US, d->rx2_freq, d->rx2_dr, d)) {
         memset(first, 0, sizeof *first);
         memset(alt, 0, sizeof *alt);
         return LWC_LBS_ERR_FIELD;
@@ -628,15 +629,14 @@ static bool rd_sx1301(lwc_jr_t *r, lwc_lbs_router_config_t *c)
     return ok;
 }
 
-/* DRs: 16 entries of [SF, BW, DNONLY]; 0-6 must match EU868. */
-static bool rd_drs(lwc_jr_t *r, bool *match)
+/* DRs: up to 32 entries of [SF, BW, DNONLY]; the first 16 are kept. */
+static bool rd_drs(lwc_jr_t *r, lwc_lbs_router_config_t *c)
 {
-    *match = true;
+    c->n_drs = 0;
     if (!lwc_jr_lit(r, '[')) {
         return false;
     }
     if (lwc_jr_lit(r, ']')) {
-        *match = false;
         return true;
     }
     for (unsigned i = 0;; i++) {
@@ -645,13 +645,11 @@ static bool rd_drs(lwc_jr_t *r, bool *match)
             !lwc_jr_lit(r, ',') || !rd_range(r, 0, 1, &dn) || !lwc_jr_lit(r, ']')) {
             return false;
         }
-        if (i <= 6U) {
-            uint8_t want_sf;
-            uint16_t want_bw;
-            (void)lwc_lbs_dr_params((uint8_t)i, &want_sf, &want_bw);
-            if (sf != want_sf || bw != want_bw || dn != 0) {
-                *match = false;
-            }
+        if (i < 16U) {
+            c->drs[i].sf = (int8_t)sf;
+            c->drs[i].bw_khz = (uint16_t)bw;
+            c->drs[i].dnonly = dn != 0;
+            c->n_drs = (uint8_t)(i + 1U);
         }
         if (lwc_jr_lit(r, ',')) {
             if (i >= 31U) {
@@ -659,11 +657,27 @@ static bool rd_drs(lwc_jr_t *r, bool *match)
             }
             continue;
         }
-        if (i < 6U) {
-            *match = false;
-        }
         return lwc_jr_lit(r, ']');
     }
+}
+
+bool lwc_lbs_router_drs_ok(const lwc_lbs_router_config_t *c, const lwc_region_t *r)
+{
+    if (c == NULL || r == NULL) {
+        return false;
+    }
+    for (unsigned i = 0; i < 16U; i++) {
+        const lwc_region_dr_t *d = &r->dr[i];
+        if (d->kind != LWC_DR_LORA) {
+            continue;
+        }
+        const bool dnonly = r->fixed && i >= 8U;
+        if (i >= c->n_drs || c->drs[i].sf != (int8_t)d->sf || c->drs[i].bw_khz != d->bw_khz ||
+            c->drs[i].dnonly != dnonly) {
+            return false;
+        }
+    }
+    return true;
 }
 
 lwc_lbs_err_t lwc_lbs_parse_router_config(const char *json, size_t len, lwc_lbs_router_config_t *out)
@@ -702,7 +716,7 @@ lwc_lbs_err_t lwc_lbs_parse_router_config(const char *json, size_t len, lwc_lbs_
             out->freq_min = (uint32_t)a;
             out->freq_max = (uint32_t)b2;
         } else if (lwc_jr_key_is(k, kn, "DRs")) {
-            if (!rd_drs(&r, &out->drs_ok)) {
+            if (!rd_drs(&r, out)) {
                 return LWC_LBS_ERR_FIELD;
             }
         } else if (lwc_jr_key_is(k, kn, "sx1301_conf")) {
@@ -734,7 +748,7 @@ lwc_lbs_err_t lwc_lbs_parse_router_config(const char *json, size_t len, lwc_lbs_
     return is_rc ? LWC_LBS_OK : LWC_LBS_ERR_FIELD;
 }
 
-bool lwc_lbs_router_plan(const lwc_lbs_router_config_t *c, lwc_plan_t *out)
+bool lwc_lbs_router_plan(const lwc_lbs_router_config_t *c, const lwc_region_t *r, lwc_plan_t *out)
 {
     if (c == NULL || out == NULL || !c->have_sx1301) {
         return false;
@@ -750,7 +764,7 @@ bool lwc_lbs_router_plan(const lwc_lbs_router_config_t *c, lwc_plan_t *out)
     p.std_sf = c->std_on ? c->std_sf : 7U;
     p.std_bw_khz = c->std_on ? (uint16_t)(c->std_bw_hz / 1000U) : 250U;
     p.fsk = (lwc_plan_chan_t){c->fsk_on, c->fsk_radio, c->fsk_if};
-    if (lwc_plan_check(&p) != LWC_PLAN_OK) {
+    if (lwc_plan_check(&p, r) != LWC_PLAN_OK) {
         return false;
     }
     *out = p;

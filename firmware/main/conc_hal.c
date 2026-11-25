@@ -256,9 +256,11 @@ static void radio_task(void *arg)
         sv_beat(s_sv);
         lwc_plan_t plan;
         radioplan_get(&plan);
-        if (lwc_plan_check(&plan) != LWC_PLAN_OK) {
-            ESP_LOGE(TAG, "channel plan rejected (%d): using the EU868 default", (int)lwc_plan_check(&plan));
-            lwc_plan_default_eu868(&plan);
+        const lwc_region_t *rg = radioplan_region();
+        const lwc_plan_err_t pe = lwc_plan_check(&plan, rg);
+        if (pe != LWC_PLAN_OK) {
+            ESP_LOGE(TAG, "channel plan rejected (%d): using the %s default", (int)pe, rg->name);
+            (void)lwc_plan_default(&plan, rg);
         }
         bool started = false;
         s_planned = false;
