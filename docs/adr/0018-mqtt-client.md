@@ -148,6 +148,7 @@ them. The stack figure is from that build.
 | Reboot | `offline` (last will), then `online` |
 | Downlink for a local device (2 B, port 5), and one with port 0 | first queued (`down_queued=1`, `app_waiting=1`); second refused, "port: 1 to 223" |
 | Settings and status | no discovery or expiry fields left |
+| FiPy join + 3 uplinks (third confirmed) | `join` and 3 `up` messages, fcnt 0-2, `confirmed` true on the third; `published=5`, `dropped=0` |
 
 ## Plan
 
