@@ -9,8 +9,18 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size);
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 {
     lwc_mqtt_down_t d;
-    if (lwc_mqtt_down_parse((const char *)data, size, &d) == NULL &&
-        (d.port < 1U || d.port > 223U || d.len > sizeof d.data)) {
+    const char *why = lwc_mqtt_down_parse((const char *)data, size, &d);
+    if (why == NULL && (d.port < 1U || d.port > 223U || d.len > sizeof d.data)) {
+        __builtin_trap();
+    }
+    /* whatever id was read goes into a result: it must always make valid output */
+    char out[512];
+    const lwc_mqtt_result_t r = {.node = "70b3d57ed0001234", .dev_eui = 1, .id = d.id,
+                                 .state = why != NULL ? LWC_MQTT_DL_REFUSED : LWC_MQTT_DL_QUEUED, .reason = why,
+                                 .port = why != NULL ? -1 : d.port, .len = why != NULL ? -1 : (int)d.len,
+                                 .time_unix_s = -1};
+    if (d.id[LWC_DLQ_ID_MAX] != '\0' || (d.id[0] != '\0' && !lwc_dlq_id_ok(d.id, strlen(d.id))) ||
+        lwc_mqtt_result_json(&r, out, sizeof out) == 0) {
         __builtin_trap();
     }
     uint64_t eui;

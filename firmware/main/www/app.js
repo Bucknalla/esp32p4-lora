@@ -411,7 +411,7 @@ function renderMqtt() {
     f.mqtt_pass.placeholder = q.pass === 'set' ? 'Leave empty to keep the stored password' : 'Not set';
   }
   const id = $('#mqtt-gwid').value || q.gw_id || '<gateway id>';
-  $('#mqtt-topics').textContent = 'lora/' + id + '/status, lora/' + id + '/<DevEUI>/up, …/join; in: …/down';
+  $('#mqtt-topics').textContent = 'lora/' + id + '/status, lora/' + id + '/<DevEUI>/up, …/join, …/down/result; in: …/down';
 }
 
 /* The server picker: TTN presets (port 8887) or another host and port; the

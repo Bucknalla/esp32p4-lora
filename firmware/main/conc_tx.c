@@ -189,7 +189,9 @@ static void reply(const radio_tx_req_t *r, radio_tx_result_t res, int8_t pw, boo
     if (r->source == RADIO_SRC_LNS) {
         ESP_LOGI(TAG, "local server downlink %u: %s%s", (unsigned)r->token, radio_tx_result_str(res),
                  capped ? " (power capped)" : "");
-        lns_tx_result(r->token, res == RADIO_TX_OK);
+        if (res != RADIO_TX_OK) {
+            lns_tx_result(r->token, false); /* OK is reported at the handover to the concentrator */
+        }
         return;
     }
     const radio_tx_res_t out = {r->token, res, pw, capped, false, 0};
@@ -400,6 +402,9 @@ bool conc_tx_service(void)
         ESP_LOGW(TAG, "downlink dropped: missed its start (%" PRId32 " us late)",
                  (int32_t)(now - s_jit.slot[expired].start));
         atomic_fetch_add(&g_radio_tx_stats.txdrop, 1U);
+        if (s_src[expired] == RADIO_SRC_LNS) {
+            lns_tx_result(s_tok[expired], false);
+        }
         lwc_jit_release(&s_jit, (size_t)expired);
     }
     if (due < 0) {
@@ -423,10 +428,16 @@ bool conc_tx_service(void)
         lwc_jit_release(&s_jit, (size_t)due);
         ESP_LOGE(TAG, "lgw_send failed");
         atomic_fetch_add(&g_radio_tx_stats.txdrop, 1U);
+        if (s_src[due] == RADIO_SRC_LNS) {
+            lns_tx_result(s_tok[due], false);
+        }
         return true;
     }
     lwc_jit_sent(&s_jit, (size_t)due);
     atomic_fetch_add(&g_radio_tx_stats.txnb, 1U);
+    if (s_src[due] == RADIO_SRC_LNS) {
+        lns_tx_result(s_tok[due], true); /* handed over for its window */
+    }
     if (s_src[due] == RADIO_SRC_LBS && g_radio_tx_res != NULL) {
         const radio_tx_res_t sent = {s_tok[due], RADIO_TX_OK, f->rf_power, false, true, f->count_us};
         (void)xQueueSend(g_radio_tx_res, &sent, 0);
