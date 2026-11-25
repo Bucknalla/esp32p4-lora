@@ -418,8 +418,14 @@ lwc_lbs_err_t lwc_lbs_parse_dnmsg(const char *json, size_t len, lwc_lbs_dnmsg_t 
     if (!is_dn || !have_eui || !have_diid || !have_pdu || r1dr != r1f || r2dr != r2f || (!r1dr && !r2dr)) {
         return LWC_LBS_ERR_FIELD;
     }
-    if (out->dclass == 1U || gps || out->xtime == 0) {
-        return LWC_LBS_ERR_UNSUPPORTED; /* class B, GPS time, or class C with no uplink to answer */
+    if (out->dclass == 1U || gps) {
+        return LWC_LBS_ERR_UNSUPPORTED; /* class B, GPS time */
+    }
+    /* class C with no RX1 (ChirpStack "immediately"): sent at the next free
+     * time on RX2, as the reference station does; xtime, if any, is not used */
+    out->asap = out->dclass == 2U && !r1dr && r2dr;
+    if (out->xtime == 0 && !out->asap) {
+        return LWC_LBS_ERR_UNSUPPORTED; /* no time to answer */
     }
     if (dr_form) {
         out->rx_delay = 0; /* "DR"/"Freq": send at xtime itself (Station) */
@@ -457,6 +463,9 @@ lwc_lbs_err_t lwc_lbs_dn_txpk(const lwc_lbs_dnmsg_t *d, uint8_t sess, lwc_txpk_t
         return LWC_LBS_ERR_ARG;
     }
     memset(alt, 0, sizeof *alt);
+    if (d->asap) {
+        return LWC_LBS_ERR_UNSUPPORTED; /* lwc_lbs_dn_txpk_now */
+    }
     if (d->xtime <= 0 || (uint8_t)((uint64_t)d->xtime >> 48) != sess) {
         return LWC_LBS_ERR_SESSION;
     }
@@ -476,6 +485,22 @@ lwc_lbs_err_t lwc_lbs_dn_txpk(const lwc_lbs_dnmsg_t *d, uint8_t sess, lwc_txpk_t
         return LWC_LBS_OK;
     }
     return LWC_LBS_ERR_FIELD;
+}
+
+lwc_lbs_err_t lwc_lbs_dn_txpk_now(const lwc_lbs_dnmsg_t *d, uint32_t now_tmst, lwc_txpk_t *first, lwc_txpk_t *alt)
+{
+    if (d == NULL || first == NULL || alt == NULL || d->len == 0U || d->len > sizeof d->pdu || !d->asap || !d->rx2) {
+        return LWC_LBS_ERR_ARG;
+    }
+    memset(alt, 0, sizeof *alt);
+    const uint32_t t = now_tmst + LWC_LBS_ASAP_LEAD_US;
+    if (!fill_txpk(first, t, d->rx2_freq, d->rx2_dr, d) ||
+        !fill_txpk(alt, t + LWC_LBS_ASAP_RETRY_US, d->rx2_freq, d->rx2_dr, d)) {
+        memset(first, 0, sizeof *first);
+        memset(alt, 0, sizeof *alt);
+        return LWC_LBS_ERR_FIELD;
+    }
+    return LWC_LBS_OK;
 }
 
 /* ---- router_config ---------------------------------------------------------- */

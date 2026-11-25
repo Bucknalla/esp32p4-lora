@@ -97,10 +97,22 @@ gateways.
   polarity. The client uses what TTN sent over UDP before: EU868 power
   16 dBm (27 dBm in 869.4-869.65 MHz), coding rate 4/5, inverted
   polarity, no CRC, preamble 8; the radio's power cap (ADR-0007) applies.
-- **Not supported**: class B (`dC` 1, `gpstime`: no GPS), and class C
-  downlinks that do not answer an uplink (no `xtime`). The latter needs no
-  GPS: the reference station sends them at the next free time on RX2 from
-  its own counter (ADR-0020, correction); a follow-up.
+- **Not supported**: class B (`dC` 1, `gpstime`: no GPS).
+- **Class C** (2026-11-25), checked against the senders' sources:
+  - The Things Stack never sends an unsolicited class C `dnmsg`: it times
+    every downlink on the gateway's counter itself and sends it in the
+    class A form (`dC` 0, `RxDelay` 1, `xtime` one second before, the RX2
+    frequency in the RX1 fields; `semtechws/lbslns/downstream.go`). That
+    form has always been handled here.
+  - ChirpStack's gateway bridge sends a class C "immediately" downlink as
+    `dC` 2 with only `RX2DR`/`RX2Freq` (and the last uplink's `xtime`, or
+    none). The reference station sends such a frame at the next free time
+    on RX2 from its own counter (`s2e.c`, `altTxTime`), and so does this
+    gateway now: the counter + 300 ms, a second try 1 s later if that time
+    is taken (`lwc_lbs_dn_txpk_now`); refused only while the radio
+    restarts. No GPS is needed.
+  - A class C `dnmsg` with RX1 keeps the `xtime` timing; without `xtime` it
+    is refused, like a class A one.
 - **CUPS** (remote configuration and updates) is out of scope: firmware
   updates already come through our own signed OTA (ADR-0008), and CUPS would
   need a second key with more rights.

@@ -189,13 +189,44 @@ static void dnmsgs(void)
     CHECK(lwc_lbs_parse_dnmsg(df, strlen(df), &d) == LWC_LBS_OK && d.rx_delay == 0);
     CHECK(lwc_lbs_dn_txpk(&d, 0x11, &a, &b) == LWC_LBS_OK && a.tmst == 1U);
 
-    /* not supported here: class B, GPS time, class C with no uplink */
+    /* not supported here: class B, GPS time */
     static const char cb[] = "{\"msgtype\":\"dnmsg\",\"DevEui\":\"01\",\"dC\":1,\"diid\":3,\"pdu\":\"60\",\"DR\":3,"
                              "\"Freq\":869525000,\"gpstime\":1234}";
     CHECK(lwc_lbs_parse_dnmsg(cb, strlen(cb), &d) == LWC_LBS_ERR_UNSUPPORTED);
-    static const char cc[] = "{\"msgtype\":\"dnmsg\",\"DevEui\":\"01\",\"dC\":2,\"diid\":3,\"pdu\":\"60\",\"RX2DR\":0,"
-                             "\"RX2Freq\":869525000}";
-    CHECK(lwc_lbs_parse_dnmsg(cc, strlen(cc), &d) == LWC_LBS_ERR_UNSUPPORTED);
+
+    /* class C "immediately" as ChirpStack's bridge sends it: dC 2, RX2 only, no
+     * xtime (or the last uplink's): at the next free time on RX2 */
+    static const char cc[] = "{\"msgtype\":\"dnmsg\",\"DevEui\":\"01-01-01-01-01-01-01-01\",\"dC\":2,\"diid\":3,"
+                             "\"pdu\":\"60AB\",\"RX2DR\":3,\"RX2Freq\":869525000,\"priority\":1,\"MuxTime\":1554300787.1}";
+    CHECK(lwc_lbs_parse_dnmsg(cc, strlen(cc), &d) == LWC_LBS_OK && d.asap && d.dclass == 2U && d.xtime == 0);
+    CHECK(lwc_lbs_dn_txpk(&d, 0x11, &a, &b) == LWC_LBS_ERR_UNSUPPORTED); /* not timed by xtime */
+    CHECK(lwc_lbs_dn_txpk_now(&d, 5000000U, &a, &b) == LWC_LBS_OK);
+    CHECK(a.mode == LWC_TXPK_TIMED && a.tmst == 5000000U + LWC_LBS_ASAP_LEAD_US && a.freq_hz == 869525000U && a.sf == 9 &&
+          a.powe == 27 && a.size == 2 && a.payload[1] == 0xAB);
+    CHECK(b.tmst == a.tmst + LWC_LBS_ASAP_RETRY_US && b.freq_hz == a.freq_hz && b.sf == a.sf && b.size == 2);
+    CHECK(lwc_lbs_dn_txpk_now(&d, 0xFFFFFF00U, &a, &b) == LWC_LBS_OK && a.tmst == 0xFFFFFF00U + LWC_LBS_ASAP_LEAD_US); /* wraps */
+    /* with the last uplink's xtime, even from an earlier session: still now */
+    static const char ccx[] = "{\"msgtype\":\"dnmsg\",\"DevEui\":\"01\",\"dC\":2,\"diid\":4,\"pdu\":\"60\",\"RX2DR\":0,"
+                              "\"RX2Freq\":869525000,\"xtime\":4785074604081153,\"rctx\":0}";
+    CHECK(lwc_lbs_parse_dnmsg(ccx, strlen(ccx), &d) == LWC_LBS_OK && d.asap);
+    CHECK(lwc_lbs_dn_txpk_now(&d, 100U, &a, &b) == LWC_LBS_OK && a.tmst == 100U + LWC_LBS_ASAP_LEAD_US && a.sf == 12);
+    /* class C answering an uplink (RX1 given) keeps the xtime timing; without xtime it is refused */
+    static const char cr1[] = "{\"msgtype\":\"dnmsg\",\"DevEui\":\"01\",\"dC\":2,\"diid\":5,\"pdu\":\"60\",\"RxDelay\":1,"
+                              "\"RX1DR\":5,\"RX1Freq\":868100000,\"RX2DR\":0,\"RX2Freq\":869525000,\"xtime\":4785074604081153}";
+    CHECK(lwc_lbs_parse_dnmsg(cr1, strlen(cr1), &d) == LWC_LBS_OK && !d.asap);
+    CHECK(lwc_lbs_dn_txpk(&d, 0x11, &a, &b) == LWC_LBS_OK && a.tmst == 1000001U);
+    CHECK(lwc_lbs_dn_txpk_now(&d, 0, &a, &b) == LWC_LBS_ERR_ARG);
+    static const char cr0[] = "{\"msgtype\":\"dnmsg\",\"DevEui\":\"01\",\"dC\":2,\"diid\":5,\"pdu\":\"60\",\"RxDelay\":1,"
+                              "\"RX1DR\":5,\"RX1Freq\":868100000}";
+    CHECK(lwc_lbs_parse_dnmsg(cr0, strlen(cr0), &d) == LWC_LBS_ERR_UNSUPPORTED);
+    /* class A with RX2 only and no xtime: still refused */
+    static const char ca0[] = "{\"msgtype\":\"dnmsg\",\"DevEui\":\"01\",\"dC\":0,\"diid\":6,\"pdu\":\"60\",\"RX2DR\":0,"
+                              "\"RX2Freq\":869525000}";
+    CHECK(lwc_lbs_parse_dnmsg(ca0, strlen(ca0), &d) == LWC_LBS_ERR_UNSUPPORTED);
+    /* an asap downlink at a data rate outside EU868 */
+    static const char cc9[] = "{\"msgtype\":\"dnmsg\",\"DevEui\":\"01\",\"dC\":2,\"diid\":7,\"pdu\":\"60\",\"RX2DR\":9,"
+                              "\"RX2Freq\":869525000}";
+    CHECK(lwc_lbs_parse_dnmsg(cc9, strlen(cc9), &d) == LWC_LBS_OK && lwc_lbs_dn_txpk_now(&d, 0, &a, &b) == LWC_LBS_ERR_FIELD);
 
     /* bad: no pdu, odd hex, RX1 half given, DR out of range, xtime as a fraction, not a dnmsg */
     static const char *const bad[] = {

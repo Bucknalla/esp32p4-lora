@@ -51,13 +51,11 @@ their own, with no uplink to answer.
     with the ACK in time". Never resent on its own (ADR-0018).
 - **The ACK wait is per device**: `c_ack_s` 5-3600 s, default 60 s (0 in
   the API returns to it), in the device record and on the Devices tab.
-- **Local devices only.** Class C downlinks from TTN that answer no uplink
-  are still refused (ADR-0016). Correction (2026-11-25): this needs no GPS.
-  In the Basics Station reference (`s2e.c`, `altTxTime`) a class C `dnmsg`
-  with no RX1 is sent at the earliest free time on its RX2 frequency, from
-  the concentrator counter; it is dropped only before the gateway's counter
-  is synchronised. The same counter-plus-lead send used here for local
-  devices can serve it: a follow-up, not GPS work.
+- **Network-server class C** goes through Basics Station (ADR-0016): The
+  Things Stack times class C downlinks itself and sends them in the class A
+  form, which works; ChirpStack's "immediately" form (`dC` 2, RX2 only) is
+  sent at the next free time on RX2 from the counter. Neither needs GPS (an
+  earlier note here said it did: corrected).
 - The `lns` task wakes every 100 ms (was 1 s) to serve class C queues.
 
 ## Consequences

@@ -109,7 +109,8 @@ lwc_lbs_err_t lwc_lbs_msgtype(const char *json, size_t len, lwc_lbs_msg_t *type)
 typedef struct {
     char dev_eui[LWC_LBS_EUI_STR]; /**< as sent (hex digits, '-' and ':') */
     int64_t diid;
-    uint8_t dclass;   /**< 0 class A, 2 class C answering an uplink */
+    uint8_t dclass;   /**< 0 class A, 2 class C */
+    bool asap;        /**< class C with no RX1 (ChirpStack "immediately"): send at the next free time on RX2 */
     int64_t xtime;    /**< of the uplink */
     int64_t rctx;
     uint8_t rx_delay; /**< seconds; 0 and absent read as 1 */
@@ -135,6 +136,18 @@ lwc_lbs_err_t lwc_lbs_parse_dnmsg(const char *json, size_t len, lwc_lbs_dnmsg_t 
  * `*first` is the window to try first, `*alt` the other one (alt->size 0: none).
  */
 lwc_lbs_err_t lwc_lbs_dn_txpk(const lwc_lbs_dnmsg_t *d, uint8_t sess, lwc_txpk_t *first, lwc_txpk_t *alt);
+
+#define LWC_LBS_ASAP_LEAD_US 300000U   /**< an "asap" downlink starts this long after the counter read */
+#define LWC_LBS_ASAP_RETRY_US 1000000U /**< its second try, if the first time is taken */
+
+/**
+ * For a dnmsg with `asap` (class C, no RX1: the reference station sends it at
+ * the earliest free time on RX2, from its own counter, whatever xtime says):
+ * RX2 at `now_tmst` + LWC_LBS_ASAP_LEAD_US, and a second try
+ * LWC_LBS_ASAP_RETRY_US later (a clash with another frame). lwc_lbs_dn_txpk
+ * refuses these (LWC_LBS_ERR_UNSUPPORTED).
+ */
+lwc_lbs_err_t lwc_lbs_dn_txpk_now(const lwc_lbs_dnmsg_t *d, uint32_t now_tmst, lwc_txpk_t *first, lwc_txpk_t *alt);
 
 /** What router_config says, as far as this gateway checks it. */
 typedef struct {
