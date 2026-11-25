@@ -205,7 +205,7 @@ With one gateway there is no deduplication, so the network server reduces to per
 **v1 scope**
 
 - LoRaWAN 1.0.4, EU868 regional parameters.
-- Class A (v1), Class C (later phase). Class B out of scope.
+- Class A (v1), Class C for local devices (ADR-0020). Class B out of scope.
 - OTAA joins; ABP supported for test devices only.
 
 **Uplink path**

@@ -59,10 +59,14 @@ static const char *TAG = "lns";
 #define TASK_CORE 1
 #define NVS_NS "lns"
 #define META_VER 1U /* "meta" record: JoinNonce and DevAddr allocator (never reset) */
-#define DEV_VER 2U  /* device record: 2 adds the receive windows (ADR-0017 step 5); 1 is migrated */
+#define DEV_VER 3U  /* device record: 3 adds the class (ADR-0020), 2 the receive windows (ADR-0017); older are migrated */
 #define FCNT_DOWN_SKIP 16U /* downlink counter skip at boot: never reuse one */
 #define DOWN_POWER_DBM 14  /* EU868 RX1 default; the radio caps it (ADR-0007) */
 #define PAYLOAD_SHOW 32U
+/* Class C (ADR-0020) */
+#define CLASS_C_LEAD_US 300000U       /* a class C frame starts this long after the counter read */
+#define CLASS_C_WINDOW_MS 1500        /* after RX2 opens: its frame may still be arriving */
+#define LOOP_MS 100                   /* lns task: class C service period */
 
 typedef struct {
     uint8_t ver;
@@ -101,6 +105,25 @@ typedef struct {
     dev_v1_t d;
 } dev_rec_v1_t;
 
+/* Device record version 2, frozen: lwc_ns_dev_t before the class (ADR-0020).
+ * The class byte may land in tail padding, so versions are told apart by
+ * `ver`, not by length alone. */
+typedef struct {
+    dev_v1_t v1;
+    uint8_t rx1_delay_s;
+    uint8_t rx2_dr;
+    uint32_t rx2_hz;
+} dev_v2_t;
+
+typedef struct {
+    uint8_t ver;
+    dev_v2_t d;
+} dev_rec_v2_t;
+
+_Static_assert(offsetof(dev_rec_t, d) == offsetof(dev_rec_v2_t, d), "record header");
+_Static_assert(offsetof(lwc_ns_dev_t, rx1_delay_s) == offsetof(dev_v2_t, rx1_delay_s), "v2 layout");
+_Static_assert(offsetof(lwc_ns_dev_t, rx2_hz) == offsetof(dev_v2_t, rx2_hz), "v2 layout");
+
 /* Version 2 only appends fields: every version 1 field keeps its offset. */
 _Static_assert(offsetof(dev_rec_t, d) == offsetof(dev_rec_v1_t, d), "record header");
 _Static_assert(offsetof(lwc_ns_dev_t, nonces) == offsetof(dev_v1_t, nonces), "v1 layout");
@@ -130,6 +153,15 @@ static void from_v1(const dev_v1_t *o, lwc_ns_dev_t *d)
     d->rx1_delay_s = 1;
     d->rx2_dr = 0;
     d->rx2_hz = LWC_NS_RX2_FREQ_HZ;
+}
+
+static void from_v2(const dev_v2_t *o, lwc_ns_dev_t *d)
+{
+    from_v1(&o->v1, d);
+    d->rx1_delay_s = o->rx1_delay_s;
+    d->rx2_dr = o->rx2_dr;
+    d->rx2_hz = o->rx2_hz;
+    d->dev_class = LWC_NS_CLASS_A; /* version 2 devices were class A */
 }
 
 typedef struct {
@@ -167,12 +199,11 @@ static uint16_t s_tx_token;
 static lwc_dlq_t *s_dlq; /* [LWC_NS_MAX_DEVICES] */
 static atomic_uint s_app_queued, s_app_sent, s_app_dropped, s_app_acked, s_app_nacked;
 
-/* Radio requests the radio refused or could not hand over (duty cycle, too
- * late, missed start): reported by the TX task without waiting
- * (lns_tx_result); a refused payload is offered again instead of released. */
-#define TX_FAILED_N 8
-static _Atomic uint16_t s_tx_failed[TX_FAILED_N];
-static atomic_uint s_tx_failed_pos;
+/* The radio's answer for each device's application downlink (its queue head
+ * is the only one on its way): written by the TX task without waiting
+ * (lns_tx_result), applied to the queue by this task under s_lock
+ * (txres_apply). token << 2 | 1 handed over, | 2 refused; 0 none. */
+static _Atomic uint32_t s_txres[LWC_NS_MAX_DEVICES];
 
 /* Application downlinks on their way to the radio, by request token: when the
  * TX task hands one to the concentrator, its "sent" result is published.
@@ -180,22 +211,24 @@ static atomic_uint s_tx_failed_pos;
 #define INFLIGHT_N 8
 typedef struct {
     uint16_t token;
+    uint8_t idx; /* device slot */
     mqttc_res_t res;
 } inflight_t;
 static inflight_t s_infl[INFLIGHT_N];
 static unsigned s_infl_pos;
 static portMUX_TYPE s_infl_mux = portMUX_INITIALIZER_UNLOCKED;
 
-static void infl_put(uint16_t token, const mqttc_res_t *r)
+static void infl_put(uint16_t token, size_t idx, const mqttc_res_t *r)
 {
     taskENTER_CRITICAL(&s_infl_mux);
     inflight_t *e = &s_infl[s_infl_pos++ % INFLIGHT_N];
     e->token = token;
+    e->idx = (uint8_t)idx;
     e->res = *r;
     taskEXIT_CRITICAL(&s_infl_mux);
 }
 
-static bool infl_take(uint16_t token, mqttc_res_t *out)
+static bool infl_take(uint16_t token, size_t *idx, mqttc_res_t *out)
 {
     bool found = false;
     taskENTER_CRITICAL(&s_infl_mux);
@@ -203,6 +236,9 @@ static bool infl_take(uint16_t token, mqttc_res_t *out)
         if (s_infl[i].token == token) {
             if (out != NULL) {
                 *out = s_infl[i].res;
+            }
+            if (idx != NULL) {
+                *idx = s_infl[i].idx;
             }
             s_infl[i].token = 0;
             found = true;
@@ -215,29 +251,27 @@ static bool infl_take(uint16_t token, mqttc_res_t *out)
 
 void lns_tx_result(uint16_t token, bool ok)
 {
-    if (token == 0U) {
-        return;
-    }
-    if (!ok) {
-        atomic_store(&s_tx_failed[atomic_fetch_add(&s_tx_failed_pos, 1U) % TX_FAILED_N], token);
-        (void)infl_take(token, NULL);
-        return;
-    }
     mqttc_res_t r;
-    if (infl_take(token, &r)) {
+    size_t idx = 0;
+    if (token == 0U || !infl_take(token, &idx, &r)) {
+        return; /* a join-accept or a MAC-only answer */
+    }
+    if (idx < LWC_NS_MAX_DEVICES) {
+        atomic_store(&s_txres[idx], ((uint32_t)token << 2) | (ok ? 1U : 2U));
+    }
+    if (ok) {
         atomic_fetch_add(&s_app_sent, 1U);
         mqttc_result(&r);
     }
 }
 
-static bool tx_failed(uint16_t token)
+/* Hand the radio's answer to the device's queue (s_lock held). */
+static void txres_apply(size_t idx)
 {
-    for (size_t i = 0; i < TX_FAILED_N; i++) {
-        if (atomic_load(&s_tx_failed[i]) == token) {
-            return true;
-        }
+    const uint32_t v = atomic_exchange(&s_txres[idx], 0U);
+    if (v != 0U && s_dlq != NULL) {
+        lwc_dlq_tx_result(&s_dlq[idx], (uint16_t)(v >> 2), (v & 3U) == 1U);
     }
-    return false;
 }
 
 /* The "sent" result of a queued item. */
@@ -365,6 +399,9 @@ static void load(void)
         }
         if (len == sizeof *r && r->ver == DEV_VER && r->d.used) {
             s_ns.dev[i] = r->d;
+        } else if (len == sizeof(dev_rec_v2_t) && r->ver == 2U && ((const dev_rec_v2_t *)r)->d.v1.used) {
+            from_v2(&((const dev_rec_v2_t *)r)->d, &s_ns.dev[i]);
+            migrate[i] = true;
         } else if (len == sizeof(dev_rec_v1_t) && r->ver == 1U && ((const dev_rec_v1_t *)r)->d.used) {
             from_v1(&((const dev_rec_v1_t *)r)->d, &s_ns.dev[i]);
             migrate[i] = true;
@@ -394,7 +431,7 @@ static void load(void)
         }
         if (migrate[i]) {
             const esp_err_t err = save_dev(i);
-            ESP_LOGW(TAG, "device %s: record version 1 -> 2%s", s_ns.dev[i].name,
+            ESP_LOGW(TAG, "device %s: record migrated to version %u%s", s_ns.dev[i].name, DEV_VER,
                      err == ESP_OK ? "" : " (not written: read again at the next boot)");
         }
     }
@@ -430,7 +467,7 @@ static int32_t since_uplink_ms(const radio_pkt_t *p)
 /* Returns the radio request token, 0 when nothing was handed to the radio. */
 static uint16_t send_down(const radio_pkt_t *p, const uint8_t *frame, size_t len, uint32_t delay_us,
                           uint32_t rx2_hz, uint8_t rx2_dr, const char *what, uint64_t dev_eui,
-                          const mqttc_res_t *sent_res)
+                          const mqttc_res_t *sent_res, size_t idx)
 {
     static radio_tx_req_t req;
     memset(&req, 0, sizeof req);
@@ -455,12 +492,12 @@ static uint16_t send_down(const radio_pkt_t *p, const uint8_t *frame, size_t len
         return 0;
     }
     if (sent_res != NULL) {
-        infl_put(req.token, sent_res); /* before the TX task can answer */
+        infl_put(req.token, idx, sent_res); /* before the TX task can answer */
     }
     if (g_radio_tx_req == NULL || xQueueSend(g_radio_tx_req, &req, pdMS_TO_TICKS(10)) != pdTRUE) {
         ESP_LOGW(TAG, "%s for %s: radio queue full", what, eui_str(dev_eui, e));
         if (sent_res != NULL) {
-            (void)infl_take(req.token, NULL);
+            (void)infl_take(req.token, NULL, NULL);
         }
         return 0;
     }
@@ -577,7 +614,7 @@ static bool handle(const radio_pkt_t *p)
             xSemaphoreGive(s_lock);
             if (err == ESP_OK) {
                 /* the device learns its windows from this frame: it uses the defaults for it */
-                (void)send_down(p, acc, alen, LWC_NS_JOIN_DELAY_US, LWC_NS_RX2_FREQ_HZ, 0, "join-accept", eui, NULL);
+                (void)send_down(p, acc, alen, LWC_NS_JOIN_DELAY_US, LWC_NS_RX2_FREQ_HZ, 0, "join-accept", eui, NULL, 0);
                 if (post) {
                     mqttc_post(&ev);
                 }
@@ -623,9 +660,8 @@ static bool handle(const radio_pkt_t *p)
             static lwc_dlq_item_t done;
             if (q != NULL) {
                 atomic_fetch_add(&s_app_dropped, lwc_dlq_own(q, dev_eui)); /* the slot has a new device */
-                const lwc_dlq_item_t *h = lwc_dlq_head(q);
-                const bool refused = h != NULL && h->sent && tx_failed(h->token);
-                switch (lwc_dlq_uplink(q, r == LWC_NS_UP_OK, up.ack, refused, &done)) {
+                txres_apply(up.idx);
+                switch (lwc_dlq_uplink(q, r == LWC_NS_UP_OK, up.ack, p->tmst, &done)) {
                 case LWC_DLQ_ACKED:
                     atomic_fetch_add(&s_app_acked, 1U);
                     ESP_LOGI(TAG, "confirmed downlink for %s on port %u acknowledged", who, done.port);
@@ -644,9 +680,15 @@ static bool handle(const radio_pkt_t *p)
                     ESP_LOGW(TAG, "%u downlink(s) for %s dropped: local transmit is off", q->n, who);
                     dlq_drop_all(q, "local transmit is off");
                 }
+                /* class C: no send of its own while this uplink's class A windows are open */
+                lwc_dlq_hold(q, esp_timer_get_time() / 1000 +
+                                    ((int64_t)s_ns.dev[up.idx].rx1_delay_s + 1) * 1000 + CLASS_C_WINDOW_MS);
             }
             lwc_ns_app_t app;
             const lwc_dlq_item_t *head = lwc_dlq_head(q);
+            if (head != NULL && head->sent) {
+                head = NULL; /* class C, on its way: settled later, not offered twice */
+            }
             if (head != NULL) {
                 app = (lwc_ns_app_t){.port = head->port, .data = head->data, .len = head->len, .more = q->n > 1U,
                                      .confirmed = head->confirmed};
@@ -700,8 +742,8 @@ static bool handle(const radio_pkt_t *p)
             if (send) {
                 char what[160];
                 describe(&dl, what, sizeof what);
-                const uint16_t token =
-                    send_down(p, dl.frame, dl.len, rx1_us, rx2_hz, rx2_dr, what, eui, dl.app ? &sent_res : NULL);
+                const uint16_t token = send_down(p, dl.frame, dl.len, rx1_us, rx2_hz, rx2_dr, what, eui,
+                                                 dl.app ? &sent_res : NULL, up_idx);
                 if (token != 0U && dl.app) {
                     /* on its way: settled by the next uplink. Only this task
                      * takes from the head; lns_remove may have emptied it. */
@@ -730,6 +772,129 @@ static bool handle(const radio_pkt_t *p)
     return handled;
 }
 
+/* Class C (ADR-0020): send a queued downlink at once on the device's RX2
+ * frequency and data rate; settle it by the radio's answer, the ACK, or a
+ * timeout (rules in core/src/dlq.c). Called every LOOP_MS by this task. */
+static uint16_t send_c(size_t idx, const lwc_ns_dl_t *dl, uint32_t tmst, uint32_t freq_hz, uint8_t dr,
+                       uint64_t dev_eui, const mqttc_res_t *sent_res)
+{
+    static radio_tx_req_t req;
+    memset(&req, 0, sizeof req);
+    req.source = RADIO_SRC_LNS;
+    req.token = ++s_tx_token;
+    if (req.token == 0U) {
+        req.token = ++s_tx_token;
+    }
+    lwc_ns_downlink_at(tmst, freq_hz, dr, DOWN_POWER_DBM, dl->frame, dl->len, &req.pk);
+    char e[17];
+    infl_put(req.token, idx, sent_res); /* before the TX task can answer */
+    if (g_radio_tx_req == NULL || xQueueSend(g_radio_tx_req, &req, pdMS_TO_TICKS(10)) != pdTRUE) {
+        (void)infl_take(req.token, NULL, NULL);
+        ESP_LOGW(TAG, "class C downlink for %s: radio queue full", eui_str(dev_eui, e));
+        return 0;
+    }
+    atomic_fetch_add(&s_downs, 1U);
+    ESP_LOGI(TAG, "class C downlink FCnt %" PRIu32 "%s %u for %s: %" PRIu32 " Hz DR%u, %u B", dl->fcnt,
+             dl->confirmed ? " confirmed" : "", (unsigned)req.token, eui_str(dev_eui, e), freq_hz, dr,
+             (unsigned)dl->len);
+    return req.token;
+}
+
+static void class_c_service(void)
+{
+    if (s_dlq == NULL) {
+        return;
+    }
+    static lwc_ns_dl_t dl;
+    static lwc_dlq_item_t done;
+    static mqttc_res_t sent_res;
+    for (size_t i = 0; i < LWC_NS_MAX_DEVICES; i++) {
+        const lwc_ns_dev_t *d = &s_ns.dev[i];
+        if (!d->used || d->dev_class != LWC_NS_CLASS_C || s_dlq[i].n == 0U) {
+            continue; /* read without the lock: a stale view only delays by one pass */
+        }
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        lwc_dlq_t *q = &s_dlq[i];
+        const int64_t now_ms = esp_timer_get_time() / 1000;
+        atomic_fetch_add(&s_app_dropped, lwc_dlq_own(q, d->dev_eui));
+        txres_apply(i);
+        if (q->n > 0U && !lns_tx()) {
+            dlq_drop_all(q, "local transmit is off");
+        }
+        const char *why = NULL;
+        bool send = false;
+        switch (lwc_dlq_tick(q, now_ms, (int64_t)lwc_ns_c_ack_s(d) * 1000, &done, &why)) {
+        case LWC_DLQ_TIMEOUT:
+            atomic_fetch_add(&s_app_nacked, 1U);
+            ESP_LOGW(TAG, "class C confirmed downlink for %s on port %u: %s", d->name, done.port, why);
+            dl_result(&done, LWC_MQTT_DL_NACKED, why);
+            break;
+        case LWC_DLQ_DROPPED:
+            atomic_fetch_add(&s_app_dropped, 1U);
+            ESP_LOGW(TAG, "class C downlink for %s on port %u dropped: %s", d->name, done.port, why);
+            dl_result(&done, LWC_MQTT_DL_DROPPED, why);
+            break;
+        case LWC_DLQ_SEND:
+            send = true;
+            break;
+        default: /* KEEP; DELIVERED: its "sent" was the last word */
+            break;
+        }
+        uint32_t tmst = 0, end = 0;
+        const lwc_dlq_item_t *h = lwc_dlq_head(q);
+        if (send && h != NULL && !atomic_load(&g_radio_counter_ok)) {
+            lwc_dlq_defer(q, now_ms + 1000); /* the radio is restarting */
+            send = false;
+        }
+        if (send && h != NULL) {
+            const lwc_ns_app_t app = {.port = h->port, .data = h->data, .len = h->len, .more = q->n > 1U,
+                                      .confirmed = h->confirmed};
+            if (lwc_ns_class_c_down(&s_ns, i, &app, &dl)) {
+                if (save_cnt(i) == ESP_OK) { /* the counter, before the frame goes out */
+                    tmst = (uint32_t)atomic_load(&g_radio_counter) + CLASS_C_LEAD_US;
+                    end = tmst + lwc_lora_airtime_us((uint8_t)(12U - d->rx2_dr), 125, 5, 8, (uint16_t)dl.len,
+                                                     false, false);
+                    lwc_dlq_item_t next = *h;
+                    next.tx++;
+                    next.fcnt = dl.fcnt;
+                    dl_result_fill(&next, &sent_res);
+                } else {
+                    lwc_dlq_defer(q, now_ms + LWC_DLQ_C_GAP_MS);
+                    send = false;
+                }
+            } else if (dl.app_too_big) {
+                (void)lwc_dlq_pop(q, &done);
+                atomic_fetch_add(&s_app_dropped, 1U);
+                dl_result(&done, LWC_MQTT_DL_DROPPED, "too big for the device's RX2 window");
+                send = false;
+            } else {
+                lwc_dlq_defer(q, now_ms + LWC_DLQ_C_GAP_MS); /* not joined, or no uplink since the join */
+                send = false;
+            }
+        }
+        const uint64_t eui = d->dev_eui;
+        const uint32_t rx2_hz = d->rx2_hz != 0U ? d->rx2_hz : LWC_NS_RX2_FREQ_HZ;
+        const uint8_t rx2_dr = d->rx2_dr;
+        xSemaphoreGive(s_lock);
+        if (!send) {
+            continue;
+        }
+        const uint16_t token = send_c(i, &dl, tmst, rx2_hz, rx2_dr, eui, &sent_res);
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        const lwc_dlq_item_t *h2 = lwc_dlq_head(q);
+        if (h2 != NULL && h2->dev_eui == eui && !h2->sent) {
+            if (token != 0U) {
+                lwc_dlq_sent_c(q, token, dl.fcnt, now_ms, end);
+            } else {
+                lwc_dlq_defer(q, now_ms + LWC_DLQ_C_GAP_MS);
+            }
+        }
+        xSemaphoreGive(s_lock);
+        memset(&dl, 0, sizeof dl);
+    }
+    memset(&done, 0, sizeof done);
+}
+
 static void lns_task(void *arg)
 {
     (void)arg;
@@ -738,7 +903,8 @@ static void lns_task(void *arg)
     const lwc_mode_t mode = gwmode();
     for (;;) {
         sv_beat(sv);
-        if (xQueueReceive(s_radio_q, &p, pdMS_TO_TICKS(1000)) != pdTRUE) {
+        class_c_service();
+        if (xQueueReceive(s_radio_q, &p, pdMS_TO_TICKS(LOOP_MS)) != pdTRUE) {
             continue;
         }
         const bool handled = handle(&p);
@@ -782,7 +948,7 @@ esp_err_t lns_start(QueueHandle_t radio_q, QueueHandle_t *fwd_q)
 /* ---- device management (web API) ---------------------------------------------- */
 
 lwc_ns_err_t lns_add(uint64_t dev_eui, uint64_t join_eui, const uint8_t app_key[16], lwc_ns_mac_t mac,
-                     const char *name)
+                     const char *name, lwc_ns_class_t cls)
 {
     if (s_lock == NULL) {
         return LWC_NS_ERR_ARG;
@@ -791,6 +957,7 @@ lwc_ns_err_t lns_add(uint64_t dev_eui, uint64_t join_eui, const uint8_t app_key[
     size_t idx = 0;
     lwc_ns_err_t r = lwc_ns_add(&s_ns, dev_eui, join_eui, app_key, mac, name, &idx);
     if (r == LWC_NS_OK) {
+        (void)lwc_ns_set_class(&s_ns, dev_eui, cls);
         if (save_dev(idx) != ESP_OK || save_cnt(idx) != ESP_OK) {
             (void)lwc_ns_remove(&s_ns, dev_eui);
             r = LWC_NS_ERR_FULL; /* storage full or failing */
@@ -803,6 +970,41 @@ lwc_ns_err_t lns_add(uint64_t dev_eui, uint64_t join_eui, const uint8_t app_key[
     if (r == LWC_NS_OK) {
         ESP_LOGI(TAG, "device %s added", eui_str(dev_eui, e)); /* never the key */
     }
+    return r;
+}
+
+lwc_ns_err_t lns_set_class(uint64_t dev_eui, const lwc_ns_class_t *cls, const uint16_t *c_ack_s)
+{
+    if (s_lock == NULL) {
+        return LWC_NS_ERR_ARG;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    const int i = lwc_ns_find(&s_ns, dev_eui);
+    lwc_ns_err_t r = i < 0 ? LWC_NS_ERR_NOT_FOUND : LWC_NS_OK;
+    lwc_ns_dev_t was;
+    if (r == LWC_NS_OK) {
+        was = s_ns.dev[i];
+        if (cls != NULL) {
+            r = lwc_ns_set_class(&s_ns, dev_eui, *cls);
+        }
+        if (r == LWC_NS_OK && c_ack_s != NULL) {
+            r = lwc_ns_set_c_ack(&s_ns, dev_eui, *c_ack_s);
+        }
+        if (r == LWC_NS_OK && save_dev((size_t)i) != ESP_OK) {
+            r = LWC_NS_ERR_FULL;
+        }
+        if (r != LWC_NS_OK) {
+            s_ns.dev[i].dev_class = was.dev_class;
+            s_ns.dev[i].c_ack_s = was.c_ack_s;
+        }
+        memset(&was, 0, sizeof was); /* keys */
+    }
+    char e[17];
+    if (r == LWC_NS_OK) {
+        ESP_LOGI(TAG, "device %s: class %c, ACK wait %u s", eui_str(dev_eui, e),
+                 s_ns.dev[i].dev_class == LWC_NS_CLASS_C ? 'C' : 'A', lwc_ns_c_ack_s(&s_ns.dev[i]));
+    }
+    xSemaphoreGive(s_lock);
     return r;
 }
 
@@ -886,7 +1088,7 @@ size_t lns_devices_json(char *out, size_t cap)
                     "\"joined\":%s,\"answered\":%s,\"dev_addr\":\"%08" PRIX32 "\",\"fcnt_up\":%" PRIu32 ",\"uplinks\":%" PRIu32
                     ",\"seen_s\":%" PRId64 ",\"rssi\":%d,\"snr\":%.1f,\"sf\":%u,\"port\":%d,\"payload\":\"%s\","
                     "\"battery\":%d,\"margin\":%d,\"tx_power\":%u,\"adr\":%s,\"rx1_delay_s\":%u,\"rx2_hz\":%" PRIu32
-                    ",\"rx2_dr\":%u}",
+                    ",\"rx2_dr\":%u,\"class\":\"%c\",\"c_ack_s\":%u,\"waiting\":%u}",
                     first ? "" : ",", eui_str(d->dev_eui, dev), eui_str(d->join_eui, join), name,
                     d->mac == LWC_NS_MAC_1_0_4 ? "1.0.4" : "1.0.2", d->joined ? "true" : "false",
                     st->join_unanswered ? "false" : "true",
@@ -895,7 +1097,8 @@ size_t lns_devices_json(char *out, size_t cap)
                     (double)st->snr, st->sf, st->has_port ? st->port : -1, pl,
                     s_ns.link[i].has_status ? (int)s_ns.link[i].battery : -1, (int)s_ns.link[i].margin,
                     s_ns.link[i].tx_power, s_ns.link[i].adr_pending ? "\"pending\"" : "null", (unsigned)d->rx1_delay_s,
-                    d->rx2_hz, (unsigned)d->rx2_dr);
+                    d->rx2_hz, (unsigned)d->rx2_dr, d->dev_class == LWC_NS_CLASS_C ? 'C' : 'A', lwc_ns_c_ack_s(d),
+                    s_dlq != NULL ? (unsigned)s_dlq[i].n : 0U);
             first = false;
         }
         xSemaphoreGive(s_lock);

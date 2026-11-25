@@ -531,3 +531,70 @@ void lwc_ns_downlink(bool rx2, uint32_t up_tmst, uint32_t up_freq_hz, uint8_t up
         memcpy(out->payload, payload, out->size);
     }
 }
+
+lwc_ns_err_t lwc_ns_set_class(lwc_ns_t *ns, uint64_t dev_eui, lwc_ns_class_t cls)
+{
+    if (ns == NULL || (cls != LWC_NS_CLASS_A && cls != LWC_NS_CLASS_C)) {
+        return LWC_NS_ERR_ARG;
+    }
+    const int i = lwc_ns_find(ns, dev_eui);
+    if (i < 0) {
+        return LWC_NS_ERR_NOT_FOUND;
+    }
+    ns->dev[i].dev_class = (uint8_t)cls;
+    return LWC_NS_OK;
+}
+
+bool lwc_ns_class_c_down(lwc_ns_t *ns, size_t idx, const lwc_ns_app_t *app, lwc_ns_dl_t *dl)
+{
+    if (ns == NULL || app == NULL || dl == NULL || idx >= LWC_NS_MAX_DEVICES) {
+        return false;
+    }
+    lwc_ns_dev_t *d = &ns->dev[idx];
+    memset(dl, 0, sizeof *dl);
+    if (!d->used || !d->joined || !d->has_up || d->dev_class != LWC_NS_CLASS_C || app->port < 1U ||
+        app->port > 223U || (app->len > 0U && app->data == NULL)) {
+        return false;
+    }
+    if (app->len > lwc_ns_max_frm(d->rx2_dr)) {
+        dl->app_too_big = true;
+        return false;
+    }
+    dl->app = true;
+    dl->confirmed = app->confirmed;
+    dl->fcnt = d->fcnt_down;
+    const uint8_t fctrl = (uint8_t)(LWC_LW_FCTRL_ADR | (app->more ? LWC_LW_FCTRL_FPENDING : 0U));
+    dl->len = lwc_lw_data_build(app->confirmed ? LWC_LW_CONFIRMED_DOWN : LWC_LW_UNCONFIRMED_DOWN, d->dev_addr, fctrl,
+                                dl->fcnt, NULL, 0, true, app->port, app->data, app->len, d->nwk_s_key, d->app_s_key,
+                                dl->frame, sizeof dl->frame);
+    if (dl->len == 0U) {
+        return false;
+    }
+    d->fcnt_down++;
+    return true;
+}
+
+void lwc_ns_downlink_at(uint32_t tmst, uint32_t freq_hz, uint8_t dr, int8_t power_dbm, const uint8_t *payload,
+                        size_t len, lwc_txpk_t *out)
+{
+    /* the RX2 form of lwc_ns_downlink, at `tmst` itself */
+    lwc_ns_downlink(true, tmst - 1000000U, 0, 0, 0, 0, freq_hz, dr, power_dbm, payload, len, out);
+}
+
+lwc_ns_err_t lwc_ns_set_c_ack(lwc_ns_t *ns, uint64_t dev_eui, uint16_t seconds)
+{
+    if (ns == NULL || (seconds != 0U && (seconds < LWC_NS_C_ACK_MIN_S || seconds > LWC_NS_C_ACK_MAX_S))) {
+        return LWC_NS_ERR_ARG;
+    }
+    const int i = lwc_ns_find(ns, dev_eui);
+    if (i < 0) {
+        return LWC_NS_ERR_NOT_FOUND;
+    }
+    ns->dev[i].c_ack_s = seconds;
+    return LWC_NS_OK;
+}
+
+uint16_t lwc_ns_c_ack_s(const lwc_ns_dev_t *d)
+{
+    return d == NULL || d->c_ack_s == 0U ? (uint16_t)LWC_NS_C_ACK_DEFAULT_S : d->c_ack_s;
+}

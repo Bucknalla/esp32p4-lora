@@ -30,6 +30,11 @@ typedef enum {
     LWC_NS_MAC_1_0_4 = 1, /* 1.0.4: DevNonce is a counter, must increase */
 } lwc_ns_mac_t;
 
+typedef enum {
+    LWC_NS_CLASS_A = 0,
+    LWC_NS_CLASS_C = 2, /* listens on RX2 between its uplinks (ADR-0020) */
+} lwc_ns_class_t;
+
 /* Stored whole by the firmware (one NVS record per device): changing this
  * struct changes the record format. Runtime state goes in lwc_ns_link_t. */
 typedef struct {
@@ -55,7 +60,14 @@ typedef struct {
     uint8_t rx1_delay_s; /* RX1 delay, 1..15 s */
     uint8_t rx2_dr;      /* RX2 data rate, EU868 DR0..DR5 */
     uint32_t rx2_hz;     /* RX2 frequency */
+    /* record version 3 (ADR-0020) */
+    uint8_t dev_class;   /* lwc_ns_class_t */
+    uint16_t c_ack_s;    /* class C confirmed: longest wait for the ACK uplink, s; 0 = default */
 } lwc_ns_dev_t;
+
+#define LWC_NS_C_ACK_DEFAULT_S 60U
+#define LWC_NS_C_ACK_MIN_S 5U
+#define LWC_NS_C_ACK_MAX_S 3600U
 
 #define LWC_NS_RETRANS_MAX 7U        /* ACKs again for one repeated confirmed uplink */
 #define LWC_NS_STATUS_PERIOD_S 86400U /* DevStatusReq at most once a day, with another downlink */
@@ -125,9 +137,19 @@ typedef enum {
     LWC_NS_ERR_NOT_FOUND,
 } lwc_ns_err_t;
 
-/** Add an OTAA device (`name` may be NULL). Returns its index in *idx. */
+/** Add an OTAA device (`name` may be NULL), class A. Returns its index in *idx. */
 lwc_ns_err_t lwc_ns_add(lwc_ns_t *ns, uint64_t dev_eui, uint64_t join_eui, const uint8_t app_key[16],
                         lwc_ns_mac_t mac, const char *name, size_t *idx);
+
+/** Set a device's class (A or C). */
+lwc_ns_err_t lwc_ns_set_class(lwc_ns_t *ns, uint64_t dev_eui, lwc_ns_class_t cls);
+
+/** Class C confirmed downlinks: the longest wait for the ACK uplink,
+ *  LWC_NS_C_ACK_MIN_S..LWC_NS_C_ACK_MAX_S, or 0 for the default. */
+lwc_ns_err_t lwc_ns_set_c_ack(lwc_ns_t *ns, uint64_t dev_eui, uint16_t seconds);
+
+/** The wait in effect for a device, in seconds. */
+uint16_t lwc_ns_c_ack_s(const lwc_ns_dev_t *d);
 lwc_ns_err_t lwc_ns_remove(lwc_ns_t *ns, uint64_t dev_eui);
 /** Index of the device, or -1. */
 int lwc_ns_find(const lwc_ns_t *ns, uint64_t dev_eui);
@@ -247,6 +269,16 @@ typedef struct {
 bool lwc_ns_answer_app(lwc_ns_t *ns, lwc_ns_up_res_t res, const lwc_ns_uplink_t *up, const lwc_ns_rx_t *rx,
                        const lwc_ns_app_t *app, lwc_ns_dl_t *dl);
 
+/**
+ * Class C (ADR-0020): an application downlink that answers no uplink, for the
+ * device's RX2 window (frequency and data rate of its join-accept). No MAC
+ * commands, no ACK; FPending when `app->more`; Confirmed Data Down when
+ * `app->confirmed`. False (nothing used) if the device is not a joined class
+ * C device with a proven session, or the payload does not fit its RX2 data
+ * rate. Advances the downlink counter: store it before the frame goes out.
+ */
+bool lwc_ns_class_c_down(lwc_ns_t *ns, size_t idx, const lwc_ns_app_t *app, lwc_ns_dl_t *dl);
+
 /** EU868 data rate of an SF and bandwidth (DR0-DR6), or -1. */
 int lwc_ns_dr(uint8_t sf, uint16_t bw_khz);
 
@@ -295,6 +327,11 @@ bool lwc_ns_forward(lwc_mode_t mode, bool handled_locally);
  * polarity, no CRC. A join-accept uses the default RX2 (LWC_NS_RX2_FREQ_HZ,
  * DR0): the device does not know other values yet.
  */
+/** A timed downlink at concentrator time `tmst` on `freq_hz`, EU868 data rate
+ *  `dr` (DR0-DR5, 125 kHz): class C. */
+void lwc_ns_downlink_at(uint32_t tmst, uint32_t freq_hz, uint8_t dr, int8_t power_dbm, const uint8_t *payload,
+                        size_t len, lwc_txpk_t *out);
+
 void lwc_ns_downlink(bool rx2, uint32_t up_tmst, uint32_t up_freq_hz, uint8_t up_sf, uint16_t up_bw_khz,
                      uint32_t delay_us, uint32_t rx2_hz, uint8_t rx2_dr, int8_t power_dbm, const uint8_t *payload,
                      size_t len, lwc_txpk_t *out);
