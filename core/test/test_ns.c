@@ -309,7 +309,7 @@ static void class_c(size_t idx, uint32_t addr, const uint8_t nwk[16], const uint
     CHECK(lwc_ns_set_c_ack(&ns, eui, 0) == LWC_NS_OK && lwc_ns_c_ack_s(&ns.dev[idx]) == 60U);
     /* timed at the given counter, RX2 form */
     lwc_txpk_t pk;
-    lwc_ns_downlink_at(0x00000100U, 869525000U, 3, 14, big, 5, &pk);
+    lwc_ns_downlink_at(EU, 0x00000100U, 869525000U, 3, 14, big, 5, &pk);
     CHECK(pk.mode == LWC_TXPK_TIMED && pk.tmst == 0x00000100U && pk.freq_hz == 869525000U && pk.sf == 9U &&
           pk.bw_khz == 125U && pk.ipol && pk.ncrc && pk.size == 5U && pk.powe == 14);
 }
@@ -317,25 +317,25 @@ static void class_c(size_t idx, uint32_t addr, const uint8_t nwk[16], const uint
 static void adr_step(void)
 {
     uint8_t dr, pw;
-    lwc_ns_adr(-200, 0, 3, 5, 5, &dr, &pw); /* at the SF12 floor: 10 dB short, 4 steps up in power */
+    lwc_ns_adr(EU, -200, 0, 3, 5, 5, &dr, &pw); /* at the SF12 floor: 10 dB short, 4 steps up in power */
     CHECK(dr == 0 && pw == 0);
-    lwc_ns_adr(50, 0, 0, 5, 5, &dr, &pw); /* 5 dB at SF12: 15 dB spare, 5 steps: SF7 */
+    lwc_ns_adr(EU, 50, 0, 0, 5, 5, &dr, &pw); /* 5 dB at SF12: 15 dB spare, 5 steps: SF7 */
     CHECK(dr == 5 && pw == 0);
-    lwc_ns_adr(100, 0, 0, 5, 5, &dr, &pw); /* 6 steps: SF7, then one power step */
+    lwc_ns_adr(EU, 100, 0, 0, 5, 5, &dr, &pw); /* 6 steps: SF7, then one power step */
     CHECK(dr == 5 && pw == 1);
-    lwc_ns_adr(100, 5, 0, 5, 5, &dr, &pw); /* 10 dB at SF7: 7.5 dB spare, 2 steps */
+    lwc_ns_adr(EU, 100, 5, 0, 5, 5, &dr, &pw); /* 10 dB at SF7: 7.5 dB spare, 2 steps */
     CHECK(dr == 5 && pw == 2);
-    lwc_ns_adr(300, 5, 0, 5, 5, &dr, &pw); /* power stops at the cap */
+    lwc_ns_adr(EU, 300, 5, 0, 5, 5, &dr, &pw); /* power stops at the cap */
     CHECK(dr == 5 && pw == 5);
-    lwc_ns_adr(300, 2, 0, 3, 5, &dr, &pw); /* data rate stops at its cap */
+    lwc_ns_adr(EU, 300, 2, 0, 3, 5, &dr, &pw); /* data rate stops at its cap */
     CHECK(dr == 3 && pw == 5);
-    lwc_ns_adr(-100, 5, 5, 5, 5, &dr, &pw); /* 12.5 dB short: -4 steps (truncated), power only */
+    lwc_ns_adr(EU, -100, 5, 5, 5, 5, &dr, &pw); /* 12.5 dB short: -4 steps (truncated), power only */
     CHECK(dr == 5 && pw == 1);
-    lwc_ns_adr(-4, 5, 2, 5, 5, &dr, &pw); /* 2.9 dB short: no step */
+    lwc_ns_adr(EU, -4, 5, 2, 5, 5, &dr, &pw); /* 2.9 dB short: no step */
     CHECK(dr == 5 && pw == 2);
-    lwc_ns_adr(-6, 5, 2, 5, 5, &dr, &pw); /* 3.1 dB short: one step */
+    lwc_ns_adr(EU, -6, 5, 2, 5, 5, &dr, &pw); /* 3.1 dB short: one step */
     CHECK(dr == 5 && pw == 1);
-    lwc_ns_adr(54, 5, 2, 5, 5, &dr, &pw); /* 2.9 dB spare: no step */
+    lwc_ns_adr(EU, 54, 5, 2, 5, 5, &dr, &pw); /* 2.9 dB spare: no step */
     CHECK(dr == 5 && pw == 2);
 }
 
@@ -531,7 +531,7 @@ static void regions(void)
     p.multisf[7].enable = false;
     lwc_ns_set_plan(&n2, &p);
     CHECK(lwc_ns_ch_mask(&n2) == 0x003FU);
-    CHECK(!lwc_ns_set_region(&n2, lwc_region(LWC_REGION_US915)) && n2.region == EU); /* R3 */
+    CHECK(!lwc_ns_set_region(&n2, lwc_region(LWC_REGION_CN470)) && n2.region == EU); /* ADR-0026 */
     CHECK(!lwc_ns_set_region(&n2, NULL) && !lwc_ns_set_region(NULL, EU) && lwc_ns_ch_mask(NULL) == 0U);
     for (int i = 0; i < (int)LWC_REGIONS; i++) {
         const lwc_region_t *r = lwc_region((lwc_region_id_t)i);
@@ -571,6 +571,249 @@ static void regions(void)
     const lwc_region_t *as1 = lwc_region(LWC_REGION_AS923_1);
     CHECK(lwc_ns_max_frm(as1, 2) < lwc_region_max_n(as1, 2, false));
     CHECK(lwc_ns_max_frm(EU, 8) == 0U && lwc_ns_max_frm(NULL, 0) == 0U && lwc_ns_dr(NULL, 7, 125) == -1);
+}
+
+/* ADR-0026: US915 and AU915 on one sub-band. Expected values: the reference
+ * (core/test/region_ref.inc, brocaar/lorawan/band) and RP002 typed by hand. */
+typedef struct {
+    const char *region;
+    const char *proto;
+    uint8_t sb;
+    uint8_t nmask;
+    uint16_t mask[5];
+    uint8_t ncmd;
+    struct {
+        uint16_t mask;
+        uint8_t cntl;
+    } cmd[2];
+} ref_t;
+
+static const ref_t REF[] = {
+#include "region_ref.inc"
+};
+
+static const ref_t *ref(const char *region, const char *proto, uint8_t sb)
+{
+    for (size_t i = 0; i < sizeof REF / sizeof REF[0]; i++) {
+        if (strcmp(REF[i].region, region) == 0 && strcmp(REF[i].proto, proto) == 0 && REF[i].sb == sb) {
+            return &REF[i];
+        }
+    }
+    return NULL;
+}
+
+static lwc_ns_t nf; /* large: keep off the stack */
+
+/* The two LinkADRReq of the sub-band pair in FOpts, against the reference. */
+static bool pair_ok(const lwc_lw_data_t *d, const ref_t *rf, uint8_t dr_pw)
+{
+    if (rf == NULL || rf->ncmd != 2U || d->fopts_len < 10U) {
+        return false;
+    }
+    for (unsigned k = 0; k < 2U; k++) {
+        const uint8_t *c = &d->fopts[5U * k];
+        if (c[0] != 0x03 || c[1] != dr_pw || (uint16_t)(c[2] | (c[3] << 8)) != rf->cmd[k].mask ||
+            c[4] != (uint8_t)(((unsigned)rf->cmd[k].cntl << 4) | 1U)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void fixed_regions(void)
+{
+    static const struct {
+        lwc_region_id_t id;
+        uint32_t ch8_hz;  /* uplink channel 8: the first of sub-band 2 (index 1) */
+        uint32_t ch72_hz; /* uplink channel 65: its 500 kHz channel */
+        uint8_t dr500;    /* the 500 kHz uplink DR (SF8): US915 DR4, AU915 DR6 */
+        uint8_t dr_sf10;  /* the uplink DR of SF10 at 125 kHz: US915 DR0, AU915 DR2 */
+        uint8_t top;      /* the fastest 125 kHz uplink DR: US915 DR3, AU915 DR5 */
+    } T[] = {
+        {LWC_REGION_US915, 903900000U, 904600000U, 4, 0, 3},
+        {LWC_REGION_AU915, 916800000U, 917500000U, 6, 2, 5},
+    };
+    for (size_t t = 0; t < sizeof T / sizeof T[0]; t++) {
+        const lwc_region_t *r = lwc_region(T[t].id);
+        lwc_ns_init(&nf);
+        CHECK(lwc_ns_region_ok(r) && lwc_ns_set_region(&nf, r) && nf.region == r && nf.subband == 1);
+        CHECK(nf.rx2_hz == 923300000U && nf.rx2_dr == 8 && nf.rx1_delay_s == 1);
+        /* RX2: a downlink DR (DR8-13) at 923.3 MHz only */
+        CHECK(lwc_ns_rx_ok(r, 1, 923300000U, 8) && lwc_ns_rx_ok(r, 1, 923300000U, 13));
+        CHECK(!lwc_ns_rx_ok(r, 1, 923300000U, 0) && !lwc_ns_rx_ok(r, 1, 923900000U, 8) && !lwc_ns_rx_ok(r, 1, 923300000U, 14));
+
+        /* join-accept: 1.0.4 with the reference's CFList (ChMask type 1), 1.0.2 without */
+        size_t i4 = 0, i2 = 0, alen = 0;
+        uint8_t jr[23], acc[40], plain[32];
+        CHECK(lwc_ns_add(&nf, 0x104, JOIN_EUI, KEY, LWC_NS_MAC_1_0_4, NULL, &i4) == LWC_NS_OK);
+        CHECK(lwc_ns_add(&nf, 0x102, JOIN_EUI, KEY, LWC_NS_MAC_1_0_2, NULL, &i2) == LWC_NS_OK);
+        join_request(jr, KEY, 0x104, 1);
+        uint32_t jn4 = nf.join_nonce;
+        CHECK(lwc_ns_join(&nf, jr, 23, acc, sizeof acc, &alen, NULL) == LWC_NS_JOIN_ACCEPT && alen == 33U);
+        lwc_aes128_t a;
+        lwc_aes128_init(&a, KEY);
+        lwc_aes128_encrypt(&a, &acc[1], plain);
+        lwc_aes128_encrypt(&a, &acc[17], &plain[16]);
+        const ref_t *rf4 = ref(r->name, "1.0.4", 1), *rf2 = ref(r->name, "1.0.2", 1);
+        CHECK(rf4 != NULL && rf2 != NULL && plain[10] == 8 && plain[11] == 1);
+        uint8_t want[16] = {0};
+        for (unsigned k = 0; rf4 != NULL && k < rf4->nmask; k++) {
+            want[2U * k] = (uint8_t)rf4->mask[k];
+            want[2U * k + 1U] = (uint8_t)(rf4->mask[k] >> 8);
+        }
+        want[15] = 1;
+        CHECK(memcmp(&plain[12], want, 16) == 0);
+        join_request(jr, KEY, 0x102, 1);
+        const uint32_t jn2 = nf.join_nonce;
+        CHECK(lwc_ns_join(&nf, jr, 23, acc, sizeof acc, &alen, NULL) == LWC_NS_JOIN_ACCEPT && alen == 17U);
+        lwc_aes128_encrypt(&a, &acc[1], plain);
+        lwc_aes128_wipe(&a);
+        CHECK(plain[10] == 8 && plain[11] == 1);
+
+        /* a plan that is not one sub-band: joins refused, the DevNonce not used up */
+        lwc_plan_t p;
+        CHECK(lwc_plan_default(&p, r));
+        p.multisf[3].enable = false;
+        lwc_ns_set_plan(&nf, &p);
+        CHECK(nf.subband == -1);
+        join_request(jr, KEY, 0x104, 2);
+        CHECK(lwc_ns_join(&nf, jr, 23, acc, sizeof acc, &alen, NULL) == LWC_NS_JOIN_NO_PLAN);
+        CHECK(lwc_plan_default(&p, r));
+        lwc_ns_set_plan(&nf, &p);
+        CHECK(nf.subband == 1);
+        jn4 = nf.join_nonce;
+        CHECK(lwc_ns_join(&nf, jr, 23, acc, sizeof acc, &alen, NULL) == LWC_NS_JOIN_ACCEPT);
+        uint8_t nwk4[16], app4[16], nwk2[16], app2[16], f[64];
+        lwc_lw_session_keys(KEY, jn4, 0, 2, nwk4, app4);
+        lwc_lw_session_keys(KEY, jn2, 0, 1, nwk2, app2);
+
+        /* the first uplink: the sub-band pair, as the reference, with the
+         * device's own rate and power (1.0.2) or "keep" (1.0.4: 0xFF) */
+        lwc_ns_uplink_t up;
+        lwc_ns_dl_t dl;
+        lwc_lw_data_t d;
+        lwc_ns_rx_t rx = {.snr10 = 50, .sf = 10, .bw_khz = 125, .now_s = 1};
+        const uint32_t a2 = nf.dev[i2].dev_addr, a4 = nf.dev[i4].dev_addr;
+        size_t n = uplink_mac(f, nwk2, a2, 0, NULL, 0, 0, false);
+        CHECK(lwc_ns_answer(&nf, lwc_ns_uplink(&nf, f, n, &up), &up, &rx, &dl) && dl.ch_mask && !dl.link_adr);
+        CHECK(lwc_lw_data_parse(dl.frame, dl.len, &d) == LWC_LW_OK && pair_ok(&d, rf2, (uint8_t)(T[t].dr_sf10 << 4)));
+        CHECK(nf.link[i2].ch_pending && !nf.link[i2].ch_done);
+        n = uplink_mac(f, nwk4, a4, 0, NULL, 0, 0, false);
+        CHECK(lwc_ns_answer(&nf, lwc_ns_uplink(&nf, f, n, &up), &up, &rx, &dl) && dl.ch_mask);
+        CHECK(lwc_lw_data_parse(dl.frame, dl.len, &d) == LWC_LW_OK && pair_ok(&d, rf4, 0xFF));
+        /* refused (one LinkADRAns per command): sent again after LWC_NS_CH_RETRY (4) uplinks */
+        static const uint8_t nack[] = {0x03, 0x06, 0x03, 0x06};
+        n = uplink_mac(f, nwk2, a2, 1, nack, sizeof nack, 0, false);
+        CHECK(!lwc_ns_answer(&nf, lwc_ns_uplink(&nf, f, n, &up), &up, &rx, &dl));
+        CHECK(!nf.link[i2].ch_pending && !nf.link[i2].ch_done && nf.link[i2].adr_wait == 0 && nf.link[i2].dr_cap == 0);
+        uint32_t fc = 2;
+        for (unsigned k = 0; k < 4U; k++) {
+            n = uplink_mac(f, nwk2, a2, fc++, NULL, 0, 0, false);
+            CHECK(!lwc_ns_answer(&nf, lwc_ns_uplink(&nf, f, n, &up), &up, &rx, &dl));
+        }
+        n = uplink_mac(f, nwk2, a2, fc++, NULL, 0, 0, false);
+        CHECK(lwc_ns_answer(&nf, lwc_ns_uplink(&nf, f, n, &up), &up, &rx, &dl) && dl.ch_mask);
+        /* accepted: done, no more pairs */
+        static const uint8_t ack[] = {0x03, 0x07, 0x03, 0x07};
+        n = uplink_mac(f, nwk2, a2, fc++, ack, sizeof ack, 0, false);
+        CHECK(!lwc_ns_answer(&nf, lwc_ns_uplink(&nf, f, n, &up), &up, &rx, &dl) && nf.link[i2].ch_done);
+        n = uplink_mac(f, nwk2, a2, fc++, NULL, 0, 0, true);
+        CHECK(lwc_ns_answer(&nf, lwc_ns_uplink(&nf, f, n, &up), &up, &rx, &dl) && dl.ack && !dl.ch_mask);
+
+        /* ADR after the pair: one LinkADRReq with the sub-band's block mask, up to the
+         * fastest 125 kHz DR. 20 dB at SF10 (floor -15 dB) less the 10 dB margin
+         * leaves 25 dB: 8 steps, the DR stops at the top 125 kHz DR. */
+        rx.snr10 = 200;
+        n = uplink_mac(f, nwk2, a2, fc++, NULL, 0, LWC_LW_FCTRL_ADR, false);
+        CHECK(lwc_ns_answer(&nf, lwc_ns_uplink(&nf, f, n, &up), &up, &rx, &dl) && dl.link_adr && !dl.ch_mask);
+        CHECK(dl.adr_dr == T[t].top);
+        CHECK(lwc_lw_data_parse(dl.frame, dl.len, &d) == LWC_LW_OK && d.fopts[0] == 0x03 &&
+              (uint16_t)(d.fopts[2] | (d.fopts[3] << 8)) == rf2->cmd[1].mask && d.fopts[4] == ((rf2->cmd[1].cntl << 4) | 1));
+        /* ADR folded into the pair: a 1.0.4 device that has not accepted the pair
+         * yet, on its first ADR uplink (session state as after a restart) */
+        memset(&nf.link[i4], 0, sizeof nf.link[i4]);
+        n = uplink_mac(f, nwk4, a4, 6, NULL, 0, LWC_LW_FCTRL_ADR, false);
+        CHECK(lwc_ns_answer(&nf, lwc_ns_uplink(&nf, f, n, &up), &up, &rx, &dl));
+        /* 25 dB spare = 8 steps: 3 to the top DR, the other 5 lower the power (index 5, the cap) */
+        CHECK(dl.ch_mask && dl.link_adr && dl.adr_dr == T[t].top && dl.adr_power == 5 &&
+              lwc_lw_data_parse(dl.frame, dl.len, &d) == LWC_LW_OK && pair_ok(&d, rf4, (uint8_t)(((unsigned)T[t].top << 4) | 5U)));
+        CHECK(nf.link[i4].ch_pending && nf.link[i4].adr_pending);
+        /* no room for both commands (LinkCheckAns 3 B + DeviceTimeAns 6 B): no half pair */
+        lwc_ns_link_t keep = nf.link[i4];
+        nf.link[i4].ch_pending = false;
+        nf.link[i4].ch_wait = 0;
+        static const uint8_t lcr[] = {0x02, 0x0D}; /* LinkCheckReq, DeviceTimeReq */
+        lwc_ns_rx_t rxt = rx;
+        rxt.time_ok = true;
+        rxt.gps_s = 1400000000U;
+        n = uplink_mac(f, nwk4, a4, 7, lcr, sizeof lcr, 0, false);
+        CHECK(lwc_ns_answer(&nf, lwc_ns_uplink(&nf, f, n, &up), &up, &rxt, &dl) && dl.link_check && dl.device_time &&
+              !dl.ch_mask && !nf.link[i4].ch_pending);
+        nf.link[i4] = keep;
+
+        /* back-off: each refusal doubles the wait (4, then 8 uplinks) */
+        memset(&nf.link[i2], 0, sizeof nf.link[i2]);
+        n = uplink_mac(f, nwk2, a2, fc++, NULL, 0, 0, false);
+        CHECK(lwc_ns_answer(&nf, lwc_ns_uplink(&nf, f, n, &up), &up, &rx, &dl) && dl.ch_mask);
+        n = uplink_mac(f, nwk2, a2, fc++, nack, sizeof nack, 0, false);
+        (void)lwc_ns_answer(&nf, lwc_ns_uplink(&nf, f, n, &up), &up, &rx, &dl);
+        CHECK(nf.link[i2].ch_wait == 4 && nf.link[i2].ch_tries == 1);
+        for (unsigned k = 0; k < 4U; k++) {
+            n = uplink_mac(f, nwk2, a2, fc++, NULL, 0, 0, false);
+            (void)lwc_ns_answer(&nf, lwc_ns_uplink(&nf, f, n, &up), &up, &rx, &dl);
+        }
+        n = uplink_mac(f, nwk2, a2, fc++, NULL, 0, 0, false);
+        CHECK(lwc_ns_answer(&nf, lwc_ns_uplink(&nf, f, n, &up), &up, &rx, &dl) && dl.ch_mask);
+        n = uplink_mac(f, nwk2, a2, fc++, nack, sizeof nack, 0, false);
+        (void)lwc_ns_answer(&nf, lwc_ns_uplink(&nf, f, n, &up), &up, &rx, &dl);
+        CHECK(nf.link[i2].ch_wait == 8 && nf.link[i2].ch_tries == 2);
+        n = uplink_mac(f, nwk2, a2, fc++, ack, sizeof ack, 0, false); /* a late answer is not taken */
+        (void)lwc_ns_answer(&nf, lwc_ns_uplink(&nf, f, n, &up), &up, &rx, &dl);
+        CHECK(!nf.link[i2].ch_done);
+        nf.link[i2].ch_done = true;
+
+        /* another sub-band on the radio: every device gets the new pair (reference masks of sub-band 1) */
+        CHECK(lwc_plan_subband(&p, r, 0));
+        lwc_ns_set_plan(&nf, &p);
+        CHECK(nf.subband == 0 && !nf.link[i2].ch_done && nf.link[i2].ch_wait == 0);
+        n = uplink_mac(f, nwk2, a2, fc++, NULL, 0, 0, false);
+        CHECK(lwc_ns_answer(&nf, lwc_ns_uplink(&nf, f, n, &up), &up, &rx, &dl) && dl.ch_mask);
+        CHECK(lwc_lw_data_parse(dl.frame, dl.len, &d) == LWC_LW_OK &&
+              pair_ok(&d, ref(r->name, "1.0.2", 0), (uint8_t)(T[t].dr_sf10 << 4)));
+        lwc_ns_set_plan(&nf, &p); /* the same sub-band again: nothing reset */
+        CHECK(nf.link[i2].ch_pending);
+
+        /* downlink timing: RX1 on downlink channel (uplink % 8) at 500 kHz, RX2 923.3 MHz DR8 (SF12, 500 kHz) */
+        lwc_txpk_t tx;
+        lwc_ns_downlink(r, false, 1000, T[t].ch8_hz, 10, 125, LWC_NS_RX1_DELAY_US, 923300000U, 8, 14, NULL, 0, &tx);
+        CHECK(tx.freq_hz == 923300000U && tx.sf == 10 && tx.bw_khz == 500 && tx.tmst == 1000 + 1000000U);
+        lwc_ns_downlink(r, false, 0, T[t].ch8_hz + 200000U, 7, 125, LWC_NS_RX1_DELAY_US, 923300000U, 8, 14, NULL, 0, &tx);
+        CHECK(tx.freq_hz == 923900000U && tx.sf == 7 && tx.bw_khz == 500);
+        lwc_ns_downlink(r, false, 0, T[t].ch72_hz, 8, 500, LWC_NS_RX1_DELAY_US, 923300000U, 8, 14, NULL, 0, &tx);
+        CHECK(tx.freq_hz == 923900000U && tx.sf == 7 && tx.bw_khz == 500); /* DR(SF8/500) -> DR13 */
+        lwc_ns_downlink(r, true, 0, T[t].ch8_hz, 10, 125, LWC_NS_RX1_DELAY_US, 923300000U, 8, 14, NULL, 0, &tx);
+        CHECK(tx.freq_hz == 923300000U && tx.sf == 12 && tx.bw_khz == 500 && tx.tmst == 2000000U);
+        lwc_ns_downlink(r, true, 0, 0, 0, 0, 0, 923300000U, 3, 14, NULL, 0, &tx); /* not a downlink DR: DR8 */
+        CHECK(tx.sf == 12 && tx.bw_khz == 500);
+        lwc_ns_downlink_at(r, 5000000U, 923300000U, 10, 14, NULL, 0, &tx); /* class C */
+        CHECK(tx.tmst == 5000000U && tx.freq_hz == 923300000U && tx.sf == 10 && tx.bw_khz == 500);
+        CHECK(lwc_ns_dr(r, 8, 500) == T[t].dr500);
+
+        /* sizes: every RX1 DR an uplink can lead to, and every RX2 DR, has room */
+        for (int dr = 0; dr < 8; dr++) {
+            if (r->dr[dr].kind != LWC_DR_LORA) {
+                continue;
+            }
+            CHECK(lwc_ns_max_frm(r, lwc_region_rx1_dr(r, dr, 0, false)) > 0U);
+        }
+        for (uint8_t dr = 8; dr <= 13U; dr++) {
+            CHECK(lwc_ns_max_frm(r, dr) > 0U);
+        }
+    }
+    const lwc_region_t *cn = lwc_region(LWC_REGION_CN470);
+    lwc_ns_init(&nf);
+    CHECK(!lwc_ns_region_ok(cn) && !lwc_ns_set_region(&nf, cn) && nf.region == EU && !lwc_ns_rx_ok(cn, 1, cn->rx2_hz, 0));
+    CHECK(!lwc_ns_region_ok(NULL) && lwc_ns_region_ok(EU));
 }
 
 int main(void)
@@ -681,6 +924,7 @@ int main(void)
     adr_step();
     adr_flow();
     adr_fixed_dr();
+    fixed_regions();
 
     /* routing */
     CHECK(lwc_ns_forward(LWC_MODE_TTN, true) && lwc_ns_forward(LWC_MODE_TTN, false));
@@ -692,11 +936,11 @@ int main(void)
 
     /* downlink timing */
     lwc_txpk_t tx;
-    lwc_ns_downlink(false, 1000, 868100000, 9, 125, LWC_NS_JOIN_DELAY_US, EU->rx2_hz, 0, 13, acc, 33, &tx);
+    lwc_ns_downlink(EU, false, 1000, 868100000, 9, 125, LWC_NS_JOIN_DELAY_US, EU->rx2_hz, 0, 13, acc, 33, &tx);
     CHECK(tx.tmst == 5001000U && tx.freq_hz == 868100000U && tx.sf == 9 && tx.ipol && tx.ncrc && tx.size == 33);
-    lwc_ns_downlink(true, 0xFFFFFFFFU, 868100000, 9, 125, LWC_NS_RX1_DELAY_US, EU->rx2_hz, 0, 13, NULL, 0, &tx);
+    lwc_ns_downlink(EU, true, 0xFFFFFFFFU, 868100000, 9, 125, LWC_NS_RX1_DELAY_US, EU->rx2_hz, 0, 13, NULL, 0, &tx);
     CHECK(tx.tmst == 1999999U && tx.freq_hz == EU->rx2_hz && tx.sf == 12 && tx.bw_khz == 125);
-    lwc_ns_downlink(true, 0, 868100000, 9, 125, 3000000U, 869525000U, 3, 13, NULL, 0, &tx);
+    lwc_ns_downlink(EU, true, 0, 868100000, 9, 125, 3000000U, 869525000U, 3, 13, NULL, 0, &tx);
     CHECK(tx.tmst == 4000000U && tx.freq_hz == 869525000U && tx.sf == 9); /* RX2 at DR3 */
 
     if (failures != 0) {

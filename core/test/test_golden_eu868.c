@@ -129,7 +129,7 @@ static void grid(void)
         for (uint8_t dr = 0; dr <= 5; dr++) {
             for (uint8_t pw = 0; pw <= 5; pw += 5) {
                 uint8_t ndr, npw;
-                lwc_ns_adr(snr, dr, pw, LWC_NS_ADR_MAX_DR, LWC_NS_ADR_MAX_POWER, &ndr, &npw);
+                lwc_ns_adr(EU, snr, dr, pw, LWC_NS_ADR_MAX_DR, LWC_NS_ADR_MAX_POWER, &ndr, &npw);
                 emit("adr snr=%d dr=%u pw=%u -> dr=%u pw=%u\n", snr, dr, pw, ndr, npw);
             }
         }
@@ -147,7 +147,7 @@ static void grid(void)
     for (int rx2 = 0; rx2 <= 1; rx2++) {
         for (size_t s = 0; s < 3; s++) {
             lwc_txpk_t t;
-            lwc_ns_downlink(rx2 != 0, 1000000U, 868300000U, sfs[s], 125, 1000000U, 869525000U, 0, 14, KEY, 12, &t);
+            lwc_ns_downlink(EU, rx2 != 0, 1000000U, 868300000U, sfs[s], 125, 1000000U, 869525000U, 0, 14, KEY, 12, &t);
             char tag[32];
             snprintf(tag, sizeof tag, "downlink rx2=%d sf=%u", rx2, sfs[s]);
             txpk(tag, &t);

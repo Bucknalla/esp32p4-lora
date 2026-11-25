@@ -27,6 +27,7 @@
 #include "logbuf.h"
 #include "lwc/form.h"
 #include "lwc/netaddr.h"
+#include "lwc/ns.h"
 #include "lwc/session.h"
 #include "lwip/sockets.h"
 #include "ota.h"
@@ -843,10 +844,12 @@ static esp_err_t api_radio_post(httpd_req_t *req)
         }
         r = radioplan_set_rx(&w);
         if (r == ESP_ERR_INVALID_ARG) {
+            const lwc_region_t *rg = radioplan_region();
             return send_status(req, "400 Bad Request",
-                               radioplan_region()->id == LWC_REGION_EU868
-                                   ? "RX1 delay 1-15 s; RX2 a transmit frequency in 863-870 MHz; RX2 DR0-DR5\n"
-                                   : "RX1 delay 1-15 s; RX2 the region's default frequency; RX2 DR0-DR5\n");
+                               rg->id == LWC_REGION_EU868 ? "RX1 delay 1-15 s; RX2 a transmit frequency in 863-870 MHz; RX2 DR0-DR5\n"
+                               : !lwc_ns_region_ok(rg)    ? "the local server does not serve this region\n"
+                               : rg->fixed                ? "RX1 delay 1-15 s; RX2 923.3 MHz; RX2 DR8-DR13\n"
+                                                          : "RX1 delay 1-15 s; RX2 the region's default frequency; RX2 DR0-DR5\n");
         }
         return r == ESP_OK ? send_status(req, "200 OK", "saved: applies to devices that join from now on\n")
                            : send_status(req, "500 Internal Server Error", esp_err_to_name(r));

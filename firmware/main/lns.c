@@ -373,8 +373,8 @@ static esp_err_t save_cnt(size_t i)
     return save_blob(k, &c, sizeof c);
 }
 
-/* The local server serves the dynamic-channel regions only (ADR-0025): in
- * US915, AU915 and CN470 it handles no frame, so hybrid mode still forwards
+/* The local server serves the dynamic-channel regions, US915 and AU915
+ * (ADR-0026): in CN470 it handles no frame, so hybrid mode still forwards
  * every frame. */
 static bool s_served;
 
@@ -499,10 +499,10 @@ static uint16_t send_down(const radio_pkt_t *p, const uint8_t *frame, size_t len
     if (req.token == 0U) {
         req.token = ++s_tx_token; /* 0: no request */
     }
-    lwc_ns_downlink(false, p->tmst, p->freq_hz, p->sf, p->bw_khz, delay_us, rx2_hz, rx2_dr, DOWN_POWER_DBM, frame, len,
+    lwc_ns_downlink(s_ns.region, false, p->tmst, p->freq_hz, p->sf, p->bw_khz, delay_us, rx2_hz, rx2_dr, DOWN_POWER_DBM, frame, len,
                     &req.pk);
     lwc_txpk_t rx2;
-    lwc_ns_downlink(true, p->tmst, p->freq_hz, p->sf, p->bw_khz, delay_us, rx2_hz, rx2_dr, DOWN_POWER_DBM, NULL, 0,
+    lwc_ns_downlink(s_ns.region, true, p->tmst, p->freq_hz, p->sf, p->bw_khz, delay_us, rx2_hz, rx2_dr, DOWN_POWER_DBM, NULL, 0,
                     &rx2);
     req.alt = (radio_tx_alt_t){.on = true, .tmst = rx2.tmst, .freq_hz = rx2.freq_hz, .sf = rx2.sf,
                                .bw_khz = rx2.bw_khz};
@@ -653,13 +653,18 @@ static bool handle(const radio_pkt_t *p)
             return handled;
         }
         handled = r == LWC_NS_JOIN_REPLAY;
-        if (r == LWC_NS_JOIN_REPLAY || r == LWC_NS_JOIN_BAD_MIC) {
+        if (r == LWC_NS_JOIN_REPLAY || r == LWC_NS_JOIN_BAD_MIC || r == LWC_NS_JOIN_NO_PLAN) {
             lwc_lw_join_req_t jr;
             (void)lwc_lw_join_req_parse(p->payload, p->size, &jr);
             ESP_LOGW(TAG, "join from %s refused: %s", eui_str(jr.dev_eui, e),
-                     r == LWC_NS_JOIN_REPLAY ? "DevNonce already used" : "MIC (wrong AppKey?)");
+                     r == LWC_NS_JOIN_REPLAY  ? "DevNonce already used"
+                     : r == LWC_NS_JOIN_BAD_MIC ? "MIC (wrong AppKey?)"
+                                                : "the channel plan is not one sub-band (Radio tab)");
         }
     } else if (mt == LWC_LW_UNCONFIRMED_UP || mt == LWC_LW_CONFIRMED_UP) {
+        static lwc_plan_t plan;
+        radioplan_get(&plan); /* US915/AU915: the sub-band the radio listens on now (ADR-0026) */
+        lwc_ns_set_plan(&s_ns, &plan);
         const lwc_ns_up_res_t r = lwc_ns_uplink(&s_ns, p->payload, p->size, &up);
         if (r == LWC_NS_UP_OK || r == LWC_NS_UP_RETRANS) {
             handled = true;
@@ -813,7 +818,7 @@ static uint16_t send_c(size_t idx, const lwc_ns_dl_t *dl, uint32_t tmst, uint32_
     if (req.token == 0U) {
         req.token = ++s_tx_token;
     }
-    lwc_ns_downlink_at(tmst, freq_hz, dr, DOWN_POWER_DBM, dl->frame, dl->len, &req.pk);
+    lwc_ns_downlink_at(s_ns.region, tmst, freq_hz, dr, DOWN_POWER_DBM, dl->frame, dl->len, &req.pk);
     char e[17];
     infl_put(req.token, idx, sent_res); /* before the TX task can answer */
     if (g_radio_tx_req == NULL || xQueueSend(g_radio_tx_req, &req, pdMS_TO_TICKS(10)) != pdTRUE) {
@@ -880,8 +885,9 @@ static void class_c_service(void)
             if (lwc_ns_class_c_down(&s_ns, i, &app, &dl)) {
                 if (save_cnt(i) == ESP_OK) { /* the counter, before the frame goes out */
                     tmst = (uint32_t)atomic_load(&g_radio_counter) + CLASS_C_LEAD_US;
-                    end = tmst + lwc_lora_airtime_us((uint8_t)(12U - d->rx2_dr), 125, 5, 8, (uint16_t)dl.len,
-                                                     false, false);
+                    lwc_txpk_t at; /* its SF and bandwidth, as the radio gets them */
+                    lwc_ns_downlink_at(s_ns.region, tmst, d->rx2_hz, d->rx2_dr, 0, NULL, 0, &at);
+                    end = tmst + lwc_lora_airtime_us(at.sf, at.bw_khz, 5, 8, (uint16_t)dl.len, false, false);
                     lwc_dlq_item_t next = *h;
                     next.tx++;
                     next.fcnt = dl.fcnt;
@@ -966,7 +972,7 @@ esp_err_t lns_start(QueueHandle_t radio_q, QueueHandle_t *fwd_q)
         *fwd_q = s_fwd_q;
     }
     if (!s_served) {
-        ESP_LOGW(TAG, "local network server: %s has a fixed channel plan, not served yet: no frame handled",
+        ESP_LOGW(TAG, "local network server: %s is not served (its original plan has no CFList): no frame handled",
                  radioplan_region()->name);
     }
     ESP_LOGI(TAG, "local network server: %s mode, NetID %06X%s", gwmode_name(gwmode()),

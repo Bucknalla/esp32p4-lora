@@ -705,12 +705,19 @@ function renderRadio(p) {
   $('#region').disabled = ro;
   $('#card').disabled = ro;
   $('#subband').disabled = ro;
-  /* the local server serves the dynamic-channel regions only (ADR-0025) */
-  $('#rx-form').hidden = p.fixed;
+  /* the local server: the dynamic regions, US915 and AU915 (ADR-0026); not CN470 */
+  $('#rx-form').hidden = !p.local;
   $('#spec-cap .k-rx2').hidden = p.fixed;
-  $('#rx-fixed').hidden = !p.fixed;
+  $('#rx-fixed').hidden = p.local;
   $('#rx-fixed').textContent = 'The local server does not serve ' + p.region
-    + ' yet (fixed channel plan): it sends no join-accepts, and frames go to the network server only.';
+    + ' (its original channel plan has no CFList): it sends no join-accepts, and frames go to the network server only.';
+  /* RX2 data rates: DR0-5 at 125 kHz, or the 500 kHz downlink DRs of US915 and AU915 (DR8-13 = SF12-7) */
+  const drSel = $('#rx-dr');
+  if (drSel.dataset.fixed !== String(p.fixed)) {
+    const drs = p.fixed ? [8, 9, 10, 11, 12, 13] : [0, 1, 2, 3, 4, 5];
+    drSel.replaceChildren(...drs.map((d) => el('option', { value: String(d), text: 'DR' + d + ' (SF' + (p.fixed ? 20 - d : 12 - d) + (p.fixed ? ', 500 kHz)' : ')') })));
+    drSel.dataset.fixed = String(p.fixed);
+  }
   /* outside EU868 the band edges are not built in: RX2 stays the region's default */
   const rxf = $('#rx-f');
   rxf.readOnly = !p.region_tx;
@@ -1062,7 +1069,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#subband-form').addEventListener('submit', async (ev) => {
     ev.preventDefault();
     const sb = $('#subband').value;
-    if (!confirm('Listen on sub-band ' + sb + '? The radio restarts (about 3 s).')) return;
+    if (!confirm('Listen on sub-band ' + sb + '? The radio restarts (about 3 s). Your own devices that use the old sub-band are no longer heard: they must join again.')) return;
     try { toast(await post('/api/radio/plan', new URLSearchParams({ subband: sb }))); subbandClean(); refreshRadio(); } catch (e) { toast(e.message, true); }
   });
 
