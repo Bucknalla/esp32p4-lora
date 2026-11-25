@@ -244,23 +244,36 @@
     <div id="tab-radio" class="tab" hidden>
       <div class="title-row">
         <h1>Radio</h1>
-        <span class="chips"><span id="region-chip" class="chip"></span><span id="plan-src" class="chip"></span></span>
+        <span class="chips"><span id="region-chip" class="chip"></span><span id="card-chip" class="chip"></span><span id="plan-src" class="chip"></span></span>
       </div>
       <form id="region-form" class="panel inline" autocomplete="off">
+        <label>Concentrator card <select name="card" id="card">
+          <option value="868">868 MHz (SX1257)</option>
+          <option value="915">915 MHz (SX1257)</option>
+          <option value="433">433 MHz (SX1255)</option>
+          <option value="470">470 MHz (SX1255)</option>
+        </select></label>
         <label>Region <select name="region" id="region">
           <option value="EU868">EU868: Europe, UK</option>
           <option value="RU864">RU864: Russia</option>
           <option value="IN865">IN865: India</option>
+          <option value="US915">US915: USA, Canada</option>
+          <option value="AU915">AU915: Australia, South America</option>
           <option value="KR920">KR920: South Korea</option>
           <option value="AS923-1">AS923-1: Japan, Singapore, others</option>
           <option value="AS923-2">AS923-2: Indonesia, Vietnam</option>
           <option value="AS923-3">AS923-3: Philippines, Cuba</option>
           <option value="AS923-4">AS923-4: Israel</option>
-          <option value="US915" disabled>US915: not supported yet</option>
-          <option value="AU915" disabled>AU915: not supported yet</option>
+          <option value="CN470">CN470: China</option>
+          <option value="EU433">EU433: Europe, 433 MHz</option>
         </select></label>
-        <p class="note" id="region-note">The regional parameters the radio, your devices and the network server use. Only EU868 transmits; the other regions receive only, until their national rules are in place.</p>
+        <p class="note" id="region-note">Set the card to the band printed on your concentrator: the firmware cannot tell an 868 MHz card from a 915 MHz one. The region list shows only what that card can receive. Only EU868 on the 868 MHz card transmits; every other region receives only, until its national rules are in place.</p>
         <div class="actions admin"><button type="submit" class="primary" disabled>Save and restart</button></div>
+      </form>
+      <form id="subband-form" class="panel inline" autocomplete="off" hidden>
+        <label>Sub-band <select name="subband" id="subband"></select></label>
+        <p class="note">This region has a fixed channel plan. The radio listens on one sub-band: 8 channels, and in US915 and AU915 one 500 kHz channel. Use the sub-band of your devices and network server (TTN: 2 in US915 and AU915, 11 in CN470).</p>
+        <div class="actions admin"><button type="submit" class="primary" disabled>Save and restart the radio</button></div>
       </form>
       <figure class="spectrum">
         <div class="spec-scroll"><svg id="spectrum" viewBox="0 0 1000 220" role="img" aria-labelledby="spec-cap"></svg></div>
@@ -297,6 +310,7 @@
         </div>
         <div class="panel">
           <h2>Receive windows for your devices</h2>
+          <p class="note" id="rx-fixed" hidden></p>
           <form id="rx-form" class="stack" autocomplete="off">
             <label>RX1 delay <span class="unit"><input name="rx1_delay" id="rx-d" type="number" min="1" max="15" step="1"> s</span></label>
             <label>RX2 frequency <span class="unit"><input name="rx2_mhz" id="rx-f" type="number" min="863" max="870" step="0.025"> MHz</span></label>

@@ -28,6 +28,7 @@ static void emit(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
 #include "lwc/region.h"
 #define EU lwc_region(LWC_REGION_EU868)
+#define C868 lwc_card(LWC_CARD_868)
 static void emit(const char *fmt, ...)
 {
     va_list ap;
@@ -112,7 +113,7 @@ static void grid(void)
     lwc_plan_t p;
     (void)lwc_plan_default(&p, EU);
     uint8_t packed[LWC_PLAN_PACKED];
-    emit("plan_check -> %d\n", (int)lwc_plan_check(&p, EU));
+    emit("plan_check -> %d\n", (int)lwc_plan_check(&p, EU, C868));
     if (lwc_plan_pack(&p, packed, sizeof packed)) {
         hex("plan_pack ", packed, sizeof packed);
     }

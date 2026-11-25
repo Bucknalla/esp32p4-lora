@@ -183,13 +183,17 @@ typedef struct {
 lwc_lbs_err_t lwc_lbs_parse_router_config(const char *json, size_t len, lwc_lbs_router_config_t *out);
 
 /** The router_config's DRs give every LoRa data rate of region `r` the same
- *  SF and bandwidth (downlink-only: DR8 and up in the fixed plans). Its
- *  `region` name is not checked: servers spell it in their own ways. */
+ *  SF and bandwidth. The DNONLY flag is not checked: for US915 The Things
+ *  Stack sends 0 on DR8-13 and ChirpStack 1 (0 on DR12, which repeats DR4's
+ *  SF8/500 kHz). Its `region` name is not checked: servers spell it in their
+ *  own ways. */
 bool lwc_lbs_router_drs_ok(const lwc_lbs_router_config_t *c, const lwc_region_t *r);
 
 /** The radio plan in a router_config (frequencies and channels only; ADR-0017).
- *  False when it has no sx1301_conf or the plan fails lwc_plan_check for `r`. */
-bool lwc_lbs_router_plan(const lwc_lbs_router_config_t *c, const lwc_region_t *r, lwc_plan_t *out);
+ *  False when it has no sx1301_conf or the plan fails lwc_plan_check for `r`
+ *  on `card`. */
+bool lwc_lbs_router_plan(const lwc_lbs_router_config_t *c, const lwc_region_t *r, const lwc_card_t *card,
+                         lwc_plan_t *out);
 
 #ifdef __cplusplus
 }

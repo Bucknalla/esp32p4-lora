@@ -373,10 +373,15 @@ static esp_err_t save_cnt(size_t i)
     return save_blob(k, &c, sizeof c);
 }
 
+/* The local server serves the dynamic-channel regions only (ADR-0025): in
+ * US915, AU915 and CN470 it handles no frame, so hybrid mode still forwards
+ * every frame. */
+static bool s_served;
+
 static void load(void)
 {
     lwc_ns_init(&s_ns);
-    (void)lwc_ns_set_region(&s_ns, radioplan_region());
+    s_served = lwc_ns_set_region(&s_ns, radioplan_region());
     lwc_plan_t plan;
     radioplan_get(&plan);
     lwc_ns_set_plan(&s_ns, &plan);
@@ -426,9 +431,9 @@ static void load(void)
         const lwc_ns_dev_t *dv = &s_ns.dev[i];
         const uint8_t rx1 = dv->rx1_delay_s != 0U ? dv->rx1_delay_s : 1U;
         const uint32_t rx2 = dv->rx2_hz != 0U ? dv->rx2_hz : s_ns.region->rx2_hz;
-        if (dv->joined && !lwc_ns_rx_ok(s_ns.region, rx1, rx2, dv->rx2_dr)) {
+        if (dv->joined && (!s_served || !lwc_ns_rx_ok(s_ns.region, rx1, rx2, dv->rx2_dr))) {
             /* joined in another region (ADR-0024): not served until it joins again here */
-            ESP_LOGW(TAG, "device %u joined outside %s: it must join again", (unsigned)i, s_ns.region->name);
+            ESP_LOGW(TAG, "device %u joined outside %s: it must join again", (unsigned)i, radioplan_region()->name);
             s_ns.dev[i].joined = false;
         }
         key_of(k, 'x', i);
@@ -584,7 +589,7 @@ static void ev_radio(mqttc_ev_t *ev, const radio_pkt_t *p, const lwc_ns_dev_t *d
 
 static bool handle(const radio_pkt_t *p)
 {
-    if (p->stat != 1) {
+    if (p->stat != 1 || !s_served) {
         return false;
     }
     static uint8_t acc[40];
@@ -959,6 +964,10 @@ esp_err_t lns_start(QueueHandle_t radio_q, QueueHandle_t *fwd_q)
         s_fwd_q = xQueueCreate(RADIO_QUEUE_LEN, sizeof(radio_pkt_t));
         ESP_RETURN_ON_FALSE(s_fwd_q != NULL, ESP_ERR_NO_MEM, TAG, "forward queue");
         *fwd_q = s_fwd_q;
+    }
+    if (!s_served) {
+        ESP_LOGW(TAG, "local network server: %s has a fixed channel plan, not served yet: no frame handled",
+                 radioplan_region()->name);
     }
     ESP_LOGI(TAG, "local network server: %s mode, NetID %06X%s", gwmode_name(gwmode()),
              (unsigned)LWC_NS_NET_ID, lns_tx() ? "" : ", DRY RUN (local transmit off)");

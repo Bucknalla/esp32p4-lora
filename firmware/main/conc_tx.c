@@ -247,7 +247,8 @@ static void admit(const radio_tx_req_t *r)
         reply(r, RADIO_TX_GPS, 0, false);
         return;
     }
-    if (!lwc_region_tx_enabled(radioplan_region())) { /* ADR-0024: receive-only outside EU868 */
+    /* ADR-0024, ADR-0025: receive-only outside EU868 and with any card but the 868 MHz one */
+    if (!lwc_region_tx_enabled(radioplan_region()) || radioplan_card()->id != LWC_CARD_868) {
         reply(r, RADIO_TX_REGION, 0, false);
         return;
     }

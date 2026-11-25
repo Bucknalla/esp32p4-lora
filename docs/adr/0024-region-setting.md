@@ -1,6 +1,8 @@
 # ADR-0024: The region as a gateway setting
 
-- Status: accepted (R2: host-tested; on the board: EU868 unchanged, RU864 receive-only, TX refused)
+- Status: accepted (R2: host-tested; on the board: EU868 unchanged, RU864 receive-only, TX refused).
+  Extended by ADR-0025: the concentrator card setting, US915/AU915/CN470 (one
+  sub-band, receive-only), EU433; the transmit chain is off outside EU868.
 - Date: 2026-11-25
 
 ## Context

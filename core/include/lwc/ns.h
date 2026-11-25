@@ -121,10 +121,12 @@ typedef struct {
 /** Empty table; region EU868, its default plan's CFList and receive windows. */
 void lwc_ns_init(lwc_ns_t *ns);
 
-/** Region `r` (a dynamic-channel region; false for US915, AU915 or NULL):
- *  its default plan's CFList and default receive windows (RX1 1 s, the
- *  region's RX2). Call before lwc_ns_set_plan and lwc_ns_set_rx. Sessions
- *  already in the table keep what their join-accept said. */
+/** Region `r` (a dynamic-channel region): its default plan's CFList and
+ *  default receive windows (RX1 1 s, the region's RX2). Call before
+ *  lwc_ns_set_plan and lwc_ns_set_rx. Sessions already in the table keep what
+ *  their join-accept said. False, and nothing changed, for a fixed-channel
+ *  region (US915, AU915, CN470: not served by the local server yet, ADR-0025)
+ *  or NULL. */
 bool lwc_ns_set_region(lwc_ns_t *ns, const lwc_region_t *r);
 
 /** The CFList of new join-accepts follows `plan` (ADR-0017). Devices already

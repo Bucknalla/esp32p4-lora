@@ -30,6 +30,8 @@ typedef enum {
     LWC_REGION_IN865,
     LWC_REGION_KR920,
     LWC_REGION_RU864,
+    LWC_REGION_CN470,
+    LWC_REGION_EU433,
     LWC_REGIONS
 } lwc_region_id_t;
 
@@ -73,8 +75,9 @@ typedef struct {
     lwc_region_dr_t dr[16];
     int8_t rx1_dr[16][8];  /* [uplink DR][RX1DROffset]: the RX1 DR, -1 none */
     uint8_t rx1_dwell_min_dr; /* with the downlink dwell limit, RX1 DR is at least this (AS923: 2) */
-    bool fixed;            /* 64 + 8 uplink channels, 8 downlink (US915, AU915) */
+    bool fixed;            /* a fixed channel grid: US915, AU915 (64 + 8 uplink, 8 downlink), CN470 (96, 48) */
     lwc_region_grid_t up125, up500, down; /* fixed plans */
+    uint8_t n_up125, n_up500, n_down; /* channels on each grid; RX1: uplink channel % n_down */
     uint8_t n_default;     /* the others: default channels */
     lwc_region_ch_t default_ch[3];
 } lwc_region_t;
@@ -96,24 +99,28 @@ size_t lwc_region_max_n(const lwc_region_t *r, int dr, bool dwell);
  *  device has the 400 ms downlink dwell limit (TxParamSetupReq). */
 int lwc_region_rx1_dr(const lwc_region_t *r, int up_dr, uint8_t offset, bool dwell);
 
-/** Fixed plans: the uplink channel index (0-63 at 125 kHz, 64-71 at
- *  500 kHz) of a frequency and bandwidth, or -1. Always -1 for the others. */
+/** Fixed plans: the uplink channel index (0..n_up125-1 at 125 kHz, then the
+ *  500 kHz ones) of a frequency and bandwidth, or -1. Always -1 for the others. */
 int lwc_region_channel(const lwc_region_t *r, uint32_t hz, uint16_t bw_khz);
 
 /** RX1 frequency for an uplink: the same frequency, or in the fixed plans
- *  downlink channel (uplink channel % 8). 0 if the uplink is not on a
+ *  downlink channel (uplink channel % n_down). 0 if the uplink is not on a
  *  channel of the plan. */
 uint32_t lwc_region_rx1_hz(const lwc_region_t *r, uint32_t up_hz, uint16_t up_bw_khz);
 
 /** EIRP of a TXPower index (MaxEIRP - 2 * idx), or INT8_MIN if not defined. */
 int8_t lwc_region_tx_power_dbm(const lwc_region_t *r, uint8_t idx);
 
-/** Fixed plans, LoRaWAN 1.0.3+: the join-accept CFList (type 1, channel
+/** Fixed plans: the number of sub-bands (groups of 8 consecutive 125 kHz
+ *  uplink channels: 8 in US915 and AU915, 12 in CN470); 0 for the others. */
+uint8_t lwc_region_subbands(const lwc_region_t *r);
+
+/** US915, AU915, LoRaWAN 1.0.3+: the join-accept CFList (type 1, channel
  *  masks) that enables sub-band `sb` (0-7: channels 8sb..8sb+7 and 64+sb).
  *  False for the other regions or a bad sub-band. */
 bool lwc_region_cflist_subband(const lwc_region_t *r, uint8_t sb, uint8_t out[16]);
 
-/** Fixed plans: the two LinkADRReq masks that move a device from all
+/** US915, AU915: the two LinkADRReq masks that move a device from all
  *  channels to sub-band `sb`: ChMaskCntl 7 (125 kHz off) with the 500 kHz
  *  channel, then the 16-channel block holding the sub-band. False for the
  *  other regions or a bad sub-band. */
@@ -123,6 +130,49 @@ bool lwc_region_link_adr_subband(const lwc_region_t *r, uint8_t sb, uint16_t mas
  *  receive-only until its national rules (duty cycle, dwell time, LBT, power
  *  limits) are in place; the radio refuses every frame there. */
 bool lwc_region_tx_enabled(const lwc_region_t *r);
+
+/* ---- Concentrator cards (ADR-0025) -------------------------------------------
+ * A card is built for one band: its radios (SX1257 for 868/915 MHz, SX1255 for
+ * 433/470 MHz) and its filters. The firmware cannot tell an 868 card from a
+ * 915 card (the same radio), so the card is a setting. */
+
+typedef enum {
+    LWC_CARD_868 = 0, /* the default: what the firmware assumed before */
+    LWC_CARD_915,
+    LWC_CARD_433,
+    LWC_CARD_470,
+    LWC_CARDS
+} lwc_card_id_t;
+
+typedef enum {
+    LWC_RADIO_SX1257 = 0,
+    LWC_RADIO_SX1255,
+} lwc_radio_chip_t;
+
+typedef struct {
+    lwc_card_id_t id;
+    const char *name;      /* "868", "915", "433", "470" */
+    uint32_t lo_hz, hi_hz; /* every channel edge must be inside */
+    uint8_t radio;         /* lwc_radio_chip_t */
+    int16_t rssi_offset_db;
+} lwc_card_t;
+
+/** The card, or NULL for an unknown id. */
+const lwc_card_t *lwc_card(lwc_card_id_t id);
+
+/** "868", "915", "433", "470". */
+bool lwc_card_parse(const char *name, lwc_card_id_t *out);
+
+/** A channel at `hz`, `bw_hz` wide, is inside the card's band. */
+bool lwc_card_fits(const lwc_card_t *c, uint32_t hz, uint32_t bw_hz);
+
+/** Every channel of the region (uplink, downlink, RX2) is inside the card's
+ *  band: the card can serve the region. */
+bool lwc_card_region_ok(const lwc_card_t *c, const lwc_region_t *r);
+
+/** The card that serves the region (each region has exactly one), or NULL.
+ *  For a stored region without a stored card (an upgrade from ADR-0024). */
+const lwc_card_t *lwc_card_for_region(const lwc_region_t *r);
 
 #ifdef __cplusplus
 }
