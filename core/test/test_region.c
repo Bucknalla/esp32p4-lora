@@ -1,7 +1,5 @@
 #include "lwc/region.h"
 
-#include "lwc/ns.h"
-
 #include <stdio.h>
 #include <string.h>
 
@@ -28,7 +26,6 @@ static void spot_values(void)
     CHECK(eu->dr[0].sf == 12 && eu->dr[0].bw_khz == 125 && lwc_region_max_n(eu, 0, false) == 51U);
     CHECK(lwc_region_max_n(eu, 3, false) == 115U && lwc_region_max_n(eu, 5, false) == 222U);
     CHECK(eu->dr[6].sf == 7 && eu->dr[6].bw_khz == 250 && eu->dr[7].kind == LWC_DR_FSK);
-    CHECK(eu->rx2_hz == LWC_NS_RX2_FREQ_HZ && eu->dr[eu->rx2_dr].sf == LWC_NS_RX2_SF); /* the NS macros agree */
     CHECK(eu->n_default == 3 && eu->default_ch[0].hz == 868100000U && eu->default_ch[2].hz == 868500000U);
     CHECK(lwc_region_rx1_dr(eu, 5, 2, false) == 3 && lwc_region_rx1_dr(eu, 0, 3, false) == 0);
     CHECK(lwc_region_rx1_dr(eu, 0, 0, true) == 0); /* no dwell floor in EU868 */
@@ -171,8 +168,30 @@ static void subbands(void)
     CHECK(!lwc_region_cflist_subband(R(LWC_REGION_US915), 8, cf) && !lwc_region_link_adr_subband(R(LWC_REGION_US915), 8, m, cn));
 }
 
+/* ADR-0024: what the server code assumes of every dynamic-channel region. */
+static void dynamic_rules(void)
+{
+    for (int i = 0; i < (int)LWC_REGIONS; i++) {
+        const lwc_region_t *r = R((lwc_region_id_t)i);
+        CHECK(lwc_region_tx_enabled(r) == (r->id == LWC_REGION_EU868)); /* receive-only elsewhere */
+        if (r->fixed) {
+            continue;
+        }
+        for (int dr = 0; dr <= 5; dr++) { /* ADR and the RX2 window use DR = 12 - SF at 125 kHz */
+            CHECK(r->dr[dr].kind == LWC_DR_LORA && r->dr[dr].sf == 12 - dr && r->dr[dr].bw_khz == 125U);
+            CHECK(lwc_region_rx1_dr(r, dr, 0, false) == dr); /* RX1DROffset 0: the uplink's DR */
+        }
+        CHECK(r->rx2_dr <= 5U);
+        for (unsigned c = 1; c < r->n_default; c++) {
+            CHECK(r->default_ch[c].hz > r->default_ch[c - 1U].hz); /* lowest first: the default plan relies on it */
+        }
+    }
+    CHECK(!lwc_region_tx_enabled(NULL));
+}
+
 int main(void)
 {
+    dynamic_rules();
     spot_values();
     lookup();
     consistency();

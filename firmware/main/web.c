@@ -789,6 +789,27 @@ static esp_err_t api_radio_post(httpd_req_t *req)
         return send_status(req, "400 Bad Request", "bad body\n");
     }
     char g[12], tx[8], ltx[8], v[16];
+    /* region (ADR-0024): its own save, then a restart */
+    if (lwc_form_get(body, got, "region", v, sizeof v) >= 0) {
+        lwc_region_id_t id;
+        if (!lwc_region_parse(v, &id)) {
+            return send_status(req, "400 Bad Request", "region: EU868, AS923-1..4, IN865, KR920 or RU864\n");
+        }
+        const lwc_region_t *rg = lwc_region(id);
+        if (rg == radioplan_region()) {
+            return send_status(req, "200 OK", "unchanged\n");
+        }
+        r = radioplan_set_region(rg);
+        if (r == ESP_ERR_NOT_SUPPORTED) {
+            return send_status(req, "400 Bad Request", "US915 and AU915 are not supported yet\n");
+        }
+        if (r != ESP_OK) {
+            return send_status(req, "500 Internal Server Error", esp_err_to_name(r));
+        }
+        return reboot_soon(req, "region changed",
+                           lwc_region_tx_enabled(rg) ? "saved: restarting\n"
+                                                     : "saved: restarting; this region is receive-only\n");
+    }
     /* receive windows (rx1_delay, rx2_hz, rx2_dr): their own save */
     const int rl = lwc_form_get(body, got, "rx1_delay", v, sizeof v);
     if (rl >= 0) {
@@ -805,7 +826,9 @@ static esp_err_t api_radio_post(httpd_req_t *req)
         r = radioplan_set_rx(&w);
         if (r == ESP_ERR_INVALID_ARG) {
             return send_status(req, "400 Bad Request",
-                               "RX1 delay 1-15 s; RX2 a transmit frequency in 863-870 MHz; RX2 DR0-DR5\n");
+                               radioplan_region()->id == LWC_REGION_EU868
+                                   ? "RX1 delay 1-15 s; RX2 a transmit frequency in 863-870 MHz; RX2 DR0-DR5\n"
+                                   : "RX1 delay 1-15 s; RX2 the region's default frequency; RX2 DR0-DR5\n");
         }
         return r == ESP_OK ? send_status(req, "200 OK", "saved: applies to devices that join from now on\n")
                            : send_status(req, "500 Internal Server Error", esp_err_to_name(r));
@@ -868,8 +891,9 @@ static const char *plan_err_text(lwc_plan_err_t e)
     return e == LWC_PLAN_ERR_RADIO     ? "a radio centre is outside 863-870 MHz\n"
            : e == LWC_PLAN_ERR_IF      ? "a channel is outside its radio's band (|IF| <= 400 kHz at 125 kHz)\n"
            : e == LWC_PLAN_ERR_BAND    ? "a channel reaches outside 863-870 MHz\n"
-           : e == LWC_PLAN_ERR_DEFAULT ? "868.1, 868.3 and 868.5 MHz must stay (EU868 default channels)\n"
+           : e == LWC_PLAN_ERR_DEFAULT ? "the region's default channels must stay\n"
            : e == LWC_PLAN_ERR_STD     ? "std channel: SF7-12, 125/250/500 kHz\n"
+           : e == LWC_PLAN_ERR_REGION  ? "this region is not supported yet\n"
                                        : "plan not valid\n";
 }
 
@@ -888,7 +912,7 @@ static esp_err_t api_radio_plan(httpd_req_t *req)
     lwc_plan_t p;
     radioplan_src_t src = RADIOPLAN_LOCAL;
     if (lwc_form_get(body, got, "reset", v, sizeof v) >= 0 && strcmp(v, "1") == 0) {
-        lwc_plan_default_eu868(&p);
+        (void)lwc_plan_default(&p, radioplan_region());
         src = RADIOPLAN_DEFAULT;
     } else {
         radioplan_get(&p);
@@ -916,7 +940,7 @@ static esp_err_t api_radio_plan(httpd_req_t *req)
             return send_status(req, "400 Bad Request", "fsk: enable:radio:if_hz\n");
         }
     }
-    const lwc_plan_err_t pe = lwc_plan_check(&p);
+    const lwc_plan_err_t pe = lwc_plan_check(&p, radioplan_region());
     if (pe != LWC_PLAN_OK) {
         return send_status(req, "400 Bad Request", plan_err_text(pe));
     }

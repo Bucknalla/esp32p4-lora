@@ -19,6 +19,7 @@ typedef enum {
     RADIO_TX_DUTY,     /* sub-band duty-cycle budget used up */
     RADIO_TX_BUSY,     /* radio not running */
     RADIO_TX_OFF,      /* transmit switched off (Config tab), or no gain step under the power cap */
+    RADIO_TX_REGION,   /* the gateway's region is receive-only (ADR-0024: only EU868 transmits) */
 } radio_tx_result_t;
 
 typedef enum {

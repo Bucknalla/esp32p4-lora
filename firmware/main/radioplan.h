@@ -1,6 +1,7 @@
 /* The radio's channel plan (ADR-0017): read by the concentrator set-up, the
  * local server's join-accepts and the Basics Station check. Stored in NVS
- * ("radio"/"plan"); the built-in EU868 plan when nothing valid is stored. */
+ * ("radio"/"plan"); the region's default plan when nothing valid is stored.
+ * The region (ADR-0024) is "radio"/"region"; absent means EU868. */
 #pragma once
 
 #include <stdbool.h>
@@ -8,9 +9,19 @@
 
 #include "esp_err.h"
 #include "lwc/plan.h"
+#include "lwc/region.h"
+
+/** The gateway's region (any task): EU868 unless another is stored. */
+const lwc_region_t *radioplan_region(void);
+
+/** Store a new region for the next start (the caller restarts the gateway):
+ *  the stored plan and receive windows go back to that region's defaults.
+ *  ESP_ERR_NOT_SUPPORTED for US915 and AU915 (not yet). Only EU868 transmits
+ *  (lwc_region_tx_enabled). */
+esp_err_t radioplan_set_region(const lwc_region_t *r);
 
 typedef enum {
-    RADIOPLAN_DEFAULT = 0, /* built-in EU868 */
+    RADIOPLAN_DEFAULT = 0, /* the region's built-in plan */
     RADIOPLAN_LOCAL = 1,   /* set on the Config tab */
     RADIOPLAN_SERVER = 2,  /* from the network server's router_config */
 } radioplan_src_t;
@@ -22,7 +33,7 @@ const char *radioplan_source_name(radioplan_src_t s);
 
 /** Check and store a plan for the radio's next start. `*changed` (may be
  *  NULL): it differs from the stored one. ESP_ERR_INVALID_ARG if it fails
- *  lwc_plan_check. */
+ *  lwc_plan_check for the gateway's region. */
 esp_err_t radioplan_store(const lwc_plan_t *p, radioplan_src_t src, bool *changed);
 /* ESP_ERR_INVALID_STATE: this plan was rejected by the radio earlier. */
 
@@ -52,7 +63,7 @@ int radioplan_tx_cap_dbm(void);
 
 typedef struct {
     uint8_t rx1_delay_s; /* 1..15 */
-    uint32_t rx2_hz;     /* in an EU868 sub-band the radio may transmit in */
+    uint32_t rx2_hz;     /* EU868: in a sub-band the radio may transmit in; elsewhere the region's default */
     uint8_t rx2_dr;      /* DR0..DR5 */
 } radio_rx_cfg_t;
 

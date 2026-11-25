@@ -7,6 +7,9 @@
 
 #include "lbs_rebuild.h"
 
+#include "lwc/region.h"
+#define EU lwc_region(LWC_REGION_EU868)
+
 static int failures;
 
 #define CHECK(cond)                                                                    \
@@ -23,13 +26,17 @@ static char out[1400];
 
 static void drs(void)
 {
-    CHECK(lwc_lbs_dr(12, 125) == 0 && lwc_lbs_dr(7, 125) == 5 && lwc_lbs_dr(7, 250) == 6);
-    CHECK(lwc_lbs_dr(8, 250) == -1 && lwc_lbs_dr(6, 125) == -1 && lwc_lbs_dr(7, 500) == -1);
+    CHECK(lwc_lbs_dr(EU, 12, 125) == 0 && lwc_lbs_dr(EU, 7, 125) == 5 && lwc_lbs_dr(EU, 7, 250) == 6);
+    CHECK(lwc_lbs_dr(EU, 8, 250) == -1 && lwc_lbs_dr(EU, 6, 125) == -1 && lwc_lbs_dr(EU, 7, 500) == -1);
     uint8_t sf;
     uint16_t bw;
-    CHECK(lwc_lbs_dr_params(0, &sf, &bw) && sf == 12 && bw == 125);
-    CHECK(lwc_lbs_dr_params(6, &sf, &bw) && sf == 7 && bw == 250);
-    CHECK(!lwc_lbs_dr_params(7, &sf, &bw));
+    CHECK(lwc_lbs_dr_params(EU, 0, &sf, &bw) && sf == 12 && bw == 125);
+    CHECK(lwc_lbs_dr_params(EU, 6, &sf, &bw) && sf == 7 && bw == 250);
+    CHECK(!lwc_lbs_dr_params(EU, 7, &sf, &bw));
+    /* ADR-0024: the gateway's region. IN865 has no DR6 (SF7 at 250 kHz). */
+    const lwc_region_t *in = lwc_region(LWC_REGION_IN865);
+    CHECK(lwc_lbs_dr(in, 7, 125) == 5 && lwc_lbs_dr(in, 7, 250) == -1 && !lwc_lbs_dr_params(in, 6, &sf, &bw));
+    CHECK(lwc_lbs_dr(NULL, 7, 125) == -1 && !lwc_lbs_dr_params(NULL, 0, &sf, &bw));
 }
 
 static void xtime(void)
@@ -70,7 +77,7 @@ static void uplinks(void)
     /* jreq: the values of TTS's upstream test (JoinEui 22.., DevEui 11.., DevNonce 18000, MIC 12345678) */
     static const uint8_t jr[23] = {0x00, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x11, 0x11, 0x11,
                                    0x11, 0x11, 0x11, 0x11, 0x11, 0x50, 0x46, 0x4E, 0x61, 0xBC, 0x00};
-    CHECK(lwc_lbs_uplink(out, sizeof out, jr, sizeof jr, &rx, &n) == LWC_LBS_OK);
+    CHECK(lwc_lbs_uplink(out, sizeof out, EU, jr, sizeof jr, &rx, &n) == LWC_LBS_OK);
     CHECK(STR_IS(out, n,
                  "{\"msgtype\":\"jreq\",\"MHdr\":0,\"JoinEui\":\"22-22-22-22-22-22-22-22\",\"DevEui\":\"11-11-11-11-11-11-11-11\","
                  "\"DevNonce\":18000,\"MIC\":12345678,\"DR\":1,\"Freq\":868300000,\"upinfo\":{\"rctx\":0,"
@@ -80,7 +87,7 @@ static void uplinks(void)
     /* updf: DevAddr and MIC with the top bit set go out negative (signed int32) */
     static const uint8_t up[] = {0x80, 0x04, 0x03, 0x02, 0x81, 0xA2, 0x34, 0x12, 0x03, 0x07,
                                  0x0A, 0xAA, 0xBB, 0x01, 0x02, 0x03, 0xFE};
-    CHECK(lwc_lbs_uplink(out, sizeof out, up, sizeof up, &rx, &n) == LWC_LBS_OK);
+    CHECK(lwc_lbs_uplink(out, sizeof out, EU, up, sizeof up, &rx, &n) == LWC_LBS_OK);
     CHECK(STR_IS(out, n,
                  "{\"msgtype\":\"updf\",\"MHdr\":128,\"DevAddr\":-2130574588,\"FCtrl\":162,\"FCnt\":4660,"
                  "\"FOpts\":\"0307\",\"FPort\":10,\"FRMPayload\":\"AABB\",\"MIC\":-33357311,\"DR\":1,\"Freq\":868300000,"
@@ -92,30 +99,30 @@ static void uplinks(void)
     static const uint8_t noport[] = {0x40, 0x04, 0x03, 0x02, 0x01, 0x00, 0x05, 0x00, 0x11, 0x22, 0x33, 0x44};
     lwc_lbs_rx_t rx2 = rx;
     rx2.unix_us = -1;
-    CHECK(lwc_lbs_uplink(out, sizeof out, noport, sizeof noport, &rx2, &n) == LWC_LBS_OK);
+    CHECK(lwc_lbs_uplink(out, sizeof out, EU, noport, sizeof noport, &rx2, &n) == LWC_LBS_OK);
     CHECK(strstr(out, "\"FOpts\":\"\",\"FPort\":-1,\"FRMPayload\":\"\",\"MIC\":1144201745") != NULL);
     CHECK(strstr(out, "\"rxtime\":0}}") != NULL);
     CHECK(lbs_rebuild(out, n, back, sizeof back) == sizeof noport && memcmp(back, noport, sizeof noport) == 0);
 
     /* proprietary: the whole frame */
     static const uint8_t prop[] = {0xE0, 0x01, 0x02};
-    CHECK(lwc_lbs_uplink(out, sizeof out, prop, sizeof prop, &rx, &n) == LWC_LBS_OK);
+    CHECK(lwc_lbs_uplink(out, sizeof out, EU, prop, sizeof prop, &rx, &n) == LWC_LBS_OK);
     CHECK(strncmp(out, "{\"msgtype\":\"propdf\",\"FRMPayload\":\"E00102\",\"DR\":1,", 49) == 0);
     CHECK(lbs_rebuild(out, n, back, sizeof back) == sizeof prop && memcmp(back, prop, sizeof prop) == 0);
 
     /* refused: downlinks, short frames, no EU868 data rate, no room */
     static const uint8_t down[] = {0x60, 0x04, 0x03, 0x02, 0x01, 0x00, 0x05, 0x00, 0x11, 0x22, 0x33, 0x44};
-    CHECK(lwc_lbs_uplink(out, sizeof out, down, sizeof down, &rx, &n) == LWC_LBS_ERR_FRAME);
-    CHECK(lwc_lbs_uplink(out, sizeof out, jr, 22, &rx, &n) == LWC_LBS_ERR_FRAME);
-    CHECK(lwc_lbs_uplink(out, sizeof out, up, 11, &rx, &n) == LWC_LBS_ERR_FRAME);
+    CHECK(lwc_lbs_uplink(out, sizeof out, EU, down, sizeof down, &rx, &n) == LWC_LBS_ERR_FRAME);
+    CHECK(lwc_lbs_uplink(out, sizeof out, EU, jr, 22, &rx, &n) == LWC_LBS_ERR_FRAME);
+    CHECK(lwc_lbs_uplink(out, sizeof out, EU, up, 11, &rx, &n) == LWC_LBS_ERR_FRAME);
     rx2.bw_khz = 500;
-    CHECK(lwc_lbs_uplink(out, sizeof out, up, sizeof up, &rx2, &n) == LWC_LBS_ERR_DR);
-    CHECK(lwc_lbs_uplink(out, 100, up, sizeof up, &rx, &n) == LWC_LBS_ERR_SPACE);
-    CHECK(lwc_lbs_uplink(out, sizeof out, NULL, 0, &rx, &n) == LWC_LBS_ERR_ARG);
+    CHECK(lwc_lbs_uplink(out, sizeof out, EU, up, sizeof up, &rx2, &n) == LWC_LBS_ERR_DR);
+    CHECK(lwc_lbs_uplink(out, 100, EU, up, sizeof up, &rx, &n) == LWC_LBS_ERR_SPACE);
+    CHECK(lwc_lbs_uplink(out, sizeof out, EU, NULL, 0, &rx, &n) == LWC_LBS_ERR_ARG);
     static uint8_t big[256];
     big[0] = 0xE0;
-    CHECK(lwc_lbs_uplink(out, sizeof out, big, 255, &rx, &n) == LWC_LBS_OK);
-    CHECK(lwc_lbs_uplink(out, sizeof out, big, 256, &rx, &n) == LWC_LBS_ERR_FRAME);
+    CHECK(lwc_lbs_uplink(out, sizeof out, EU, big, 255, &rx, &n) == LWC_LBS_OK);
+    CHECK(lwc_lbs_uplink(out, sizeof out, EU, big, 256, &rx, &n) == LWC_LBS_ERR_FRAME);
 }
 
 static void dntxed(void)
@@ -157,11 +164,11 @@ static void dnmsgs(void)
     CHECK(strcmp(d.dev_eui, "00-00-00-00-00-00-00-01") == 0 && d.diid == 1 && d.dclass == 0 && d.rctx == 2);
     CHECK(d.len == 17 && d.pdu[0] == 0x59 && d.pdu[16] == 0x3d && d.priority == 25 && d.rx_delay == 1);
     CHECK(d.rx1 && d.rx1_dr == 2 && d.rx1_freq == 868500000 && !d.rx2 && d.xtime == 4785076156381939LL);
-    CHECK(lwc_lbs_dn_txpk(&d, 0x11, &a, &b) == LWC_LBS_OK);
+    CHECK(lwc_lbs_dn_txpk(&d, EU, 0x11, &a, &b) == LWC_LBS_OK);
     CHECK(a.mode == LWC_TXPK_TIMED && a.tmst == 1553300787U && a.freq_hz == 868500000 && a.sf == 10 && a.bw_khz == 125);
     CHECK(a.powe == 16 && a.ipol && a.ncrc && a.cr_denom == 5 && a.size == 17 && a.payload[0] == 0x59);
     CHECK(b.size == 0); /* no RX2 given: no second window */
-    CHECK(lwc_lbs_dn_txpk(&d, 0x12, &a, &b) == LWC_LBS_ERR_SESSION);
+    CHECK(lwc_lbs_dn_txpk(&d, EU, 0x12, &a, &b) == LWC_LBS_ERR_SESSION);
 
     /* RX1 and RX2 (Station's form); RX2 at 869.525 MHz with the higher power; diid above 2^53 exact */
     static const char both[] =
@@ -169,7 +176,7 @@ static void dnmsgs(void)
         "\"RxDelay\":5,\"RX1DR\":5,\"RX1Freq\":868100000,\"RX2DR\":0,\"RX2Freq\":869525000,"
         "\"priority\":0,\"xtime\":4785074604081153,\"rctx\":0}";
     CHECK(lwc_lbs_parse_dnmsg(both, strlen(both), &d) == LWC_LBS_OK && d.diid == 9007199254740993LL);
-    CHECK(lwc_lbs_dn_txpk(&d, 0x11, &a, &b) == LWC_LBS_OK);
+    CHECK(lwc_lbs_dn_txpk(&d, EU, 0x11, &a, &b) == LWC_LBS_OK);
     CHECK(a.tmst == 5000001U && a.sf == 7 && a.freq_hz == 868100000 && a.powe == 16);
     CHECK(b.size == 2 && b.tmst == 6000001U && b.sf == 12 && b.freq_hz == 869525000 && b.powe == 27);
 
@@ -178,7 +185,7 @@ static void dnmsgs(void)
         "{\"msgtype\":\"dnmsg\",\"DevEui\":\"01\",\"diid\":3,\"pdu\":\"60\",\"RX2DR\":3,\"RX2Freq\":869525000,"
         "\"xtime\":4785074604081153}";
     CHECK(lwc_lbs_parse_dnmsg(rx2, strlen(rx2), &d) == LWC_LBS_OK && d.rx_delay == 1);
-    CHECK(lwc_lbs_dn_txpk(&d, 0x11, &a, &b) == LWC_LBS_OK && a.tmst == 2000001U && a.sf == 9 && b.size == 0);
+    CHECK(lwc_lbs_dn_txpk(&d, EU, 0x11, &a, &b) == LWC_LBS_OK && a.tmst == 2000001U && a.sf == 9 && b.size == 0);
 
     /* RxDelay 0 reads as 1; the "DR"/"Freq" form sends at xtime itself */
     static const char d0[] = "{\"msgtype\":\"dnmsg\",\"DevEui\":\"01\",\"diid\":3,\"pdu\":\"60\",\"RxDelay\":0,"
@@ -187,7 +194,7 @@ static void dnmsgs(void)
     static const char df[] = "{\"msgtype\":\"dnmsg\",\"DevEui\":\"01\",\"diid\":3,\"pdu\":\"60\",\"DR\":5,"
                              "\"Freq\":868100000,\"xtime\":4785074604081153}";
     CHECK(lwc_lbs_parse_dnmsg(df, strlen(df), &d) == LWC_LBS_OK && d.rx_delay == 0);
-    CHECK(lwc_lbs_dn_txpk(&d, 0x11, &a, &b) == LWC_LBS_OK && a.tmst == 1U);
+    CHECK(lwc_lbs_dn_txpk(&d, EU, 0x11, &a, &b) == LWC_LBS_OK && a.tmst == 1U);
 
     /* not supported here: class B, GPS time */
     static const char cb[] = "{\"msgtype\":\"dnmsg\",\"DevEui\":\"01\",\"dC\":1,\"diid\":3,\"pdu\":\"60\",\"DR\":3,"
@@ -199,23 +206,23 @@ static void dnmsgs(void)
     static const char cc[] = "{\"msgtype\":\"dnmsg\",\"DevEui\":\"01-01-01-01-01-01-01-01\",\"dC\":2,\"diid\":3,"
                              "\"pdu\":\"60AB\",\"RX2DR\":3,\"RX2Freq\":869525000,\"priority\":1,\"MuxTime\":1554300787.1}";
     CHECK(lwc_lbs_parse_dnmsg(cc, strlen(cc), &d) == LWC_LBS_OK && d.asap && d.dclass == 2U && d.xtime == 0);
-    CHECK(lwc_lbs_dn_txpk(&d, 0x11, &a, &b) == LWC_LBS_ERR_UNSUPPORTED); /* not timed by xtime */
-    CHECK(lwc_lbs_dn_txpk_now(&d, 5000000U, &a, &b) == LWC_LBS_OK);
+    CHECK(lwc_lbs_dn_txpk(&d, EU, 0x11, &a, &b) == LWC_LBS_ERR_UNSUPPORTED); /* not timed by xtime */
+    CHECK(lwc_lbs_dn_txpk_now(&d, EU, 5000000U, &a, &b) == LWC_LBS_OK);
     CHECK(a.mode == LWC_TXPK_TIMED && a.tmst == 5000000U + LWC_LBS_ASAP_LEAD_US && a.freq_hz == 869525000U && a.sf == 9 &&
           a.powe == 27 && a.size == 2 && a.payload[1] == 0xAB);
     CHECK(b.tmst == a.tmst + LWC_LBS_ASAP_RETRY_US && b.freq_hz == a.freq_hz && b.sf == a.sf && b.size == 2);
-    CHECK(lwc_lbs_dn_txpk_now(&d, 0xFFFFFF00U, &a, &b) == LWC_LBS_OK && a.tmst == 0xFFFFFF00U + LWC_LBS_ASAP_LEAD_US); /* wraps */
+    CHECK(lwc_lbs_dn_txpk_now(&d, EU, 0xFFFFFF00U, &a, &b) == LWC_LBS_OK && a.tmst == 0xFFFFFF00U + LWC_LBS_ASAP_LEAD_US); /* wraps */
     /* with the last uplink's xtime, even from an earlier session: still now */
     static const char ccx[] = "{\"msgtype\":\"dnmsg\",\"DevEui\":\"01\",\"dC\":2,\"diid\":4,\"pdu\":\"60\",\"RX2DR\":0,"
                               "\"RX2Freq\":869525000,\"xtime\":4785074604081153,\"rctx\":0}";
     CHECK(lwc_lbs_parse_dnmsg(ccx, strlen(ccx), &d) == LWC_LBS_OK && d.asap);
-    CHECK(lwc_lbs_dn_txpk_now(&d, 100U, &a, &b) == LWC_LBS_OK && a.tmst == 100U + LWC_LBS_ASAP_LEAD_US && a.sf == 12);
+    CHECK(lwc_lbs_dn_txpk_now(&d, EU, 100U, &a, &b) == LWC_LBS_OK && a.tmst == 100U + LWC_LBS_ASAP_LEAD_US && a.sf == 12);
     /* class C answering an uplink (RX1 given) keeps the xtime timing; without xtime it is refused */
     static const char cr1[] = "{\"msgtype\":\"dnmsg\",\"DevEui\":\"01\",\"dC\":2,\"diid\":5,\"pdu\":\"60\",\"RxDelay\":1,"
                               "\"RX1DR\":5,\"RX1Freq\":868100000,\"RX2DR\":0,\"RX2Freq\":869525000,\"xtime\":4785074604081153}";
     CHECK(lwc_lbs_parse_dnmsg(cr1, strlen(cr1), &d) == LWC_LBS_OK && !d.asap);
-    CHECK(lwc_lbs_dn_txpk(&d, 0x11, &a, &b) == LWC_LBS_OK && a.tmst == 1000001U);
-    CHECK(lwc_lbs_dn_txpk_now(&d, 0, &a, &b) == LWC_LBS_ERR_ARG);
+    CHECK(lwc_lbs_dn_txpk(&d, EU, 0x11, &a, &b) == LWC_LBS_OK && a.tmst == 1000001U);
+    CHECK(lwc_lbs_dn_txpk_now(&d, EU, 0, &a, &b) == LWC_LBS_ERR_ARG);
     static const char cr0[] = "{\"msgtype\":\"dnmsg\",\"DevEui\":\"01\",\"dC\":2,\"diid\":5,\"pdu\":\"60\",\"RxDelay\":1,"
                               "\"RX1DR\":5,\"RX1Freq\":868100000}";
     CHECK(lwc_lbs_parse_dnmsg(cr0, strlen(cr0), &d) == LWC_LBS_ERR_UNSUPPORTED);
@@ -226,7 +233,7 @@ static void dnmsgs(void)
     /* an asap downlink at a data rate outside EU868 */
     static const char cc9[] = "{\"msgtype\":\"dnmsg\",\"DevEui\":\"01\",\"dC\":2,\"diid\":7,\"pdu\":\"60\",\"RX2DR\":9,"
                               "\"RX2Freq\":869525000}";
-    CHECK(lwc_lbs_parse_dnmsg(cc9, strlen(cc9), &d) == LWC_LBS_OK && lwc_lbs_dn_txpk_now(&d, 0, &a, &b) == LWC_LBS_ERR_FIELD);
+    CHECK(lwc_lbs_parse_dnmsg(cc9, strlen(cc9), &d) == LWC_LBS_OK && lwc_lbs_dn_txpk_now(&d, EU, 0, &a, &b) == LWC_LBS_ERR_FIELD);
 
     /* bad: no pdu, odd hex, RX1 half given, DR out of range, xtime as a fraction, not a dnmsg */
     static const char *const bad[] = {
@@ -250,7 +257,7 @@ static void dnmsgs(void)
     static const char dr9[] = "{\"msgtype\":\"dnmsg\",\"DevEui\":\"01\",\"diid\":3,\"pdu\":\"60\",\"RX1DR\":9,"
                               "\"RX1Freq\":868100000,\"xtime\":4785074604081153}";
     CHECK(lwc_lbs_parse_dnmsg(dr9, strlen(dr9), &d) == LWC_LBS_OK);
-    CHECK(lwc_lbs_dn_txpk(&d, 0x11, &a, &b) == LWC_LBS_ERR_FIELD);
+    CHECK(lwc_lbs_dn_txpk(&d, EU, 0x11, &a, &b) == LWC_LBS_ERR_FIELD);
 }
 
 static void router_config(void)
@@ -270,16 +277,16 @@ static void router_config(void)
         "\"nocca\":true,\"nodc\":true,\"nodwell\":true,\"MuxTime\":1554300787.123}";
     lwc_lbs_router_config_t c;
     CHECK(lwc_lbs_parse_router_config(rc, strlen(rc), &c) == LWC_LBS_OK);
-    CHECK(strcmp(c.region, "EU863") == 0 && c.freq_min == 863000000 && c.freq_max == 870000000 && c.drs_ok);
+    CHECK(strcmp(c.region, "EU863") == 0 && c.freq_min == 863000000 && c.freq_max == 870000000 && lwc_lbs_router_drs_ok(&c, EU));
     CHECK(c.radio_hz[0] == 867500000 && c.radio_hz[1] == 868500000 && c.multisf == 0xFF);
     CHECK(c.chan_radio[0] == 1 && c.chan_if[0] == -400000 && c.chan_radio[7] == 0 && c.chan_if[7] == 400000);
 
     /* a US915 table does not match */
     static const char us[] = "{\"msgtype\":\"router_config\",\"DRs\":[[10,125,0],[9,125,0],[8,125,0],[7,125,0],"
                              "[8,500,0],[-1,0,0],[-1,0,0],[-1,0,0]]}";
-    CHECK(lwc_lbs_parse_router_config(us, strlen(us), &c) == LWC_LBS_OK && !c.drs_ok && c.multisf == 0);
+    CHECK(lwc_lbs_parse_router_config(us, strlen(us), &c) == LWC_LBS_OK && !lwc_lbs_router_drs_ok(&c, EU) && c.multisf == 0);
     static const char shortdrs[] = "{\"msgtype\":\"router_config\",\"DRs\":[[12,125,0]]}";
-    CHECK(lwc_lbs_parse_router_config(shortdrs, strlen(shortdrs), &c) == LWC_LBS_OK && !c.drs_ok);
+    CHECK(lwc_lbs_parse_router_config(shortdrs, strlen(shortdrs), &c) == LWC_LBS_OK && !lwc_lbs_router_drs_ok(&c, EU));
     static const char notrc[] = "{\"msgtype\":\"dnmsg\"}";
     CHECK(lwc_lbs_parse_router_config(notrc, strlen(notrc), &c) == LWC_LBS_ERR_FIELD);
     static const char badif[] = "{\"msgtype\":\"router_config\",\"sx1301_conf\":[{\"chan_multiSF_0\":{\"if\":\"x\"}}]}";
@@ -306,19 +313,24 @@ static void router_config_ttn(void)
         "2963,\"bcning\":{\"DR\":3,\"layout\":[2,8,17],\"freqs\":[869525000]}}";
     lwc_lbs_router_config_t c;
     CHECK(lwc_lbs_parse_router_config(rc, strlen(rc), &c) == LWC_LBS_OK);
-    CHECK(strcmp(c.region, "EU863") == 0 && c.drs_ok && c.have_sx1301 && c.multisf == 0xFF);
+    CHECK(strcmp(c.region, "EU863") == 0 && lwc_lbs_router_drs_ok(&c, EU) && c.have_sx1301 && c.multisf == 0xFF);
     CHECK(c.std_on && c.std_bw_hz == 250000 && c.std_sf == 7 && c.std_radio == 1 && c.std_if == -200000);
     CHECK(c.fsk_on && c.fsk_radio == 1 && c.fsk_if == 300000);
     lwc_plan_t p, d;
-    CHECK(lwc_lbs_router_plan(&c, &p));
+    CHECK(lwc_lbs_router_plan(&c, EU, &p));
     /* TTN's plan is the built-in one plus FSK at 868.8 MHz */
-    lwc_plan_default_eu868(&d);
+    (void)lwc_plan_default(&d, EU);
     CHECK(!lwc_plan_equal(&p, &d));
     d.fsk.enable = true;
     CHECK(lwc_plan_equal(&p, &d) && lwc_plan_hz(&p, &p.fsk) == 868800000);
+    /* ADR-0024: the same router_config for a gateway set to another region. AS923
+     * DR0-6 equal EU868's, so the DRs pass; the plan does not (default channels). */
+    const lwc_region_t *as1 = lwc_region(LWC_REGION_AS923_1);
+    CHECK(lwc_lbs_router_drs_ok(&c, as1) && !lwc_lbs_router_plan(&c, as1, &p));
+    CHECK(!lwc_lbs_router_drs_ok(&c, lwc_region(LWC_REGION_US915)) && !lwc_lbs_router_drs_ok(&c, NULL));
     /* no sx1301_conf: no plan */
     static const char bare[] = "{\"msgtype\":\"router_config\",\"region\":\"EU863\"}";
-    CHECK(lwc_lbs_parse_router_config(bare, strlen(bare), &c) == LWC_LBS_OK && !lwc_lbs_router_plan(&c, &p));
+    CHECK(lwc_lbs_parse_router_config(bare, strlen(bare), &c) == LWC_LBS_OK && !lwc_lbs_router_plan(&c, EU, &p));
 }
 
 int main(void)

@@ -8,6 +8,9 @@
 #include "lwc/lorawan.h"
 #include "lwc/mac.h"
 
+#include "lwc/region.h"
+#define EU lwc_region(LWC_REGION_EU868)
+
 static int failures;
 
 #define CHECK(cond)                                                                    \
@@ -165,9 +168,9 @@ static void app_downlinks(size_t idx, uint32_t addr, const uint8_t nwk[16], cons
     ns.link[idx].status_asked = true;
     ns.link[idx].status_req_s = rx.now_s;
 
-    CHECK(lwc_ns_dr(12, 125) == 0 && lwc_ns_dr(7, 125) == 5 && lwc_ns_dr(7, 250) == 6 && lwc_ns_dr(6, 125) == -1);
-    CHECK(lwc_ns_max_frm(0) == 51U && lwc_ns_max_frm(2) == 51U && lwc_ns_max_frm(3) == 115U &&
-          lwc_ns_max_frm(5) == 222U && lwc_ns_max_frm(-1) == 0U && lwc_ns_max_frm(8) == 0U);
+    CHECK(lwc_ns_dr(EU, 12, 125) == 0 && lwc_ns_dr(EU, 7, 125) == 5 && lwc_ns_dr(EU, 7, 250) == 6 && lwc_ns_dr(EU, 6, 125) == -1);
+    CHECK(lwc_ns_max_frm(EU, 0) == 51U && lwc_ns_max_frm(EU, 2) == 51U && lwc_ns_max_frm(EU, 3) == 115U &&
+          lwc_ns_max_frm(EU, 5) == 222U && lwc_ns_max_frm(EU, -1) == 0U && lwc_ns_max_frm(EU, 8) == 0U);
 
     /* unconfirmed uplink, the largest payload, more queued: FPending */
     size_t n = uplink_mac(f, nwk, addr, ++fcnt, NULL, 0, 0, false);
@@ -488,7 +491,7 @@ static void rx_windows(void)
 {
     static lwc_ns_t n2;
     lwc_ns_init(&n2);
-    CHECK(n2.rx1_delay_s == 1 && n2.rx2_hz == LWC_NS_RX2_FREQ_HZ && n2.rx2_dr == 0);
+    CHECK(n2.rx1_delay_s == 1 && n2.rx2_hz == EU->rx2_hz && n2.rx2_dr == 0);
     CHECK(!lwc_ns_set_rx(&n2, 0, 869525000U, 0) && !lwc_ns_set_rx(&n2, 16, 869525000U, 0));
     CHECK(!lwc_ns_set_rx(&n2, 1, 869525000U, 6) && !lwc_ns_set_rx(&n2, 1, 862900000U, 0));
     CHECK(lwc_ns_set_rx(&n2, 3, 869525000U, 3));
@@ -509,10 +512,65 @@ static void rx_windows(void)
     lwc_aes128_wipe(&a);
     CHECK(plain[10] == 0x03 /* DLSettings: RX1DROffset 0, RX2 DR3 */ && plain[11] == 3 /* RxDelay */);
     /* a later change applies to new joins only */
-    CHECK(lwc_ns_set_rx(&n2, 1, LWC_NS_RX2_FREQ_HZ, 0) && n2.dev[idx].rx1_delay_s == 3);
+    CHECK(lwc_ns_set_rx(&n2, 1, EU->rx2_hz, 0) && n2.dev[idx].rx1_delay_s == 3);
     lwc_ns_dev_t none;
     memset(&none, 0, sizeof none);
     CHECK(lwc_ns_rx1_delay_us(&none) == 1000000U); /* an unset value reads as 1 s */
+}
+
+/* ADR-0024: the dynamic-channel regions. */
+static void regions(void)
+{
+    static lwc_ns_t n2;
+    lwc_ns_init(&n2);
+    CHECK(n2.region == EU && lwc_ns_ch_mask(&n2) == 0x00FFU); /* 3 defaults + 5 CFList */
+    /* fewer CFList channels: fewer bits (a bit for a missing channel makes the device refuse) */
+    lwc_plan_t p;
+    (void)lwc_plan_default(&p, EU);
+    p.multisf[6].enable = false;
+    p.multisf[7].enable = false;
+    lwc_ns_set_plan(&n2, &p);
+    CHECK(lwc_ns_ch_mask(&n2) == 0x003FU);
+    CHECK(!lwc_ns_set_region(&n2, lwc_region(LWC_REGION_US915)) && n2.region == EU); /* R3 */
+    CHECK(!lwc_ns_set_region(&n2, NULL) && !lwc_ns_set_region(NULL, EU) && lwc_ns_ch_mask(NULL) == 0U);
+    for (int i = 0; i < (int)LWC_REGIONS; i++) {
+        const lwc_region_t *r = lwc_region((lwc_region_id_t)i);
+        if (r->fixed) {
+            continue;
+        }
+        lwc_ns_init(&n2);
+        CHECK(lwc_ns_set_region(&n2, r) && n2.region == r);
+        CHECK(n2.rx1_delay_s == 1U && n2.rx2_hz == r->rx2_hz && n2.rx2_dr == r->rx2_dr);
+        CHECK(lwc_ns_ch_mask(&n2) == (r->id == LWC_REGION_EU868 ? 0x00FFU : (uint16_t)((1U << r->n_default) - 1U)));
+        CHECK(lwc_ns_rx_ok(r, 1, r->rx2_hz, r->rx2_dr) && !lwc_ns_rx_ok(r, 0, r->rx2_hz, r->rx2_dr));
+        CHECK(!lwc_ns_rx_ok(r, 1, r->rx2_hz, 6)); /* DR6: 250 kHz or not defined */
+        if (r->id != LWC_REGION_EU868) {
+            CHECK(!lwc_ns_rx_ok(r, 1, r->rx2_hz + 200000U, r->rx2_dr)); /* band edges not known: default only */
+        }
+        /* a join: the region's RX2 data rate in DLSettings, no CFList channels in the default plan */
+        size_t idx = 0, alen = 0;
+        uint8_t jr[23], acc[40];
+        CHECK(lwc_ns_add(&n2, 0x42, JOIN_EUI, KEY, LWC_NS_MAC_1_0_2, NULL, &idx) == LWC_NS_OK);
+        join_request(jr, KEY, 0x42, 1);
+        CHECK(lwc_ns_join(&n2, jr, 23, acc, sizeof acc, &alen, NULL) == LWC_NS_JOIN_ACCEPT && alen == 33U);
+        lwc_aes128_t a;
+        lwc_aes128_init(&a, KEY);
+        uint8_t plain[32];
+        lwc_aes128_encrypt(&a, &acc[1], plain);
+        lwc_aes128_encrypt(&a, &acc[17], &plain[16]);
+        lwc_aes128_wipe(&a);
+        CHECK(plain[10] == r->rx2_dr && plain[11] == 1U);
+        CHECK(n2.dev[idx].rx2_hz == r->rx2_hz && n2.dev[idx].rx2_dr == r->rx2_dr);
+        if (r->id != LWC_REGION_EU868) {
+            static const uint8_t zero[15] = {0};
+            CHECK(memcmp(&plain[12], zero, 15) == 0); /* CFList: no extra channels */
+        }
+        /* sizes: AS923 (TxParamSetupReq) uses the 400 ms dwell sizes */
+        CHECK(lwc_ns_max_frm(r, 2) == lwc_region_max_n(r, 2, r->tx_param_setup) && lwc_ns_max_frm(r, 2) > 0U);
+    }
+    const lwc_region_t *as1 = lwc_region(LWC_REGION_AS923_1);
+    CHECK(lwc_ns_max_frm(as1, 2) < lwc_region_max_n(as1, 2, false));
+    CHECK(lwc_ns_max_frm(EU, 8) == 0U && lwc_ns_max_frm(NULL, 0) == 0U && lwc_ns_dr(NULL, 7, 125) == -1);
 }
 
 int main(void)
@@ -630,13 +688,14 @@ int main(void)
     CHECK(!lwc_ns_forward(LWC_MODE_HYBRID, true) && lwc_ns_forward(LWC_MODE_HYBRID, false));
 
     rx_windows();
+    regions();
 
     /* downlink timing */
     lwc_txpk_t tx;
-    lwc_ns_downlink(false, 1000, 868100000, 9, 125, LWC_NS_JOIN_DELAY_US, LWC_NS_RX2_FREQ_HZ, 0, 13, acc, 33, &tx);
+    lwc_ns_downlink(false, 1000, 868100000, 9, 125, LWC_NS_JOIN_DELAY_US, EU->rx2_hz, 0, 13, acc, 33, &tx);
     CHECK(tx.tmst == 5001000U && tx.freq_hz == 868100000U && tx.sf == 9 && tx.ipol && tx.ncrc && tx.size == 33);
-    lwc_ns_downlink(true, 0xFFFFFFFFU, 868100000, 9, 125, LWC_NS_RX1_DELAY_US, LWC_NS_RX2_FREQ_HZ, 0, 13, NULL, 0, &tx);
-    CHECK(tx.tmst == 1999999U && tx.freq_hz == LWC_NS_RX2_FREQ_HZ && tx.sf == 12 && tx.bw_khz == 125);
+    lwc_ns_downlink(true, 0xFFFFFFFFU, 868100000, 9, 125, LWC_NS_RX1_DELAY_US, EU->rx2_hz, 0, 13, NULL, 0, &tx);
+    CHECK(tx.tmst == 1999999U && tx.freq_hz == EU->rx2_hz && tx.sf == 12 && tx.bw_khz == 125);
     lwc_ns_downlink(true, 0, 868100000, 9, 125, 3000000U, 869525000U, 3, 13, NULL, 0, &tx);
     CHECK(tx.tmst == 4000000U && tx.freq_hz == 869525000U && tx.sf == 9); /* RX2 at DR3 */
 

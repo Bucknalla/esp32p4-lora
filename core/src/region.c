@@ -132,3 +132,8 @@ bool lwc_region_link_adr_subband(const lwc_region_t *r, uint8_t sb, uint16_t mas
     cntl[1] = (uint8_t)(sb / 2U);   /* the block of channels 16*cntl..16*cntl+15 */
     return true;
 }
+
+bool lwc_region_tx_enabled(const lwc_region_t *r)
+{
+    return r != NULL && r->id == LWC_REGION_EU868;
+}

@@ -7,6 +7,9 @@
 
 #include "../test/lbs_rebuild.h"
 
+#include "lwc/region.h"
+#define EU lwc_region(LWC_REGION_EU868)
+
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size);
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
@@ -23,14 +26,14 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
         }
         if (d.asap) {
             static lwc_txpk_t na, nb;
-            if (lwc_lbs_dn_txpk_now(&d, 0xFFFFF000U, &na, &nb) == LWC_LBS_OK &&
+            if (lwc_lbs_dn_txpk_now(&d, EU, 0xFFFFF000U, &na, &nb) == LWC_LBS_OK &&
                 (na.size != d.len || nb.size != d.len || nb.tmst - na.tmst != LWC_LBS_ASAP_RETRY_US)) {
                 __builtin_trap();
             }
         }
         static lwc_txpk_t a, b;
         const uint8_t sess = (uint8_t)((uint64_t)d.xtime >> 48);
-        if (lwc_lbs_dn_txpk(&d, sess, &a, &b) == LWC_LBS_OK &&
+        if (lwc_lbs_dn_txpk(&d, EU, sess, &a, &b) == LWC_LBS_OK &&
             (a.size != d.len || (b.size != 0U && b.size != d.len) || a.sf < 7U || a.sf > 12U)) {
             __builtin_trap();
         }
@@ -45,7 +48,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
         const lwc_lbs_rx_t rx = {.sf = (uint8_t)(7U + data[0] % 6U), .bw_khz = 125, .freq_hz = 868100000,
                                  .xtime = (int64_t)data[1] << 40, .rssi = -100.0f, .snr = 5.5f,
                                  .unix_us = (int64_t)size * 1000003};
-        if (lwc_lbs_uplink(out, sizeof out, data, size, &rx, &n) == LWC_LBS_OK) {
+        if (lwc_lbs_uplink(out, sizeof out, EU, data, size, &rx, &n) == LWC_LBS_OK) {
             static uint8_t back[255];
             if (n >= sizeof out || size > 255U || lbs_rebuild(out, n, back, sizeof back) != size ||
                 memcmp(back, data, size) != 0) {

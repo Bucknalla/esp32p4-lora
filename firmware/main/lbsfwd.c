@@ -166,15 +166,18 @@ static void on_router_config(const char *json, size_t len)
         ESP_LOGW(TAG, "router_config not understood (%d)", (int)e);
         return;
     }
-    ESP_LOGI(TAG, "router_config: region %s, %" PRIu32 "-%" PRIu32 " Hz, data rates %s, channels 0x%02X",
-             c.region[0] != '\0' ? c.region : "-", c.freq_min, c.freq_max, c.drs_ok ? "EU868" : "NOT EU868",
-             (unsigned)c.multisf);
+    const lwc_region_t *rg = radioplan_region();
+    const bool drs_ok = lwc_lbs_router_drs_ok(&c, rg);
+    ESP_LOGI(TAG, "router_config: region %s, %" PRIu32 "-%" PRIu32 " Hz, data rates %s %s, channels 0x%02X",
+             c.region[0] != '\0' ? c.region : "-", c.freq_min, c.freq_max, drs_ok ? "match" : "DO NOT MATCH",
+             rg->name, (unsigned)c.multisf);
     /* ADR-0017: the server's channel plan (frequencies and channels only) becomes the
-     * radio's, if it is a valid EU868 plan; the radio restarts only when it differs. */
+     * radio's, if it is valid for the gateway's region (ADR-0024: its data rates and
+     * default channels); the radio restarts only when it differs. */
     lwc_plan_t plan;
-    bool ok = c.drs_ok && lwc_lbs_router_plan(&c, &plan);
+    bool ok = drs_ok && lwc_lbs_router_plan(&c, rg, &plan);
     if (!ok) {
-        ESP_LOGW(TAG, "the server's channel plan is not usable here (EU868 checks): keeping the radio's");
+        ESP_LOGW(TAG, "the server's channel plan is not usable here (%s checks): keeping the radio's", rg->name);
     } else {
         bool changed = false;
         const esp_err_t err = radioplan_store(&plan, RADIOPLAN_SERVER, &changed);
@@ -215,10 +218,10 @@ static void on_dnmsg(const char *json, size_t len)
     if (d.asap) {
         /* class C "immediately" (ChirpStack): the next free time on RX2, from the counter */
         e = atomic_load(&g_radio_counter_ok)
-                ? lwc_lbs_dn_txpk_now(&d, (uint32_t)atomic_load(&g_radio_counter), &s_req.pk, &alt)
+                ? lwc_lbs_dn_txpk_now(&d, radioplan_region(), (uint32_t)atomic_load(&g_radio_counter), &s_req.pk, &alt)
                 : LWC_LBS_ERR_SESSION;
     } else {
-        e = lwc_lbs_dn_txpk(&d, s_sess, &s_req.pk, &alt);
+        e = lwc_lbs_dn_txpk(&d, radioplan_region(), s_sess, &s_req.pk, &alt);
     }
     size_t slot = PENDING;
     if (e == LWC_LBS_OK) {
@@ -371,7 +374,7 @@ static void send_up(const radio_pkt_t *p)
     rx.xtime = lwc_lbs_xtime(&s_clk, p->tmst);
     xSemaphoreGive(s_lock);
     size_t n = 0;
-    const lwc_lbs_err_t e = lwc_lbs_uplink(s_out, sizeof s_out, p->payload, p->size, &rx, &n);
+    const lwc_lbs_err_t e = lwc_lbs_uplink(s_out, sizeof s_out, radioplan_region(), p->payload, p->size, &rx, &n);
     if (e != LWC_LBS_OK) {
         if (e != LWC_LBS_ERR_FRAME) {
             ESP_LOGW(TAG, "uplink not sent (%d)", (int)e);

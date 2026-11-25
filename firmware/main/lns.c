@@ -150,10 +150,10 @@ static void from_v1(const dev_v1_t *o, lwc_ns_dev_t *d)
     d->has_up = o->has_up;
     d->fcnt_up = o->fcnt_up;
     d->fcnt_down = o->fcnt_down;
-    /* version 1 devices joined with the defaults */
+    /* version 1 devices joined with the defaults of the EU868-only firmware */
     d->rx1_delay_s = 1;
     d->rx2_dr = 0;
-    d->rx2_hz = LWC_NS_RX2_FREQ_HZ;
+    d->rx2_hz = 869525000U;
 }
 
 static void from_v2(const dev_v2_t *o, lwc_ns_dev_t *d)
@@ -376,6 +376,7 @@ static esp_err_t save_cnt(size_t i)
 static void load(void)
 {
     lwc_ns_init(&s_ns);
+    (void)lwc_ns_set_region(&s_ns, radioplan_region());
     lwc_plan_t plan;
     radioplan_get(&plan);
     lwc_ns_set_plan(&s_ns, &plan);
@@ -421,6 +422,15 @@ static void load(void)
             s_ns.dev[i].has_up = c.has_up != 0U;
         }
         s_ns.dev[i].fcnt_down += FCNT_DOWN_SKIP;
+        /* the values served (0: the defaults, as the downlink code reads them) */
+        const lwc_ns_dev_t *dv = &s_ns.dev[i];
+        const uint8_t rx1 = dv->rx1_delay_s != 0U ? dv->rx1_delay_s : 1U;
+        const uint32_t rx2 = dv->rx2_hz != 0U ? dv->rx2_hz : s_ns.region->rx2_hz;
+        if (dv->joined && !lwc_ns_rx_ok(s_ns.region, rx1, rx2, dv->rx2_dr)) {
+            /* joined in another region (ADR-0024): not served until it joins again here */
+            ESP_LOGW(TAG, "device %u joined outside %s: it must join again", (unsigned)i, s_ns.region->name);
+            s_ns.dev[i].joined = false;
+        }
         key_of(k, 'x', i);
         size_t cl = sizeof s_codec[i];
         if (nvs_get_str(h, k, s_codec[i], &cl) != ESP_OK || !codecs_name_ok(s_codec[i])) {
@@ -626,7 +636,8 @@ static bool handle(const radio_pkt_t *p)
             xSemaphoreGive(s_lock);
             if (err == ESP_OK) {
                 /* the device learns its windows from this frame: it uses the defaults for it */
-                (void)send_down(p, acc, alen, LWC_NS_JOIN_DELAY_US, LWC_NS_RX2_FREQ_HZ, 0, "join-accept", eui, NULL, 0);
+                (void)send_down(p, acc, alen, LWC_NS_JOIN_DELAY_US, s_ns.region->rx2_hz, s_ns.region->rx2_dr, "join-accept",
+                                eui, NULL, 0);
                 if (post) {
                     mqttc_post(&ev);
                 }
@@ -747,7 +758,7 @@ static bool handle(const radio_pkt_t *p)
             const uint64_t eui = dev_eui;
             const size_t up_idx = up.idx;
             const uint32_t rx1_us = lwc_ns_rx1_delay_us(&s_ns.dev[up.idx]);
-            const uint32_t rx2_hz = s_ns.dev[up.idx].rx2_hz != 0U ? s_ns.dev[up.idx].rx2_hz : LWC_NS_RX2_FREQ_HZ;
+            const uint32_t rx2_hz = s_ns.dev[up.idx].rx2_hz != 0U ? s_ns.dev[up.idx].rx2_hz : s_ns.region->rx2_hz;
             const uint8_t rx2_dr = s_ns.dev[up.idx].rx2_dr;
             memset(&up, 0, sizeof up);
             xSemaphoreGive(s_lock);
@@ -885,7 +896,7 @@ static void class_c_service(void)
             }
         }
         const uint64_t eui = d->dev_eui;
-        const uint32_t rx2_hz = d->rx2_hz != 0U ? d->rx2_hz : LWC_NS_RX2_FREQ_HZ;
+        const uint32_t rx2_hz = d->rx2_hz != 0U ? d->rx2_hz : s_ns.region->rx2_hz;
         const uint8_t rx2_dr = d->rx2_dr;
         xSemaphoreGive(s_lock);
         if (!send) {
@@ -1217,7 +1228,7 @@ esp_err_t lns_queue_down(uint64_t dev_eui, uint8_t port, const uint8_t *data, si
     const int i = lwc_ns_find(&s_ns, dev_eui);
     if (i < 0) {
         err = ESP_ERR_NOT_FOUND;
-    } else if (len > lwc_ns_max_frm(s_ns.dev[i].rx2_dr)) {
+    } else if (len > lwc_ns_max_frm(s_ns.region, s_ns.dev[i].rx2_dr)) {
         err = ESP_ERR_INVALID_SIZE; /* never fits the RX2 window */
     } else {
         lwc_dlq_t *q = &s_dlq[i];

@@ -384,7 +384,7 @@ function renderSetup() {
     : (ln.joined || 0) + ' of ' + n + ' devices have joined.';
   $('#dev-note').textContent = mode === 'ttn'
     ? 'These devices are served in hybrid and standalone modes. You can add them now and change the mode later.'
-    : 'Up to 32 OTAA devices, EU868, class A or C.';
+    : 'Up to 32 OTAA devices, class A or C, in the gateway\'s region (Radio tab).';
   renderMqtt();
 }
 
@@ -565,7 +565,7 @@ async function refreshDevices() {
 }
 
 /* ---- radio ------------------------------------------------------------------ */
-const PLAN_SRC = { default: ['Built-in EU868 plan', ''], local: ['Plan set on this page', 'warn'], server: ['Plan from the network server', 'ok'] };
+const PLAN_SRC = { default: ['Built-in plan', ''], local: ['Plan set on this page', 'warn'], server: ['Plan from the network server', 'ok'] };
 /* EU868 duty-cycle sub-bands, as the radio task enforces them (core/src/txpk.c) */
 const SUBBANDS = [[863.0, 865.0, '0.1%'], [865.0, 868.0, '1%'], [868.0, 868.6, '1%'], [868.7, 869.2, '0.1%'], [869.4, 869.65, '10%'], [869.7, 870.0, '1%']];
 let P = null; /* last /api/radio */
@@ -578,7 +578,7 @@ function drawSpectrum(p) {
   const multi = p.multisf.map((c, i) => ({ ...c, i }));
   const lanes = [
     { name: 'Radio 0', sub: MHZ(p.radios[0]), radio: 0 },
-    { name: 'Radio 1', sub: MHZ(p.radios[1]), radio: 1 },
+    { name: 'Radio 1', sub: [...p.multisf, p.std, p.fsk].some((c) => c.enable && c.radio === 1) ? MHZ(p.radios[1]) : 'Unused', radio: 1 },
     { name: 'Single-SF', sub: p.std.enable ? 'SF' + p.std_sf + ' · ' + p.std_bw_khz + ' kHz' : 'Off', ch: p.std, kind: 'std', bw: p.std_bw_khz },
     { name: 'FSK', sub: p.fsk.enable ? '50 kbit/s' : 'Off', ch: p.fsk, kind: 'fsk', bw: 125 },
   ];
@@ -588,7 +588,9 @@ function drawSpectrum(p) {
   const pts = [p.rx2_hz / 1e6];
   for (const r of p.radios) pts.push(r / 1e6 - 0.4625, r / 1e6 + 0.4625);
   for (const c of [...multi, p.std, p.fsk]) if (c.enable) pts.push(hzOf(c) / 1e6);
-  let lo = Math.max(863, Math.min(...pts) - 0.1), hi = Math.min(870, Math.max(...pts) + 0.1);
+  const eu = p.region === 'EU868';
+  let lo = Math.min(...pts) - 0.1, hi = Math.max(...pts) + 0.1;
+  if (eu) { lo = Math.max(863, lo); hi = Math.min(870, hi); }
   if (hi - lo < 1) { const mid = (lo + hi) / 2; lo = mid - 0.5; hi = mid + 0.5; }
   const x = (mhz) => L + (mhz - lo) / (hi - lo) * (R - L);
   const RULER = TOP + lanes.length * LANE + 6, AXIS = RULER + 24, H = AXIS + 30;
@@ -612,7 +614,8 @@ function drawSpectrum(p) {
       const c = p.radios[ln.radio] / 1e6, x0 = x(c - 0.4625), x1 = x(c + 0.4625);
       kids.push(tip(sv('rect', { class: 'track', x: x0, y: yc - 15, width: x1 - x0, height: 30, rx: 6 }),
         'Radio ' + ln.radio + ' receive window: ' + (c - 0.4625).toFixed(3) + '–' + (c + 0.4625).toFixed(3) + ' MHz'));
-      const mine = multi.filter((m) => m.radio === ln.radio);
+      /* the channels it serves; switched-off ones are in the channel list */
+      const mine = multi.filter((m) => m.radio === ln.radio && m.enable);
       for (const m of mine) {
         const f = hzOf(m) / 1e6, w = Math.max(4, x(f + 0.0625) - x(f - 0.0625));
         kids.push(tip(sv('rect', { class: 'ch multi' + (m.enable ? '' : ' off'), x: x(f) - w / 2, y: yc - BAR / 2, width: w, height: BAR, rx: 4 }),
@@ -635,14 +638,14 @@ function drawSpectrum(p) {
       if (c.enable) kids.push(sv('text', { class: 'ch-label', x: x(f), y: yc + 26, 'text-anchor': 'middle' }, fq(f)));
     }
   });
-  /* duty-cycle ruler: one segment per sub-band, 2px apart */
-  for (const [a, b, duty] of SUBBANDS) {
+  /* duty-cycle ruler: one segment per sub-band, 2px apart (EU868: the only region that transmits) */
+  for (const [a, b, duty] of eu ? SUBBANDS : []) {
     if (b <= lo || a >= hi) continue;
     const x0 = x(Math.max(a, lo)) + 1, x1 = x(Math.min(b, hi)) - 1;
     kids.push(tip(sv('rect', { class: 'band', x: x0, y: RULER, width: Math.max(1, x1 - x0), height: 18, rx: 4 }), a + '–' + b + ' MHz: ' + duty + ' transmit duty cycle (gateway and devices)'));
     if (x1 - x0 > 58) kids.push(sv('text', { class: 'band-label', x: (x0 + x1) / 2, y: RULER + 13, 'text-anchor': 'middle' }, duty + ' duty'));
   }
-  kids.push(sv('text', { class: 'lane-sub', x: 0, y: RULER + 13 }, 'Transmit duty'));
+  kids.push(sv('text', { class: 'lane-sub', x: 0, y: RULER + 13 }, eu ? 'Transmit duty' : 'Receive only'));
   for (const t of ticks) kids.push(sv('text', { class: 'tick', x: x(t), y: AXIS + 12, 'text-anchor': 'middle' }, t.toFixed(step < 0.5 ? 2 : 1)));
   kids.push(sv('text', { class: 'lane-sub', x: 0, y: AXIS + 12 }, 'MHz'));
   svg.setAttribute('viewBox', '0 0 1000 ' + H);
@@ -669,7 +672,11 @@ function renderRadio(p) {
   const src = PLAN_SRC[p.source] || [p.source, ''];
   const chip = $('#plan-src');
   chip.className = 'chip dot ' + src[1];
-  chip.textContent = src[0];
+  chip.textContent = src[0] + (p.source === 'default' ? ' (' + p.region + ')' : '');
+  const rc = $('#region-chip');
+  rc.className = 'chip dot ' + (p.region_tx ? 'ok' : 'warn');
+  rc.textContent = p.region + (p.region_tx ? '' : ': receive only');
+  if (!$('#region-form').dataset.dirty) $('#region').value = p.region;
   drawSpectrum(p);
   const row = (name, c, mod) => el('tr', { class: c.enable ? '' : 'off' }, el('td', { text: name }), el('td', { text: c.enable ? MHZ(c.hz) : 'Off' }),
     el('td', { text: 'Radio ' + c.radio + (c.if ? ' (' + (c.if > 0 ? '+' : '') + c.if / 1000 + ' kHz)' : '') }), el('td', { text: mod }));
@@ -680,7 +687,15 @@ function renderRadio(p) {
   if (!tx.dataset.dirty) { $('#tx-gain').value = (p.gain_db10 / 10).toFixed(1); $('#tx-on').checked = p.tx; $('#tx-lns').checked = p.lns_tx; }
   const ro = document.body.classList.contains('viewer');
   for (const i of $$('#tx-form input, #rx-form input, #rx-form select')) i.disabled = ro;
-  $('#tx-on').disabled = ro || !p.tx_built;
+  $('#tx-on').disabled = ro || !p.tx_built || !p.region_tx;
+  $('#tx-lns').disabled = ro || !p.region_tx;
+  $('#region').disabled = ro;
+  /* outside EU868 the band edges are not built in: RX2 stays the region's default */
+  const rxf = $('#rx-f');
+  rxf.readOnly = !p.region_tx;
+  for (const i of [rxf, $('#pe-r0'), $('#pe-r1')]) {
+    if (p.region === 'EU868') { i.min = '863'; i.max = '870'; } else { i.removeAttribute('min'); i.removeAttribute('max'); }
+  }
   updateCap();
   const rx = $('#rx-form');
   if (!rx.dataset.dirty) { $('#rx-d').value = p.rx1_delay_s; $('#rx-f').value = (p.rx2_hz / 1e6).toFixed(3); $('#rx-dr').value = String(p.rx2_dr); }
@@ -706,8 +721,8 @@ async function refreshRadio() {
 /* Channel plan editor: one row per channel (multi-SF 0-7, single-SF, FSK). */
 const PE_CHANS = ['m0', 'm1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'std', 'fsk'];
 function fillPlanEditor(p) {
-  $('#pe-r0').value = (p.radios[0] / 1e6).toFixed(1);
-  $('#pe-r1').value = (p.radios[1] / 1e6).toFixed(1);
+  $('#pe-r0').value = String(p.radios[0] / 1e6);
+  $('#pe-r1').value = String(p.radios[1] / 1e6);
   $('#pe-sf').value = String(p.std_sf);
   $('#pe-bw').value = String(p.std_bw_khz);
   $('#pe-rows').replaceChildren(...[...p.multisf, p.std, p.fsk].map((c, i) => {
@@ -993,7 +1008,17 @@ document.addEventListener('DOMContentLoaded', () => {
     try { toast(await post('/api/radio/plan', body)); delete $('#plan-form').dataset.dirty; refreshRadio(); } catch (e) { toast(e.message, true); }
   };
   $('#plan-form').addEventListener('submit', (ev) => { ev.preventDefault(); savePlan(planBody(), 'Save this channel plan?'); });
-  $('#pe-reset').addEventListener('click', () => savePlan(new URLSearchParams({ reset: '1' }), 'Go back to the built-in EU868 plan?'));
+  $('#pe-reset').addEventListener('click', () => savePlan(new URLSearchParams({ reset: '1' }), 'Go back to the built-in plan of the region?'));
+  const regionClean = dirtyForm($('#region-form'));
+  $('#region-form').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const r = $('#region').value;
+    if (P && r === P.region) { regionClean(); return; }
+    if (!confirm('Change the region to ' + r + '? The gateway restarts. The channel plan and the receive windows go back to '
+      + r + "'s defaults, and devices that joined in another region must join again."
+      + (r === 'EU868' ? '' : ' In ' + r + ' the gateway only receives: it transmits nothing.'))) return;
+    try { toast(await post('/api/radio', new URLSearchParams({ region: r }))); regionClean(); } catch (e) { toast(e.message, true); }
+  });
 
   /* system */
   $('#logs-refresh').addEventListener('click', refreshLogs);

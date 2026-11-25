@@ -32,6 +32,7 @@ static const char *TAG = "radioplan";
 #define KEY_RX1 "rx1"
 #define KEY_RX2_HZ "rx2hz"
 #define KEY_RX2_DR "rx2dr"
+#define KEY_REGION "region"
 #define EIRP_LIMIT_DB10 161 /* EU868 14 dBm ERP = 16.15 dBm EIRP (ADR-0007), rounded down */
 
 static SemaphoreHandle_t s_lock;
@@ -45,6 +46,7 @@ static lwc_plan_t s_bad;  /* the radio could not start with it */
 static bool s_have_bad;
 static radio_tx_cfg_t s_tx;
 static radio_rx_cfg_t s_rx;
+static const lwc_region_t *s_region;
 
 static void lock(void)
 {
@@ -66,14 +68,25 @@ static void load(void)
         return;
     }
     s_loaded = true;
-    lwc_plan_default_eu868(&s_plan);
+    s_region = lwc_region(LWC_REGION_EU868);
+    s_tx = (radio_tx_cfg_t){30, CONFIG_GW_TX_ENABLE != 0, CONFIG_GW_LNS_TX != 0};
+    nvs_handle_t h;
+    const bool have_nvs = nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK;
+    uint8_t id;
+    if (have_nvs && nvs_get_u8(h, KEY_REGION, &id) == ESP_OK) {
+        const lwc_region_t *r = lwc_region((lwc_region_id_t)id);
+        if (r != NULL && !r->fixed) {
+            s_region = r;
+        } else {
+            ESP_LOGW(TAG, "stored region %u not usable: EU868", (unsigned)id);
+        }
+    }
+    (void)lwc_plan_default(&s_plan, s_region);
     s_src = RADIOPLAN_DEFAULT;
     s_prev = s_plan;
     s_prev_src = s_src;
-    s_tx = (radio_tx_cfg_t){30, CONFIG_GW_TX_ENABLE != 0, CONFIG_GW_LNS_TX != 0};
-    s_rx = (radio_rx_cfg_t){1, LWC_NS_RX2_FREQ_HZ, 0};
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) {
+    s_rx = (radio_rx_cfg_t){1, s_region->rx2_hz, s_region->rx2_dr};
+    if (!have_nvs) {
         return;
     }
     uint8_t b[LWC_PLAN_PACKED];
@@ -81,11 +94,12 @@ static void load(void)
     uint8_t src = RADIOPLAN_DEFAULT;
     lwc_plan_t p;
     if (nvs_get_blob(h, KEY_PLAN, b, &n) == ESP_OK) {
-        if (lwc_plan_unpack(b, n, &p) && nvs_get_u8(h, KEY_SRC, &src) == ESP_OK && src <= RADIOPLAN_SERVER) {
+        if (lwc_plan_unpack(b, n, s_region, &p) && nvs_get_u8(h, KEY_SRC, &src) == ESP_OK &&
+            src <= RADIOPLAN_SERVER) {
             s_plan = p; /* s_prev stays the default: a stored plan that fails falls back to it */
             s_src = (radioplan_src_t)src;
         } else {
-            ESP_LOGW(TAG, "stored plan not valid: using the EU868 default");
+            ESP_LOGW(TAG, "stored plan not valid: using the %s default", s_region->name);
         }
     }
     int16_t g;
@@ -104,11 +118,55 @@ static void load(void)
     if (nvs_get_u8(h, KEY_RX1, &rx.rx1_delay_s) == ESP_OK && nvs_get_u32(h, KEY_RX2_HZ, &hz) == ESP_OK &&
         nvs_get_u8(h, KEY_RX2_DR, &rx.rx2_dr) == ESP_OK) {
         rx.rx2_hz = hz;
-        if (lwc_ns_rx_ok(rx.rx1_delay_s, rx.rx2_hz, rx.rx2_dr)) {
+        if (lwc_ns_rx_ok(s_region, rx.rx1_delay_s, rx.rx2_hz, rx.rx2_dr)) {
             s_rx = rx;
         }
     }
     nvs_close(h);
+}
+
+const lwc_region_t *radioplan_region(void)
+{
+    lock();
+    load();
+    const lwc_region_t *r = s_region;
+    unlock();
+    return r;
+}
+
+esp_err_t radioplan_set_region(const lwc_region_t *r)
+{
+    ESP_RETURN_ON_FALSE(r != NULL, ESP_ERR_INVALID_ARG, TAG, "region");
+    ESP_RETURN_ON_FALSE(!r->fixed, ESP_ERR_NOT_SUPPORTED, TAG, "%s: not yet", r->name);
+    lock();
+    load();
+    const lwc_region_t *old = s_region;
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(NVS_NS, NVS_READWRITE, &h);
+    if (err == ESP_OK) {
+        err = nvs_set_u8(h, KEY_REGION, (uint8_t)r->id);
+        if (err == ESP_OK && r != old) { /* the plan and windows of another region: back to the defaults */
+            const char *keys[] = {KEY_PLAN, KEY_SRC, KEY_RX1, KEY_RX2_HZ, KEY_RX2_DR};
+            for (size_t i = 0; err == ESP_OK && i < sizeof keys / sizeof keys[0]; i++) {
+                err = nvs_erase_key(h, keys[i]);
+                err = err == ESP_ERR_NVS_NOT_FOUND ? ESP_OK : err;
+            }
+        }
+        if (err == ESP_OK) {
+            err = nvs_commit(h);
+        }
+        nvs_close(h);
+    }
+    if (err == ESP_OK) {
+        s_loaded = false; /* read again from NVS */
+        s_have_bad = false;
+    }
+    unlock();
+    if (err == ESP_OK) {
+        ESP_LOGW(TAG, "region %s (was %s)%s", r->name, old->name,
+                 lwc_region_tx_enabled(r) ? "" : ": receive only, the radio transmits nothing");
+    }
+    return err;
 }
 
 void radioplan_get(lwc_plan_t *out)
@@ -171,10 +229,14 @@ void radioplan_reject_current(void)
 esp_err_t radioplan_store(const lwc_plan_t *p, radioplan_src_t src, bool *changed)
 {
     ESP_RETURN_ON_FALSE(p != NULL && src <= RADIOPLAN_SERVER, ESP_ERR_INVALID_ARG, TAG, "arg");
-    const lwc_plan_err_t e = lwc_plan_check(p);
-    ESP_RETURN_ON_FALSE(e == LWC_PLAN_OK, ESP_ERR_INVALID_ARG, TAG, "plan rejected (%d)", (int)e);
     lock();
     load();
+    const lwc_plan_err_t e = lwc_plan_check(p, s_region);
+    if (e != LWC_PLAN_OK) {
+        unlock();
+        ESP_LOGW(TAG, "plan rejected (%d)", (int)e);
+        return ESP_ERR_INVALID_ARG;
+    }
     if (s_have_bad && lwc_plan_equal(p, &s_bad)) {
         unlock();
         if (changed != NULL) {
@@ -253,10 +315,16 @@ void radioplan_rx(radio_rx_cfg_t *out)
 
 esp_err_t radioplan_set_rx(const radio_rx_cfg_t *c)
 {
-    ESP_RETURN_ON_FALSE(c != NULL && lwc_ns_rx_ok(c->rx1_delay_s, c->rx2_hz, c->rx2_dr) && lwc_dc_band(c->rx2_hz) >= 0,
-                        ESP_ERR_INVALID_ARG, TAG, "receive windows");
+    ESP_RETURN_ON_FALSE(c != NULL, ESP_ERR_INVALID_ARG, TAG, "arg");
     lock();
     load();
+    const lwc_region_t *rg = s_region;
+    if (!lwc_ns_rx_ok(rg, c->rx1_delay_s, c->rx2_hz, c->rx2_dr) ||
+        (rg->id == LWC_REGION_EU868 && lwc_dc_band(c->rx2_hz) < 0)) {
+        unlock();
+        ESP_LOGW(TAG, "receive windows rejected");
+        return ESP_ERR_INVALID_ARG;
+    }
     nvs_handle_t h;
     esp_err_t err = nvs_open(NVS_NS, NVS_READWRITE, &h);
     if (err == ESP_OK) {
@@ -306,8 +374,12 @@ size_t radioplan_json(char *out, size_t cap)
     radioplan_get(&p);
     const radioplan_src_t src = radioplan_source();
     size_t o = 0;
-    int n = snprintf(out, cap, "{\"source\":\"%s\",\"radios\":[%" PRIu32 ",%" PRIu32 "],\"multisf\":[",
-                     radioplan_source_name(src), p.radio_hz[0], p.radio_hz[1]);
+    const lwc_region_t *rg = radioplan_region();
+    int n = snprintf(out, cap,
+                     "{\"region\":\"%s\",\"region_tx\":%s,\"source\":\"%s\",\"radios\":[%" PRIu32 ",%" PRIu32
+                     "],\"multisf\":[",
+                     rg->name, lwc_region_tx_enabled(rg) ? "true" : "false", radioplan_source_name(src), p.radio_hz[0],
+                     p.radio_hz[1]);
     o = (n < 0 || (size_t)n >= cap) ? cap : (size_t)n;
     for (size_t i = 0; i < LWC_PLAN_MULTISF && o < cap; i++) {
         chan_json(out, cap, &o, &p, &p.multisf[i], i + 1U < LWC_PLAN_MULTISF);
