@@ -949,8 +949,9 @@ static esp_err_t api_devices_post(httpd_req_t *req)
     if (!read_body(req, body, &got)) {
         return send_status(req, "400 Bad Request", "bad body\n");
     }
-    char dev[24], join[24], key[40], mac[8], name[LWC_NS_NAME_MAX + 1U];
+    char dev[24], join[24], key[40], mac[8], name[LWC_NS_NAME_MAX + 1U], cls[4];
     const int dl = lwc_form_get(body, got, "dev_eui", dev, sizeof dev);
+    const int cl = lwc_form_get(body, got, "class", cls, sizeof cls);
     const int jl = lwc_form_get(body, got, "join_eui", join, sizeof join);
     const int kl = lwc_form_get(body, got, "app_key", key, sizeof key);
     const int ml = lwc_form_get(body, got, "mac", mac, sizeof mac);
@@ -967,13 +968,15 @@ static esp_err_t api_devices_post(httpd_req_t *req)
                       : !ok_key ? "AppKey: 32 hex digits.\n"
                       : (ml > 0 && strcmp(mac, "1.0.4") != 0 && strcmp(mac, "1.0.2") != 0)
                           ? "LoRaWAN version: 1.0.2 or 1.0.4.\n"
-                          : NULL;
+                      : (cl >= 0 && strcmp(cls, "A") != 0 && strcmp(cls, "C") != 0) ? "class: A or C.\n"
+                                                                                     : NULL;
     if (why != NULL) {
         memset(app_key, 0, sizeof app_key);
         return send_status(req, "400 Bad Request", why);
     }
     const lwc_ns_mac_t v = (ml > 0 && strcmp(mac, "1.0.4") == 0) ? LWC_NS_MAC_1_0_4 : LWC_NS_MAC_1_0_2;
-    const lwc_ns_err_t e = lns_add(dev_eui, join_eui, app_key, v, nl > 0 ? name : NULL);
+    const lwc_ns_err_t e = lns_add(dev_eui, join_eui, app_key, v, nl > 0 ? name : NULL,
+                                   cl > 0 && cls[0] == 'C' ? LWC_NS_CLASS_C : LWC_NS_CLASS_A);
     memset(app_key, 0, sizeof app_key);
     if (e != LWC_NS_OK) {
         return send_status(req, e == LWC_NS_ERR_EXISTS ? "409 Conflict" : "507 Insufficient Storage",
@@ -1002,6 +1005,42 @@ static esp_err_t api_devices_delete(httpd_req_t *req)
     const lwc_ns_err_t e = lns_remove(dev_eui);
     return e == LWC_NS_OK ? send_status(req, "200 OK", "removed\n")
                           : send_status(req, "404 Not Found", ns_err_text(e));
+}
+
+/* POST /api/devices/settings dev_eui=..[&class=A|C][&c_ack_s=0|5..3600] (admin,
+ * ADR-0020): class, and the class C ACK wait (0: the default, 60 s). The
+ * session is kept. */
+static esp_err_t api_devices_settings(httpd_req_t *req)
+{
+    esp_err_t r;
+    if (!gate(req, LWC_ROLE_ADMIN, &r)) {
+        return r;
+    }
+    char body[BODY_MAX + 1];
+    size_t got;
+    char dev[24], cls[4], ack[8];
+    uint64_t dev_eui;
+    if (!read_body(req, body, &got)) {
+        return send_status(req, "400 Bad Request", "bad body\n");
+    }
+    const int dl = lwc_form_get(body, got, "dev_eui", dev, sizeof dev);
+    const int cl = lwc_form_get(body, got, "class", cls, sizeof cls);
+    const int al = lwc_form_get(body, got, "c_ack_s", ack, sizeof ack);
+    if (dl <= 0 || !lwc_hex_eui(dev, (size_t)dl, &dev_eui)) {
+        return send_status(req, "400 Bad Request", "DevEUI: 16 hex digits.\n");
+    }
+    char *end = NULL;
+    const long secs = al > 0 ? strtol(ack, &end, 10) : -1;
+    if ((cl < 0 && al < 0) || (cl >= 0 && strcmp(cls, "A") != 0 && strcmp(cls, "C") != 0) || al == 0 ||
+        (al > 0 && (*end != '\0' || (secs != 0 && (secs < (long)LWC_NS_C_ACK_MIN_S || secs > (long)LWC_NS_C_ACK_MAX_S))))) {
+        return send_status(req, "400 Bad Request", "class: A or C; c_ack_s: 0 (default, 60) or 5 to 3600.\n");
+    }
+    const lwc_ns_class_t c = cls[0] == 'C' ? LWC_NS_CLASS_C : LWC_NS_CLASS_A;
+    const uint16_t a = (uint16_t)(secs < 0 ? 0 : secs);
+    const lwc_ns_err_t e = lns_set_class(dev_eui, cl > 0 ? &c : NULL, al > 0 ? &a : NULL);
+    return e == LWC_NS_OK ? send_status(req, "200 OK", "saved\n")
+                          : send_status(req, e == LWC_NS_ERR_NOT_FOUND ? "404 Not Found" : "507 Insufficient Storage",
+                                        ns_err_text(e));
 }
 
 /* ---- claim (ADR-0014) ------------------------------------------------------------
@@ -1112,7 +1151,7 @@ esp_err_t web_start(void)
     cfg.httpd.core_id = 0;
     cfg.httpd.max_open_sockets = 3;
     cfg.httpd.lru_purge_enable = true;
-    cfg.httpd.max_uri_handlers = 24;
+    cfg.httpd.max_uri_handlers = 28;
     cfg.httpd.uri_match_fn = NULL;
     ESP_RETURN_ON_ERROR(httpd_ssl_start(&s_srv, &cfg), TAG, "httpd_ssl_start");
 
@@ -1139,6 +1178,7 @@ esp_err_t web_start(void)
         {.uri = "/api/tasks", .method = HTTP_GET, .handler = api_tasks},
         {.uri = "/api/devices", .method = HTTP_POST, .handler = api_devices_post},
         {.uri = "/api/devices/delete", .method = HTTP_POST, .handler = api_devices_delete},
+        {.uri = "/api/devices/settings", .method = HTTP_POST, .handler = api_devices_settings},
     };
     for (size_t i = 0; i < sizeof uris / sizeof uris[0]; i++) {
         ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_srv, &uris[i]), TAG, "uri %s", uris[i].uri);

@@ -260,6 +260,57 @@ static void app_downlinks(size_t idx, uint32_t addr, const uint8_t nwk[16], cons
           !dl.confirmed && lwc_lw_mtype(dl.frame, dl.len) == LWC_LW_UNCONFIRMED_DOWN);
 }
 
+/* Class C (ADR-0020): downlinks that answer no uplink */
+static void class_c(size_t idx, uint32_t addr, const uint8_t nwk[16], const uint8_t app[16])
+{
+    uint8_t big[60];
+    for (size_t i = 0; i < sizeof big; i++) {
+        big[i] = (uint8_t)(i ^ 0x5AU);
+    }
+    lwc_ns_dl_t dl;
+    lwc_ns_app_t a = {.port = 12, .data = big, .len = 4};
+    const uint64_t eui = ns.dev[idx].dev_eui;
+    uint32_t down = ns.dev[idx].fcnt_down;
+    CHECK(ns.dev[idx].dev_class == LWC_NS_CLASS_A && !lwc_ns_class_c_down(&ns, idx, &a, &dl)); /* class A */
+    CHECK(lwc_ns_set_class(&ns, eui, (lwc_ns_class_t)1) == LWC_NS_ERR_ARG);
+    CHECK(lwc_ns_set_class(&ns, 0x99, LWC_NS_CLASS_C) == LWC_NS_ERR_NOT_FOUND);
+    CHECK(lwc_ns_set_class(&ns, eui, LWC_NS_CLASS_C) == LWC_NS_OK && ns.dev[idx].dev_class == LWC_NS_CLASS_C);
+    /* unconfirmed: no FOpts, no ACK; read as the device reads it */
+    CHECK(lwc_ns_class_c_down(&ns, idx, &a, &dl) && dl.app && !dl.confirmed && !dl.ack);
+    CHECK(dl.fcnt == down && ns.dev[idx].fcnt_down == down + 1U && app_ok(&dl, nwk, app, addr, 12, big, 4, false));
+    lwc_lw_data_t d;
+    CHECK(lwc_lw_data_parse(dl.frame, dl.len, &d) == LWC_LW_OK && d.fopts_len == 0U &&
+          (d.fctrl & LWC_LW_FCTRL_ACK) == 0U);
+    /* confirmed and more waiting: MType 5 with FPending */
+    a = (lwc_ns_app_t){.port = 13, .data = big, .len = 51, .confirmed = true, .more = true};
+    CHECK(lwc_ns_class_c_down(&ns, idx, &a, &dl) && dl.confirmed &&
+          lwc_lw_mtype(dl.frame, dl.len) == LWC_LW_CONFIRMED_DOWN && app_ok(&dl, nwk, app, addr, 13, big, 51, true));
+    /* RX2 at DR0 here: 52 B does not fit; no counter used */
+    down = ns.dev[idx].fcnt_down;
+    a.len = 52;
+    CHECK(!lwc_ns_class_c_down(&ns, idx, &a, &dl) && dl.app_too_big && ns.dev[idx].fcnt_down == down);
+    a = (lwc_ns_app_t){.port = 0, .data = big, .len = 1};
+    CHECK(!lwc_ns_class_c_down(&ns, idx, &a, &dl));
+    /* no proven session (no uplink since the join): nothing */
+    ns.dev[idx].has_up = false;
+    a.port = 1;
+    CHECK(!lwc_ns_class_c_down(&ns, idx, &a, &dl) && ns.dev[idx].fcnt_down == down);
+    ns.dev[idx].has_up = true;
+    CHECK(lwc_ns_set_class(&ns, eui, LWC_NS_CLASS_A) == LWC_NS_OK);
+    /* the ACK wait: default 60 s, 5..3600 s, 0 back to the default */
+    CHECK(lwc_ns_c_ack_s(&ns.dev[idx]) == 60U);
+    CHECK(lwc_ns_set_c_ack(&ns, eui, 4) == LWC_NS_ERR_ARG && lwc_ns_set_c_ack(&ns, eui, 3601) == LWC_NS_ERR_ARG);
+    CHECK(lwc_ns_set_c_ack(&ns, 0x99, 10) == LWC_NS_ERR_NOT_FOUND);
+    CHECK(lwc_ns_set_c_ack(&ns, eui, 5) == LWC_NS_OK && lwc_ns_c_ack_s(&ns.dev[idx]) == 5U);
+    CHECK(lwc_ns_set_c_ack(&ns, eui, 3600) == LWC_NS_OK && lwc_ns_c_ack_s(&ns.dev[idx]) == 3600U);
+    CHECK(lwc_ns_set_c_ack(&ns, eui, 0) == LWC_NS_OK && lwc_ns_c_ack_s(&ns.dev[idx]) == 60U);
+    /* timed at the given counter, RX2 form */
+    lwc_txpk_t pk;
+    lwc_ns_downlink_at(0x00000100U, 869525000U, 3, 14, big, 5, &pk);
+    CHECK(pk.mode == LWC_TXPK_TIMED && pk.tmst == 0x00000100U && pk.freq_hz == 869525000U && pk.sf == 9U &&
+          pk.bw_khz == 125U && pk.ipol && pk.ncrc && pk.size == 5U && pk.powe == 14);
+}
+
 static void adr_step(void)
 {
     uint8_t dr, pw;
@@ -537,6 +588,7 @@ int main(void)
     answers(idx, addr, nwk, app, 0x10002);
     app_downlinks(idx, addr, nwk, app, 0x10100);
     CHECK(ns.link[idx].has_status);
+    class_c(idx, addr, nwk, app);
 
     /* rejoin keeps the address, resets counters */
     join_request(jr, KEY, DEV_EUI, 6);

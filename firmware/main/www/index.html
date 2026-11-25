@@ -186,7 +186,7 @@
                   <label>Gateway id <input name="mqtt_gw_id" id="mqtt-gwid" maxlength="31" pattern="[a-z0-9_]+"></label>
                 </div>
                 <p class="note">Topics: <code id="mqtt-topics"></code>. The gateway id is part of every topic.</p>
-                <p class="note">Downlinks: publish <code>{"id":"job-1","port":1,"payload_hex":"0102","confirmed":true}</code> (not retained) to <code>…/&lt;DevEUI&gt;/down</code>; <code>confirmed</code> and <code>id</code> are optional. The gateway sends it after the device's next uplink, up to 4 per device. Needs "Local server transmit" on (Radio tab).</p>
+                <p class="note">Downlinks: publish <code>{"id":"job-1","port":1,"payload_hex":"0102","confirmed":true}</code> (not retained) to <code>…/&lt;DevEUI&gt;/down</code>; <code>confirmed</code> and <code>id</code> are optional. The gateway sends it after the device's next uplink (a class C device: at once, then one every 5 s), up to 4 per device. Needs "Local server transmit" on (Radio tab).</p>
                 <p class="note">Results on <code>…/&lt;DevEUI&gt;/down/result</code>, with your <code>id</code>: <code>queued</code> or <code>refused</code>, then <code>sent</code> for each transmission, then <code>acked</code> or <code>nacked</code> for a confirmed downlink. <code>dropped</code> if it could not be delivered. A nacked downlink is not sent again: publish it again if needed.</p>
               </details>
               <p class="note" id="mqtt-plain-note">Plain MQTT (no TLS): the password and data cross the network readable; use it on your own network only.</p>
@@ -214,6 +214,7 @@
           <label>JoinEUI (AppEUI) <input name="join_eui" class="hex" required pattern="[0-9A-Fa-f]{16}" maxlength="16" placeholder="16 hex digits"></label>
           <label>AppKey <input name="app_key" class="hex" type="password" required pattern="[0-9A-Fa-f]{32}" maxlength="32" placeholder="32 hex digits, never shown again" autocomplete="off"></label>
           <label>LoRaWAN version <select name="mac"><option value="1.0.2">1.0.2 / 1.0.3</option><option value="1.0.4">1.0.4</option></select></label>
+          <label>Class <select name="class"><option value="A">A: listens after each uplink</option><option value="C">C: listens all the time (mains powered)</option></select></label>
           <div class="actions"><button type="submit" class="primary">Add device</button><button type="button" class="ghost" id="dev-add-cancel">Cancel</button></div>
         </form>
       </div>

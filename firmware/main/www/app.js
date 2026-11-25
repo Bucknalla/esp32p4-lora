@@ -314,7 +314,7 @@ async function diagnostics(redact) {
   try {
     out.devices = (await (await api('/api/devices')).json()).map((d) => ({ name: d.name, dev_eui: d.dev_eui, mac: d.mac, joined: d.joined, answered: d.answered,
       fcnt_up: d.fcnt_up, uplinks: d.uplinks, seen_s: d.seen_s, rssi: d.rssi, snr: d.snr, sf: d.sf, battery: d.battery, margin: d.margin,
-      tx_power: d.tx_power, adr: d.adr, rx1_delay_s: d.rx1_delay_s, rx2_hz: d.rx2_hz, rx2_dr: d.rx2_dr }));
+      tx_power: d.tx_power, adr: d.adr, rx1_delay_s: d.rx1_delay_s, rx2_hz: d.rx2_hz, rx2_dr: d.rx2_dr, class: d.class }));
   } catch (e) { out.devices = 'unavailable: ' + e.message; }
   let s = JSON.stringify(out, null, 2);
   if (redact) {
@@ -382,7 +382,7 @@ function renderSetup() {
     : (ln.joined || 0) + ' of ' + n + ' devices have joined.';
   $('#dev-note').textContent = mode === 'ttn'
     ? 'These devices are served in hybrid and standalone modes. You can add them now and change the mode later.'
-    : 'Up to 32 OTAA devices, EU868, class A.';
+    : 'Up to 32 OTAA devices, EU868, class A or C.';
   renderMqtt();
 }
 
@@ -478,8 +478,24 @@ async function refreshDevices() {
         if (!confirm('Remove ' + (d.name || d.dev_eui) + '? It must join again after you add it back.')) return;
         try { await post('/api/devices/delete', 'dev_eui=' + d.dev_eui); toast('Device removed.'); refreshDevices(); } catch (e) { toast(e.message, true); }
       });
+      /* class A or C (ADR-0020): C gets its downlinks at once, on RX2 */
+      const cls = el('select', { class: 'admin small', 'aria-label': 'Class of ' + (d.name || d.dev_eui) },
+        el('option', { value: 'A', text: 'Class A' }), el('option', { value: 'C', text: 'Class C' }));
+      cls.value = d.class === 'C' ? 'C' : 'A';
+      cls.addEventListener('change', async () => {
+        try { await post('/api/devices/settings', 'dev_eui=' + d.dev_eui + '&class=' + cls.value); toast('Class ' + cls.value + ' set.'); refreshDevices(); } catch (e) { toast(e.message, true); refreshDevices(); }
+      });
+      /* class C: how long a confirmed downlink waits for the uplink with its ACK */
+      const ack = el('input', { type: 'number', min: 5, max: 3600, step: 1, value: d.c_ack_s || 60, class: 'small',
+        'aria-label': 'ACK wait in seconds', title: 'How long a confirmed downlink waits for the device to acknowledge it' });
+      ack.addEventListener('change', async () => {
+        try { await post('/api/devices/settings', 'dev_eui=' + d.dev_eui + '&c_ack_s=' + ack.value); toast('ACK wait ' + ack.value + ' s.'); } catch (e) { toast(e.message, true); refreshDevices(); }
+      });
+      const ackBox = d.class === 'C' ? el('label', { class: 'admin ack-wait' }, 'ACK wait ', ack, ' s') : null;
       return el('div', { class: 'dev' },
-        el('div', { class: 'who' }, el('b', { text: d.name || 'Unnamed device' }), el('code', { text: d.dev_eui })),
+        el('div', { class: 'who' }, el('b', { text: d.name || 'Unnamed device' }), el('code', { text: d.dev_eui }),
+          el('span', { class: 'chip viewer-only', text: 'Class ' + (d.class === 'C' ? 'C' : 'A') }), cls, ackBox,
+          d.waiting ? el('span', { class: 'chip warn', text: d.waiting + ' downlink' + (d.waiting > 1 ? 's' : '') + ' waiting' }) : null),
         el('div', { class: 'sig' }, bars(d.snr, seen), el('span', { text: seen ? d.rssi + ' dBm · SNR ' + d.snr + ' dB · SF' + d.sf : 'No signal yet' })),
         el('div', { class: 'seen' }, el('span', { class: 'chip dot ' + status[0], text: status[1] }),
           el('small', { text: ago(d.seen_s) + (d.uplinks ? ' · ' + d.uplinks + ' uplinks' : '') + (d.joined ? ' · FCnt ' + d.fcnt_up : '') }),

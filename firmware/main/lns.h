@@ -22,7 +22,11 @@ bool lns_running(void);
 
 /** Add a device (web API, admin). The AppKey is stored, never shown again. */
 lwc_ns_err_t lns_add(uint64_t dev_eui, uint64_t join_eui, const uint8_t app_key[16], lwc_ns_mac_t mac,
-                     const char *name);
+                     const char *name, lwc_ns_class_t cls);
+
+/** Change a device's class (A or C) and/or its class C ACK wait (seconds,
+ *  0 = default), ADR-0020; NULL leaves one as it is. Its session is kept. */
+lwc_ns_err_t lns_set_class(uint64_t dev_eui, const lwc_ns_class_t *cls, const uint16_t *c_ack_s);
 lwc_ns_err_t lns_remove(uint64_t dev_eui);
 
 /**

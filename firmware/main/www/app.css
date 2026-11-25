@@ -139,6 +139,7 @@ details.more { margin: 8px 0 20px; }
 details.more > summary { cursor: pointer; color: var(--muted); font-size: 14px; padding: 6px 0; }
 details.more > summary:hover { color: var(--ink); }
 body.viewer .admin { display: none !important; }
+body:not(.viewer) .viewer-only { display: none !important; }
 
 .chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px; font-size: 13px; background: var(--sunken); border: 1px solid var(--line); color: var(--ink); white-space: nowrap; }
 .chip.ok { background: var(--ok-soft); border-color: transparent; }
@@ -359,3 +360,6 @@ th .sort.on::after { content: " \2193"; }
 .stat .copy button { padding: 2px 8px; font-size: 12px; }
 .gw-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 4px 32px; padding: 14px 20px; }
 .gw-row .stat { margin: 0; align-items: center; }
+/* Devices: class C ACK wait (ADR-0020) */
+.ack-wait { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted, inherit); white-space: nowrap; }
+.ack-wait input { width: 5.5em; padding: 4px 6px; font-size: 13px; }
