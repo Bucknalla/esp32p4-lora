@@ -52,7 +52,12 @@ their own, with no uplink to answer.
 - **The ACK wait is per device**: `c_ack_s` 5-3600 s, default 60 s (0 in
   the API returns to it), in the device record and on the Devices tab.
 - **Local devices only.** Class C downlinks from TTN that answer no uplink
-  are still refused (ADR-0016: no timed transmit without GPS time).
+  are still refused (ADR-0016). Correction (2026-11-25): this needs no GPS.
+  In the Basics Station reference (`s2e.c`, `altTxTime`) a class C `dnmsg`
+  with no RX1 is sent at the earliest free time on its RX2 frequency, from
+  the concentrator counter; it is dropped only before the gateway's counter
+  is synchronised. The same counter-plus-lead send used here for local
+  devices can serve it: a follow-up, not GPS work.
 - The `lns` task wakes every 100 ms (was 1 s) to serve class C queues.
 
 ## Consequences

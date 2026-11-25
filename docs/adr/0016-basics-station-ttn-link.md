@@ -98,7 +98,9 @@ gateways.
   16 dBm (27 dBm in 869.4-869.65 MHz), coding rate 4/5, inverted
   polarity, no CRC, preamble 8; the radio's power cap (ADR-0007) applies.
 - **Not supported**: class B (`dC` 1, `gpstime`: no GPS), and class C
-  downlinks that do not answer an uplink (no `xtime`).
+  downlinks that do not answer an uplink (no `xtime`). The latter needs no
+  GPS: the reference station sends them at the next free time on RX2 from
+  its own counter (ADR-0020, correction); a follow-up.
 - **CUPS** (remote configuration and updates) is out of scope: firmware
   updates already come through our own signed OTA (ADR-0008), and CUPS would
   need a second key with more rights.

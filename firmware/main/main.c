@@ -10,6 +10,7 @@
 #include "gwmode.h"
 #include "lns.h"
 #include "codecs.h"
+#include "gps.h"
 #include "mqttc.h"
 #include "conc.h"
 #include "conc_hal.h"
@@ -81,6 +82,13 @@ static void core_selftest(void)
     } else {
         ESP_LOGE(TAG, "core self-test: FAILED (err %d)", (int)r);
     }
+}
+
+/* SNTP set the clock: GPS must not override it while it is fresh (ADR-0022). */
+static void sntp_synced(struct timeval *tv)
+{
+    (void)tv;
+    gps_sntp_synced();
 }
 
 void app_main(void)
@@ -198,6 +206,7 @@ void app_main(void)
      * before the network is up; SNTP retries, and asks again on a new IP. */
     esp_sntp_config_t sntp = ESP_NETIF_SNTP_DEFAULT_CONFIG(CONFIG_GW_NTP_SERVER);
     sntp.renew_servers_after_new_IP = true;
+    sntp.sync_cb = sntp_synced; /* the GPS module keeps track of who set the clock (ADR-0022) */
     if (esp_netif_sntp_init(&sntp) != ESP_OK) {
         ESP_LOGW(TAG, "SNTP start failed: no wall clock");
     }
@@ -209,6 +218,12 @@ void app_main(void)
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "local network server: %s", esp_err_to_name(err));
     }
+    /* GPS receiver (ADR-0022); off unless set. A failure leaves it off. */
+    err = gps_start();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "gps: %s", esp_err_to_name(err));
+    }
+
     /* Payload codecs (ADR-0021): before MQTT, which decodes with them. A
      * storage or codec failure leaves codecs off; the gateway runs on. */
     err = codecs_start();
