@@ -86,7 +86,8 @@ this bench nothing may transmit at 902-928 MHz.
   - **EU433** is a dynamic region (433.175, 433.375 and 433.575 MHz), so the
     R2 code serves it unchanged.
   - **The other ten regions** are byte-identical in the generated tables.
-- **The local network server does not serve fixed-channel regions.**
+- **The local network server does not serve fixed-channel regions** (US915
+  and AU915 since ADR-0026; CN470 still not).
   `lwc_ns_set_region` refuses them and leaves its state unchanged. The local
   server then handles no frame, so hybrid mode still forwards every frame to
   the network server. Sessions are marked not joined in RAM, as in ADR-0024.

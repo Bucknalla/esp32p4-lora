@@ -6,6 +6,8 @@
 #include "lwc/mac.h"
 #include "lwc/region.h"
 
+#define LWC_NS_CH_RETRY 4U /* uplinks between tries of the sub-band pair */
+
 static void wipe(void *p, size_t n)
 {
     volatile uint8_t *v = p;
@@ -19,13 +21,19 @@ void lwc_ns_init(lwc_ns_t *ns)
     memset(ns, 0, sizeof *ns);
     ns->join_nonce = 1;
     ns->next_addr = 1;
+    ns->subband = -1;
     (void)lwc_ns_set_region(ns, lwc_region(LWC_REGION_EU868));
+}
+
+bool lwc_ns_region_ok(const lwc_region_t *r)
+{
+    return r != NULL && (!r->fixed || (r->n_up125 == 64U && r->n_up500 == 8U));
 }
 
 bool lwc_ns_set_region(lwc_ns_t *ns, const lwc_region_t *r)
 {
     lwc_plan_t p;
-    if (ns == NULL || r == NULL || r->fixed || !lwc_plan_default(&p, r)) {
+    if (ns == NULL || !lwc_ns_region_ok(r) || !lwc_plan_default(&p, r)) {
         return false;
     }
     ns->region = r;
@@ -35,8 +43,14 @@ bool lwc_ns_set_region(lwc_ns_t *ns, const lwc_region_t *r)
 
 bool lwc_ns_rx_ok(const lwc_region_t *r, uint8_t rx1_delay_s, uint32_t rx2_hz, uint8_t rx2_dr)
 {
-    if (r == NULL || r->fixed || rx1_delay_s < 1U || rx1_delay_s > 15U || rx2_dr > 15U ||
-        r->dr[rx2_dr].kind != LWC_DR_LORA || r->dr[rx2_dr].bw_khz != 125U) {
+    if (!lwc_ns_region_ok(r) || rx1_delay_s < 1U || rx1_delay_s > 15U || rx2_dr > 15U ||
+        r->dr[rx2_dr].kind != LWC_DR_LORA) {
+        return false;
+    }
+    if (r->fixed) { /* US915/AU915: a downlink DR (500 kHz), RX2 on its fixed frequency */
+        return rx2_dr >= r->down.min_dr && rx2_dr <= r->down.max_dr && rx2_hz == r->rx2_hz;
+    }
+    if (r->dr[rx2_dr].bw_khz != 125U) {
         return false;
     }
     if (r->id == LWC_REGION_EU868) {
@@ -78,6 +92,16 @@ void lwc_ns_set_plan(lwc_ns_t *ns, const lwc_plan_t *plan)
 {
     if (ns != NULL && plan != NULL) {
         (void)lwc_plan_cflist(plan, ns->region, ns->cflist_hz);
+        const int8_t sb = (int8_t)(ns->region->fixed ? lwc_plan_subband_of(plan, ns->region) : -1);
+        if (sb != ns->subband) { /* another sub-band: every device must be moved again */
+            for (size_t i = 0; i < LWC_NS_MAX_DEVICES; i++) {
+                ns->link[i].ch_done = false;
+                ns->link[i].ch_pending = false;
+                ns->link[i].ch_wait = 0;
+                ns->link[i].ch_tries = 0;
+            }
+        }
+        ns->subband = sb;
     }
 }
 
@@ -205,6 +229,9 @@ lwc_ns_join_res_t lwc_ns_join(lwc_ns_t *ns, const uint8_t *frame, size_t n, uint
     if (!nonce_ok(d, jr.dev_nonce)) {
         return LWC_NS_JOIN_REPLAY;
     }
+    if (ns->region->fixed && ns->subband < 0) {
+        return LWC_NS_JOIN_NO_PLAN; /* nothing changed: the device may try again */
+    }
     uint32_t addr;
     if (d->joined) {
         addr = d->dev_addr; /* keep its address across rejoins */
@@ -214,10 +241,15 @@ lwc_ns_join_res_t lwc_ns_join(lwc_ns_t *ns, const uint8_t *frame, size_t n, uint
     const uint32_t jn = ns->join_nonce & 0xFFFFFFU;
     ns->join_nonce = (jn + 1U) & 0xFFFFFFU;
     uint8_t cflist[16];
-    lwc_lw_cflist_freqs(ns->cflist_hz, cflist);
+    const uint8_t *cf = cflist;
+    if (!ns->region->fixed) {
+        lwc_lw_cflist_freqs(ns->cflist_hz, cflist);
+    } else if (d->mac != LWC_NS_MAC_1_0_4 || !lwc_region_cflist_subband(ns->region, (uint8_t)ns->subband, cflist)) {
+        cf = NULL; /* 1.0.2/1.0.3 in US915/AU915: no CFList; the LinkADRReq pair moves it (ADR-0026) */
+    }
     /* DLSettings: RX1DROffset 0, RX2 data rate; RxDelay: RX1 delay in seconds */
     *accept_len = lwc_lw_join_accept(d->app_key, jn, LWC_NS_NET_ID, addr, (uint8_t)(ns->rx2_dr & 0x0FU),
-                                     ns->rx1_delay_s, cflist, accept, cap);
+                                     ns->rx1_delay_s, cf, accept, cap);
     d->rx1_delay_s = ns->rx1_delay_s;
     d->rx2_dr = ns->rx2_dr;
     d->rx2_hz = ns->rx2_hz;
@@ -303,10 +335,19 @@ int16_t lwc_ns_required_snr10(uint8_t sf)
     return (int16_t)(-75 - 25 * (int)(sf - 7U));
 }
 
-void lwc_ns_adr(int16_t snr_max10, uint8_t dr, uint8_t tx_power, uint8_t max_dr, uint8_t max_power,
-                uint8_t *new_dr, uint8_t *new_power)
+/* SF of an uplink DR (LoRa), else as DR0-5 = SF12-7 */
+static uint8_t sf_of(const lwc_region_t *r, uint8_t dr)
 {
-    const int req = lwc_ns_required_snr10((uint8_t)(12U - (dr > 5U ? 5U : dr)));
+    if (r != NULL && dr <= 15U && r->dr[dr].kind == LWC_DR_LORA) {
+        return r->dr[dr].sf;
+    }
+    return (uint8_t)(12U - (dr > 5U ? 5U : dr));
+}
+
+void lwc_ns_adr(const lwc_region_t *r, int16_t snr_max10, uint8_t dr, uint8_t tx_power, uint8_t max_dr,
+                uint8_t max_power, uint8_t *new_dr, uint8_t *new_power)
+{
+    const int req = lwc_ns_required_snr10(sf_of(r, dr));
     const int margin = (int)snr_max10 - req - LWC_NS_ADR_MARGIN10;
     int nstep = margin / 30; /* margin / 3 dB, truncated toward zero (as ChirpStack) */
     for (; nstep > 0; nstep--) {
@@ -327,7 +368,8 @@ void lwc_ns_adr(int16_t snr_max10, uint8_t dr, uint8_t tx_power, uint8_t max_dr,
 
 /* ADR bookkeeping for an accepted uplink: the answer to our last LinkADRReq,
  * and the SNR history. */
-static void adr_rx(lwc_ns_link_t *l, const lwc_mac_up_t *m, const lwc_ns_uplink_t *up, const lwc_ns_rx_t *rx)
+static void adr_rx(const lwc_region_t *r, lwc_ns_link_t *l, const lwc_mac_up_t *m, const lwc_ns_uplink_t *up,
+                   const lwc_ns_rx_t *rx)
 {
     if (l->adr_pending) {
         l->adr_pending = false;
@@ -345,10 +387,11 @@ static void adr_rx(lwc_ns_link_t *l, const lwc_mac_up_t *m, const lwc_ns_uplink_
              * fixes the rate) would get the same request on every uplink. The
              * first time: wait a full history. The second time in a row: ask
              * for no higher rate than it uses, until it joins again. */
-            if (rx->bw_khz == 125U && rx->sf >= 7U && rx->sf <= 12U) {
-                if ((uint8_t)(12U - rx->sf) < l->pend_dr) {
+            const int used = rx->bw_khz == 125U ? lwc_ns_dr(r, rx->sf, rx->bw_khz) : -1;
+            if (used >= 0) {
+                if ((uint8_t)used < l->pend_dr) {
                     if (++l->dr_kept >= 2U) {
-                        l->dr_cap = (uint8_t)(13U - rx->sf); /* 1 + the rate it uses */
+                        l->dr_cap = (uint8_t)(used + 1); /* 1 + the rate it uses */
                     } else {
                         l->adr_wait = LWC_NS_ADR_HISTORY;
                     }
@@ -380,9 +423,11 @@ static void adr_rx(lwc_ns_link_t *l, const lwc_mac_up_t *m, const lwc_ns_uplink_
 }
 
 /* Whether to send a LinkADRReq now, and with what. */
-static bool adr_want(lwc_ns_link_t *l, const lwc_ns_uplink_t *up, const lwc_ns_rx_t *rx, uint8_t *dr, uint8_t *pw)
+static bool adr_want(const lwc_region_t *r, lwc_ns_link_t *l, const lwc_ns_uplink_t *up, const lwc_ns_rx_t *rx,
+                     uint8_t *dr, uint8_t *pw)
 {
-    if (!up->adr || rx->bw_khz != 125U || rx->sf < 7U || rx->sf > 12U) {
+    const int used = rx->bw_khz == 125U ? lwc_ns_dr(r, rx->sf, rx->bw_khz) : -1;
+    if (!up->adr || used < 0) {
         return false;
     }
     if (l->adr_wait != 0U) {
@@ -398,10 +443,11 @@ static bool adr_want(lwc_ns_link_t *l, const lwc_ns_uplink_t *up, const lwc_ns_r
             best = l->snr10[k];
         }
     }
-    const uint8_t cur = (uint8_t)(12U - rx->sf);
-    const uint8_t max_dr = l->dr_cap != 0U ? (uint8_t)(l->dr_cap - 1U) : LWC_NS_ADR_MAX_DR;
+    const uint8_t cur = (uint8_t)used;
+    const uint8_t top = r->fixed ? r->up125.max_dr : LWC_NS_ADR_MAX_DR; /* the fastest 125 kHz uplink DR */
+    const uint8_t max_dr = l->dr_cap != 0U ? (uint8_t)(l->dr_cap - 1U) : top;
     const uint8_t max_pw = l->power_cap != 0U ? (uint8_t)(l->power_cap - 1U) : LWC_NS_ADR_MAX_POWER;
-    lwc_ns_adr(best, cur, l->tx_power, max_dr, max_pw, dr, pw);
+    lwc_ns_adr(r, best, cur, l->tx_power, max_dr < top ? max_dr : top, max_pw, dr, pw);
     /* Raising the power waits for a full history at the current power, so the
      * power does not go up and down (ChirpStack); faster and quieter can come
      * at once. */
@@ -471,10 +517,56 @@ bool lwc_ns_answer_app(lwc_ns_t *ns, lwc_ns_up_res_t res, const lwc_ns_uplink_t 
             dl->device_time = lwc_mac_device_time_ans(fopts, sizeof fopts, &fo, rx->gps_s, rx->gps_frac);
             need = true;
         }
-        adr_rx(l, &m, up, rx);
-        uint8_t dr, pw;
-        if (adr_want(l, up, rx, &dr, &pw) &&
-            lwc_mac_link_adr_req(fopts, sizeof fopts, &fo, dr, pw, lwc_ns_ch_mask(ns), 0, 1)) {
+        const lwc_region_t *r = ns->region;
+        bool refused = false;
+        if (l->ch_pending) { /* the sub-band pair: a refused field discards the whole block */
+            l->ch_pending = false;
+            if (m.link_adr_ans != 0U && m.link_adr_status == LWC_MAC_ADR_ALL_ACK) {
+                l->ch_done = true;
+            } else {
+                /* counted from the next uplink; doubles per refusal, up to 16 x */
+                l->ch_wait = (uint8_t)(LWC_NS_CH_RETRY << (l->ch_tries < 4U ? l->ch_tries : 4U));
+                if (l->ch_tries < UINT8_MAX) {
+                    l->ch_tries++;
+                }
+                refused = true;
+            }
+        }
+        adr_rx(r, l, &m, up, rx);
+        uint8_t dr = 0, pw = 0;
+        const bool adr = adr_want(r, l, up, rx, &dr, &pw);
+        uint16_t mk[2];
+        uint8_t cn[2];
+        const bool sub = r->fixed && ns->subband >= 0 && lwc_region_link_adr_subband(r, (uint8_t)ns->subband, mk, cn);
+        if (sub && !l->ch_done && !l->ch_pending && !refused) {
+            /* US915/AU915 (ADR-0026): move the device to the sub-band: ChMaskCntl 7
+             * (125 kHz channels off, the 500 kHz one on), then its 8 channels. Both
+             * or neither (the first alone leaves no 125 kHz channel), with an ADR
+             * change folded in, else the rate and power it has. */
+            if (l->ch_wait != 0U) {
+                l->ch_wait--;
+            } else if (fo + 10U <= sizeof fopts) {
+                uint8_t pdr = dr, ppw = pw;
+                if (!adr) {
+                    const int cur = lwc_ns_dr(r, rx->sf, rx->bw_khz);
+                    pdr = d->mac == LWC_NS_MAC_1_0_4 ? 15U : (uint8_t)(cur < 0 ? 0 : cur); /* 15: keep (1.0.4) */
+                    ppw = d->mac == LWC_NS_MAC_1_0_4 ? 15U : l->tx_power;
+                }
+                dl->ch_mask = lwc_mac_link_adr_req(fopts, sizeof fopts, &fo, pdr, ppw, mk[0], cn[0], 1) &&
+                              lwc_mac_link_adr_req(fopts, sizeof fopts, &fo, pdr, ppw, mk[1], cn[1], 1);
+                if (dl->ch_mask) {
+                    need = true;
+                    if (adr) {
+                        dl->link_adr = true;
+                        dl->adr_dr = dr;
+                        dl->adr_power = pw;
+                    }
+                }
+            }
+        }
+        if (adr && !dl->ch_mask && (!r->fixed || sub) &&
+            lwc_mac_link_adr_req(fopts, sizeof fopts, &fo, dr, pw, r->fixed ? mk[1] : lwc_ns_ch_mask(ns),
+                                 r->fixed ? cn[1] : 0U, 1)) {
             dl->link_adr = true;
             dl->adr_dr = dr;
             dl->adr_power = pw;
@@ -525,6 +617,9 @@ bool lwc_ns_answer_app(lwc_ns_t *ns, lwc_ns_up_res_t res, const lwc_ns_uplink_t 
         l->pend_dr = dl->adr_dr;
         l->pend_power = dl->adr_power;
     }
+    if (dl->ch_mask) {
+        l->ch_pending = true;
+    }
     d->fcnt_down++;
     return true;
 }
@@ -542,16 +637,48 @@ bool lwc_ns_forward(lwc_mode_t mode, bool handled_locally)
     }
 }
 
-void lwc_ns_downlink(bool rx2, uint32_t up_tmst, uint32_t up_freq_hz, uint8_t up_sf, uint16_t up_bw_khz,
-                     uint32_t delay_us, uint32_t rx2_hz, uint8_t rx2_dr, int8_t power_dbm, const uint8_t *payload,
-                     size_t len, lwc_txpk_t *out)
+/* RX2 SF and bandwidth: a DR the server accepts for RX2 (lwc_ns_rx_ok), else
+ * the region's default RX2 DR */
+static void rx2_params(const lwc_region_t *r, uint8_t dr, uint8_t *sf, uint16_t *bw)
+{
+    if (r == NULL) {
+        *sf = 12;
+        *bw = 125;
+        return;
+    }
+    const lwc_region_dr_t *d = dr <= 15U ? &r->dr[dr] : NULL;
+    const bool ok = d != NULL && d->kind == LWC_DR_LORA &&
+                    (r->fixed ? dr >= r->down.min_dr && dr <= r->down.max_dr : d->bw_khz == 125U);
+    if (!ok) {
+        d = &r->dr[r->rx2_dr];
+    }
+    *sf = d->sf;
+    *bw = d->bw_khz;
+}
+
+void lwc_ns_downlink(const lwc_region_t *r, bool rx2, uint32_t up_tmst, uint32_t up_freq_hz, uint8_t up_sf,
+                     uint16_t up_bw_khz, uint32_t delay_us, uint32_t rx2_hz, uint8_t rx2_dr, int8_t power_dbm,
+                     const uint8_t *payload, size_t len, lwc_txpk_t *out)
 {
     memset(out, 0, sizeof *out);
     out->mode = LWC_TXPK_TIMED;
     out->tmst = up_tmst + delay_us + (rx2 ? 1000000U : 0U);
-    out->freq_hz = rx2 ? rx2_hz : up_freq_hz;
-    out->sf = rx2 ? (uint8_t)(12U - (rx2_dr <= 5U ? rx2_dr : 0U)) : up_sf;
-    out->bw_khz = rx2 ? 125U : up_bw_khz;
+    if (rx2) {
+        out->freq_hz = rx2_hz;
+        rx2_params(r, rx2_dr, &out->sf, &out->bw_khz);
+    } else {
+        /* RX1DROffset 0: the region's RX1 DR and frequency for the uplink */
+        const uint32_t f = lwc_region_rx1_hz(r, up_freq_hz, up_bw_khz);
+        out->freq_hz = f != 0U ? f : up_freq_hz;
+        out->sf = up_sf;
+        out->bw_khz = up_bw_khz;
+        const int ud = lwc_region_dr_of(r, up_sf, up_bw_khz, false);
+        const int d1 = ud >= 0 ? lwc_region_rx1_dr(r, ud, 0, false) : -1;
+        if (d1 >= 0 && r->dr[d1].kind == LWC_DR_LORA) {
+            out->sf = r->dr[d1].sf;
+            out->bw_khz = r->dr[d1].bw_khz;
+        }
+    }
     out->cr_denom = 5;
     out->rfch = 0;
     out->powe = power_dbm;
@@ -605,11 +732,11 @@ bool lwc_ns_class_c_down(lwc_ns_t *ns, size_t idx, const lwc_ns_app_t *app, lwc_
     return true;
 }
 
-void lwc_ns_downlink_at(uint32_t tmst, uint32_t freq_hz, uint8_t dr, int8_t power_dbm, const uint8_t *payload,
-                        size_t len, lwc_txpk_t *out)
+void lwc_ns_downlink_at(const lwc_region_t *r, uint32_t tmst, uint32_t freq_hz, uint8_t dr, int8_t power_dbm,
+                        const uint8_t *payload, size_t len, lwc_txpk_t *out)
 {
     /* the RX2 form of lwc_ns_downlink, at `tmst` itself */
-    lwc_ns_downlink(true, tmst - 1000000U, 0, 0, 0, 0, freq_hz, dr, power_dbm, payload, len, out);
+    lwc_ns_downlink(r, true, tmst - 1000000U, 0, 0, 0, 0, freq_hz, dr, power_dbm, payload, len, out);
 }
 
 lwc_ns_err_t lwc_ns_set_c_ack(lwc_ns_t *ns, uint64_t dev_eui, uint16_t seconds)

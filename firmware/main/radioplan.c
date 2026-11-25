@@ -416,9 +416,10 @@ size_t radioplan_json(char *out, size_t cap)
     const lwc_card_t *card = radioplan_card();
     int n = snprintf(out, cap,
                      "{\"card\":\"%s\",\"card_radio\":\"%s\",\"region\":\"%s\",\"region_tx\":%s,\"fixed\":%s,"
-                     "\"subband\":%d,\"subbands\":%u,\"cards\":{",
+                     "\"local\":%s,\"subband\":%d,\"subbands\":%u,\"cards\":{",
                      card->name, card->radio == LWC_RADIO_SX1255 ? "SX1255" : "SX1257", rg->name,
                      lwc_region_tx_enabled(rg) ? "true" : "false", rg->fixed ? "true" : "false",
+                     lwc_ns_region_ok(rg) ? "true" : "false",
                      lwc_plan_subband_of(&p, rg) + 1, (unsigned)lwc_region_subbands(rg));
     o = (n < 0 || (size_t)n >= cap) ? cap : (size_t)n;
     /* "cards": {"868": ["EU868", ...], ...}: the regions each card can serve */

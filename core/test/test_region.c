@@ -260,9 +260,39 @@ static void dynamic_rules(void)
     CHECK(!lwc_region_tx_enabled(NULL));
 }
 
+/* ADR-0026: what the local server assumes of US915 and AU915. */
+static void fixed_rules(void)
+{
+    for (int i = 0; i < (int)LWC_REGIONS; i++) {
+        const lwc_region_t *r = R((lwc_region_id_t)i);
+        if (!r->fixed || r->n_up500 == 0U) {
+            continue; /* CN470 is not served */
+        }
+        /* ADR: the 125 kHz uplink DRs are DR0..up125.max_dr, one SF step each */
+        CHECK(r->up125.min_dr == 0U);
+        for (uint8_t dr = 0; dr <= r->up125.max_dr; dr++) {
+            CHECK(r->dr[dr].kind == LWC_DR_LORA && r->dr[dr].bw_khz == 125U && r->dr[dr].sf == r->dr[0].sf - dr);
+        }
+        /* the 500 kHz uplink DR is LoRa; every LoRa uplink DR has an RX1 DR at offset 0, a downlink DR */
+        CHECK(r->dr[r->up500.min_dr].kind == LWC_DR_LORA && r->dr[r->up500.min_dr].bw_khz == 500U);
+        for (int dr = 0; dr < 8; dr++) {
+            if (r->dr[dr].kind == LWC_DR_LORA) {
+                const int d1 = lwc_region_rx1_dr(r, dr, 0, false);
+                CHECK(d1 >= (int)r->down.min_dr && d1 <= (int)r->down.max_dr && r->dr[d1].kind == LWC_DR_LORA);
+            }
+        }
+        /* RX2: a downlink DR; downlink DRs are LoRa at 500 kHz, 4-bit (DLSettings) */
+        CHECK(r->rx2_dr >= r->down.min_dr && r->rx2_dr <= r->down.max_dr && r->down.max_dr <= 15U);
+        for (uint8_t dr = r->down.min_dr; dr <= r->down.max_dr; dr++) {
+            CHECK(r->dr[dr].kind == LWC_DR_LORA && r->dr[dr].bw_khz == 500U);
+        }
+    }
+}
+
 int main(void)
 {
     dynamic_rules();
+    fixed_rules();
     spot_values();
     lookup();
     consistency();
