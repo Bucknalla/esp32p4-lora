@@ -111,6 +111,11 @@ typedef struct {
     bool ch_pending;     /* sent, answer not seen yet */
     uint8_t ch_wait;     /* uplinks to wait before sending it again */
     uint8_t ch_tries;    /* refusals so far: the wait doubles each time, up to 16 x */
+    /* AS923, AU915 (ADR-0027): TxParamSetupReq with the region's defaults */
+    bool tp_done;        /* the device answered: its downlink dwell limit is off */
+    bool tp_pending;     /* sent, answer not seen yet */
+    uint8_t tp_wait;     /* uplinks to wait before sending it again */
+    uint8_t tp_tries;    /* unanswered so far: the wait doubles each time, up to 16 x */
 } lwc_ns_link_t;
 
 typedef struct {
@@ -269,6 +274,7 @@ typedef struct {
     bool dev_status;
     bool link_adr;   /* LinkADRReq to adr_dr / adr_power */
     bool ch_mask;    /* US915/AU915: the LinkADRReq pair to the sub-band */
+    bool tx_param;   /* AS923/AU915: TxParamSetupReq */
     bool app;        /* the application payload is in it */
     bool confirmed;  /* sent as Confirmed Data Down (with the payload) */
     bool app_too_big; /* it was offered, but does not fit at these data rates */
@@ -325,6 +331,10 @@ int lwc_ns_dr(const lwc_region_t *r, uint8_t sf, uint16_t bw_khz);
  *  Where TxParamSetupReq exists (AS923) the 400 ms dwell size: the server does
  *  not know the device's dwell setting, and the smaller size fits either. */
 size_t lwc_ns_max_frm(const lwc_region_t *r, int dr);
+
+/** The same for one device: once it has answered TxParamSetupReq (downlink
+ *  dwell off), the size without the dwell limit. */
+size_t lwc_ns_dev_max_frm(const lwc_ns_t *ns, size_t idx, int dr);
 
 /** Demodulation floor for an SF at 125 kHz, in 0.1 dB (SF7 -7.5 dB ... SF12 -20 dB). */
 int16_t lwc_ns_required_snr10(uint8_t sf);

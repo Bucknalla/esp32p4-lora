@@ -18,6 +18,7 @@
 #include "lwc/ns.h"
 #include "lwc/plan.h"
 #include "lwc/txpk.h"
+#include "lwc/txrule.h"
 
 static char *s_out;
 static size_t s_len, s_cap;
@@ -96,17 +97,17 @@ static void grid(void)
     }
     /* duty cycle: bands, budgets, a sequence of takes */
     for (uint32_t f = 862900000; f <= 870100000; f += 50000) {
-        const int band = lwc_dc_band(f);
-        emit("dc_band f=%" PRIu32 " -> %d permille=%" PRIu32 "\n", f, band, lwc_dc_permille(band));
+        const int band = lwc_txrule_band(lwc_txrule(LWC_REGION_EU868), f);
+        emit("dc_band f=%" PRIu32 " -> %d permille=%" PRIu32 "\n", f, band, lwc_dc_permille(lwc_txrule(LWC_REGION_EU868), band));
     }
     lwc_dutycycle_t dc;
-    lwc_dc_init(&dc, 0);
+    lwc_dc_init(&dc, lwc_txrule(LWC_REGION_EU868), 0);
     static const uint32_t tf[] = {868100000, 869525000, 868800000, 867100000, 869525000};
     int64_t now = 0;
     for (int i = 0; i < 60; i++) {
         const uint32_t f = tf[i % 5];
         const uint32_t air = 50000U + (uint32_t)i * 37000U;
-        emit("dc_take t=%" PRId64 " f=%" PRIu32 " air=%" PRIu32 " -> %d\n", now, f, air, lwc_dc_take(&dc, now, f, air));
+        emit("dc_take t=%" PRId64 " f=%" PRIu32 " air=%" PRIu32 " -> %d\n", now, f, air, lwc_dc_take(&dc, lwc_txrule(LWC_REGION_EU868), now, f, air));
         now += 1000000 + (int64_t)i * 250000;
     }
     /* the default plan, packed, and its CFList */

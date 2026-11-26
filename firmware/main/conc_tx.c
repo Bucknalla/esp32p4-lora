@@ -7,7 +7,8 @@
  *   as Semtech's forwarder does in timersync). Frames are admitted by the core
  *   JIT queue and handed to lgw_send TX_LEAD_US before their start.
  * - Safety: TX_FREE checked before each send; a frame still SCHEDULED after
- *   its end is aborted; the per-sub-band duty-cycle budget is enforced here.
+ *   its end is aborted; the region's transmit rules (lwc/txrule.h: bands,
+ *   power per band, duty cycle, LBT) are enforced here.
  * - Card reset detection: after each frame, the counter must have advanced by
  *   the host-clock elapsed time; otherwise the caller restarts the HAL.
  */
@@ -24,6 +25,7 @@
 #include "loragw_reg.h"
 #include "lwc/region.h"
 #include "lwc/txpk.h"
+#include "lwc/txrule.h"
 #include "lns.h"
 #include "radio_tx.h"
 #include "radioplan.h"
@@ -132,7 +134,7 @@ int conc_tx_configure(void)
     /* Once per boot: a HAL restart must not refill the hourly duty-cycle budget. */
     static bool dc_ready;
     if (!dc_ready) {
-        lwc_dc_init(&s_dc, esp_timer_get_time());
+        lwc_dc_init(&s_dc, lwc_txrule(radioplan_region()->id), esp_timer_get_time());
         dc_ready = true;
     }
     return 0;
@@ -252,14 +254,25 @@ static void admit(const radio_tx_req_t *r)
         reply(r, RADIO_TX_REGION, 0, false);
         return;
     }
-    if (lwc_dc_band(p->freq_hz) < 0) { /* inside an EU868 sub-band, so inside 863-870 MHz */
+    /* ADR-0027: inside one of the region's bands, under its power; no LBT on this card */
+    const lwc_txrule_t *rule = lwc_txrule(radioplan_region()->id);
+    int8_t band_dbm = 0;
+    const lwc_txr_t tr = lwc_txrule_check(rule, p->freq_hz, false, &band_dbm);
+    if (tr != LWC_TXR_OK) {
+        ESP_LOGW(TAG, "downlink refused: %s on %" PRIu32 " Hz", lwc_txr_str(tr), p->freq_hz);
+        reply(r, tr == LWC_TXR_FREQ ? RADIO_TX_FREQ : RADIO_TX_REGION, 0, false);
+        return;
+    }
+    const int8_t max_dbm = band_dbm < s_max_dbm ? band_dbm : s_max_dbm; /* the band only lowers the cap */
+    if (max_dbm < s_min_dbm) {
+        ESP_LOGW(TAG, "downlink refused: band limit %d dBm is below the lowest gain step", band_dbm);
         reply(r, RADIO_TX_FREQ, 0, false);
         return;
     }
     int8_t pw = p->powe;
     bool capped = false;
-    if (pw > s_max_dbm) {
-        pw = s_max_dbm;
+    if (pw > max_dbm) {
+        pw = max_dbm;
         capped = true;
     }
     if (pw < s_min_dbm) {
@@ -306,7 +319,7 @@ static void admit(const radio_tx_req_t *r)
         }
         return;
     }
-    if (!lwc_dc_take(&s_dc, esp_timer_get_time(), f.freq_hz, air_us)) {
+    if (!lwc_dc_take(&s_dc, rule, esp_timer_get_time(), f.freq_hz, air_us)) {
         lwc_jit_release(&s_jit, slot);
         ESP_LOGW(TAG, "downlink refused: duty-cycle budget used up on %" PRIu32 " Hz", f.freq_hz);
         if (!try_alt(r, RADIO_TX_DUTY)) {

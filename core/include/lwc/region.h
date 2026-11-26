@@ -5,8 +5,8 @@
  * core/src/region_tables.inc, generated from a pinned reference
  * (tools/regions/). Pure, no I/O: host-tested.
  *
- * Duty cycle, dwell time and listen-before-talk depend on national rules as
- * well as RP002; they are applied elsewhere (EU868: core/src/txpk.c).
+ * The gateway's own transmit rules (bands, power, duty cycle, LBT) are in
+ * lwc/txrule.h (ADR-0027).
  */
 #ifndef LWC_REGION_H
 #define LWC_REGION_H
@@ -127,8 +127,9 @@ bool lwc_region_cflist_subband(const lwc_region_t *r, uint8_t sb, uint8_t out[16
 bool lwc_region_link_adr_subband(const lwc_region_t *r, uint8_t sb, uint16_t mask[2], uint8_t cntl[2]);
 
 /** This firmware transmits only in EU868 (ADR-0024). Every other region is
- *  receive-only until its national rules (duty cycle, dwell time, LBT, power
- *  limits) are in place; the radio refuses every frame there. */
+ *  receive-only: its transmit rules exist (lwc/txrule.h, ADR-0027) or are
+ *  missing, but its transmit path is not measured or approved. The radio
+ *  refuses every frame there. */
 bool lwc_region_tx_enabled(const lwc_region_t *r);
 
 /* ---- Concentrator cards (ADR-0025) -------------------------------------------

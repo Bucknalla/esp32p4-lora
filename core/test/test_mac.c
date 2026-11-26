@@ -27,7 +27,8 @@ static void parse(void)
     CHECK(lwc_mac_parse_up(pos, sizeof pos, &m) == 1U && m.battery == 255 && m.margin == 31);
     /* answers counted only */
     static const uint8_t b[] = {0x04, 0x05, 0x07, 0x07, 0x03, 0x08, 0x09, 0x0A, 0x03};
-    CHECK(lwc_mac_parse_up(b, sizeof b, &m) == 6U && m.other == 6 && !m.stopped && m.link_adr_ans == 0);
+    CHECK(lwc_mac_parse_up(b, sizeof b, &m) == 6U && m.other == 5 && !m.stopped && m.link_adr_ans == 0);
+    CHECK(m.tx_param_setup_ans); /* TxParamSetupAns: no payload */
     CHECK(m.link_adr_status == 0);
     /* unknown CID: stop, keep what came before */
     static const uint8_t c[] = {0x02, 0x01, 0x0D};
@@ -55,6 +56,15 @@ static void build(void)
     n = 0;
     CHECK(!lwc_mac_link_adr_req(buf, sizeof buf, &n, 16, 0, 0, 0, 1) && n == 0);
     CHECK(lwc_mac_link_check_ans(buf, sizeof buf, &n, 255, 1) && buf[1] == 254); /* 255 reserved */
+    /* TxParamSetupReq: bit 5 downlink dwell, bit 4 uplink dwell, MaxEIRP index */
+    n = 0;
+    CHECK(lwc_mac_tx_param_setup_req(buf, sizeof buf, &n, false, true, 5) && n == 2 && buf[0] == 0x09 && buf[1] == 0x15);
+    CHECK(lwc_mac_tx_param_setup_req(buf, sizeof buf, &n, true, false, 13) && n == 4 && buf[3] == 0x2D);
+    CHECK(!lwc_mac_tx_param_setup_req(buf, sizeof buf, &n, false, false, 16) && n == 4);
+    CHECK(lwc_mac_max_eirp_dbm(0) == 8 && lwc_mac_max_eirp_dbm(5) == 16 && lwc_mac_max_eirp_dbm(13) == 30 &&
+          lwc_mac_max_eirp_dbm(15) == 36 && lwc_mac_max_eirp_dbm(16) == -1);
+    CHECK(lwc_mac_max_eirp_idx(16) == 5 && lwc_mac_max_eirp_idx(30) == 13 && lwc_mac_max_eirp_idx(17) == 5 &&
+          lwc_mac_max_eirp_idx(7) == -1 && lwc_mac_max_eirp_idx(40) == 15);
 }
 
 static void gps(void)

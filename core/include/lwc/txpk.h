@@ -1,7 +1,8 @@
 /*
  * Downlinks to the radio: one frame to send (lwc_txpk_t, from the Basics
  * Station client or the local network server), when to send it (just-in-time
- * queue), and the EU868 duty-cycle budget. OS-independent, no allocation.
+ * queue). The duty-cycle budget is in lwc/txrule.h. OS-independent, no
+ * allocation.
  */
 #ifndef LWC_TXPK_H
 #define LWC_TXPK_H
@@ -95,28 +96,6 @@ void lwc_jit_sent(lwc_jit_t *q, size_t slot);
 int lwc_jit_ended(const lwc_jit_t *q, uint32_t now, uint32_t margin_us);
 
 void lwc_jit_release(lwc_jit_t *q, size_t slot);
-
-/* ---- EU868 duty cycle (ETSI EN 300 220 sub-bands) -------------------------
- * Token bucket per sub-band over one hour: capacity = duty x 3600 s, refilled
- * continuously. Times are host monotonic microseconds (int64). */
-
-#define LWC_DC_BANDS 6U
-
-typedef struct {
-    int64_t last_us;
-    int64_t tokens_us[LWC_DC_BANDS];
-} lwc_dutycycle_t;
-
-void lwc_dc_init(lwc_dutycycle_t *dc, int64_t now_us);
-
-/** Sub-band index for a frequency, or -1 outside the EU868 bands. */
-int lwc_dc_band(uint32_t freq_hz);
-
-/** Duty cycle of a band in per-mille (1 = 0.1 %, 10 = 1 %, 100 = 10 %). */
-uint32_t lwc_dc_permille(int band);
-
-/** True and consumed if `airtime_us` fits in the band's budget now. */
-bool lwc_dc_take(lwc_dutycycle_t *dc, int64_t now_us, uint32_t freq_hz, uint32_t airtime_us);
 
 #ifdef __cplusplus
 }

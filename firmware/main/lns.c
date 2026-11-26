@@ -1243,7 +1243,7 @@ esp_err_t lns_queue_down(uint64_t dev_eui, uint8_t port, const uint8_t *data, si
     const int i = lwc_ns_find(&s_ns, dev_eui);
     if (i < 0) {
         err = ESP_ERR_NOT_FOUND;
-    } else if (len > lwc_ns_max_frm(s_ns.region, s_ns.dev[i].rx2_dr)) {
+    } else if (len > lwc_ns_dev_max_frm(&s_ns, (size_t)i, s_ns.dev[i].rx2_dr)) {
         err = ESP_ERR_INVALID_SIZE; /* never fits the RX2 window */
     } else {
         lwc_dlq_t *q = &s_dlq[i];

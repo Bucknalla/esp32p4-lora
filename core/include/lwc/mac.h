@@ -40,6 +40,7 @@ typedef struct {
     uint8_t link_adr_ans; /* LinkADRAns count (a ChMask block answers once per request) */
     uint8_t link_adr_status; /* AND of their status bytes */
     bool dev_status_ans;
+    bool tx_param_setup_ans; /* TxParamSetupAns (no payload): the device took the settings */
     uint8_t battery; /* 0 external power, 1..254 level, 255 unknown */
     int8_t margin;   /* demodulation margin, dB, -32..31 */
     uint8_t other;   /* other known commands (answers to requests this server does not send) */
@@ -61,6 +62,17 @@ bool lwc_mac_device_time_ans(uint8_t *buf, size_t cap, size_t *len, uint32_t gps
 bool lwc_mac_link_adr_req(uint8_t *buf, size_t cap, size_t *len, uint8_t dr, uint8_t tx_power, uint16_t ch_mask,
                           uint8_t ch_mask_cntl, uint8_t nb_trans);
 bool lwc_mac_dev_status_req(uint8_t *buf, size_t cap, size_t *len);
+
+/** TxParamSetupReq (RP002: AS923, AU915). `max_eirp_idx` 0..15 indexes
+ *  lwc_mac_max_eirp_dbm. */
+bool lwc_mac_tx_param_setup_req(uint8_t *buf, size_t cap, size_t *len, bool dl_dwell, bool ul_dwell,
+                                uint8_t max_eirp_idx);
+
+/** MaxEIRP of TxParamSetupReq index 0..15 (8..36 dBm), -1 for a bad index. */
+int lwc_mac_max_eirp_dbm(uint8_t idx);
+
+/** The largest index whose MaxEIRP is at most `dbm`, -1 if none (below 8 dBm). */
+int lwc_mac_max_eirp_idx(int dbm);
 
 /* GPS time: seconds since 1980-01-06T00:00:00Z, no leap seconds. */
 #define LWC_GPS_EPOCH_UNIX 315964800LL

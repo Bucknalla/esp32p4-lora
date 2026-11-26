@@ -127,7 +127,7 @@ this bench nothing may transmit at 902-928 MHz.
   - ADR and RX2 through the region table instead of 12 - SF;
   - the two LinkADRReq sub-band masks;
   - all of this goes with their transmit rules (R4).
-- **R4:** per-region band edges, duty cycle, dwell time and LBT.
+- **R4:** per-region band edges, duty cycle, dwell time and LBT (ADR-0027).
 
 ## Verification (2026-11-25)
 

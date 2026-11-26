@@ -3,6 +3,7 @@
 - Status: accepted (R2: host-tested; on the board: EU868 unchanged, RU864 receive-only, TX refused).
   Extended by ADR-0025: the concentrator card setting, US915/AU915/CN470 (one
   sub-band, receive-only), EU433; the transmit chain is off outside EU868.
+  ADR-0027 adds the transmit rules per region; only EU868 transmits still.
 - Date: 2026-11-25
 
 ## Context
