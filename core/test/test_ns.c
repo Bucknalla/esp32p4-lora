@@ -816,6 +816,107 @@ static void fixed_regions(void)
     CHECK(!lwc_ns_region_ok(NULL) && lwc_ns_region_ok(EU));
 }
 
+/* ADR-0027: TxParamSetupReq with the region's defaults (uplink dwell on,
+ * downlink dwell off, the region's MaxEIRP), sent until answered. */
+static lwc_ns_t nt; /* large: keep off the stack */
+
+static void tx_param(void)
+{
+    uint8_t jr[23], acc[40], f[64], nwk[16], app[16];
+    size_t idx = 0, alen = 0, n;
+    lwc_ns_uplink_t up;
+    lwc_ns_dl_t dl;
+    lwc_lw_data_t d;
+    lwc_ns_rx_t rx = {.snr10 = 50, .sf = 10, .bw_khz = 125, .now_s = 1};
+    static const uint8_t tpa[] = {0x09}; /* TxParamSetupAns */
+
+    /* AS923-1, a 1.0.2 device (TxParamSetupReq is in 1.0.2 for AS923) */
+    const lwc_region_t *as1 = lwc_region(LWC_REGION_AS923_1);
+    lwc_ns_init(&nt);
+    CHECK(lwc_ns_set_region(&nt, as1));
+    CHECK(lwc_ns_add(&nt, 0x923, JOIN_EUI, KEY, LWC_NS_MAC_1_0_2, NULL, &idx) == LWC_NS_OK);
+    join_request(jr, KEY, 0x923, 1);
+    const uint32_t jn = nt.join_nonce;
+    CHECK(lwc_ns_join(&nt, jr, 23, acc, sizeof acc, &alen, NULL) == LWC_NS_JOIN_ACCEPT);
+    lwc_lw_session_keys(KEY, jn, 0, 1, nwk, app);
+    const uint32_t a = nt.dev[idx].dev_addr;
+    const size_t dwell2 = lwc_region_max_n(as1, 2, true), free2 = lwc_region_max_n(as1, 2, false);
+    CHECK(dwell2 < free2 && lwc_ns_dev_max_frm(&nt, idx, 2) == dwell2); /* not known yet: the smaller size */
+    uint32_t fc = 0;
+    n = uplink_mac(f, nwk, a, fc++, NULL, 0, 0, false);
+    CHECK(lwc_ns_answer(&nt, lwc_ns_uplink(&nt, f, n, &up), &up, &rx, &dl) && dl.tx_param && !dl.ch_mask);
+    CHECK(lwc_lw_data_parse(dl.frame, dl.len, &d) == LWC_LW_OK && d.fopts_len >= 2U && d.fopts[0] == 0x09 &&
+          d.fopts[1] == 0x15); /* uplink dwell, MaxEIRP 16 dBm (index 5) */
+    CHECK(nt.link[idx].tp_pending && !nt.link[idx].tp_done);
+    /* no answer: sent again after LWC_NS_CH_RETRY (4) uplinks */
+    n = uplink_mac(f, nwk, a, fc++, NULL, 0, 0, false);
+    CHECK(!lwc_ns_answer(&nt, lwc_ns_uplink(&nt, f, n, &up), &up, &rx, &dl));
+    CHECK(!nt.link[idx].tp_pending && nt.link[idx].tp_wait == 4 && nt.link[idx].tp_tries == 1);
+    for (unsigned k = 0; k < 4U; k++) {
+        n = uplink_mac(f, nwk, a, fc++, NULL, 0, 0, false);
+        CHECK(!lwc_ns_answer(&nt, lwc_ns_uplink(&nt, f, n, &up), &up, &rx, &dl));
+    }
+    n = uplink_mac(f, nwk, a, fc++, NULL, 0, 0, false);
+    CHECK(lwc_ns_answer(&nt, lwc_ns_uplink(&nt, f, n, &up), &up, &rx, &dl) && dl.tx_param);
+    /* answered: downlink dwell off, the larger size; not sent again */
+    n = uplink_mac(f, nwk, a, fc++, tpa, sizeof tpa, 0, false);
+    CHECK(!lwc_ns_answer(&nt, lwc_ns_uplink(&nt, f, n, &up), &up, &rx, &dl) && nt.link[idx].tp_done);
+    CHECK(lwc_ns_dev_max_frm(&nt, idx, 2) == free2 && lwc_ns_max_frm(as1, 2) == dwell2);
+    CHECK(lwc_ns_dev_max_frm(&nt, idx, 14) == 0U && lwc_ns_dev_max_frm(NULL, 0, 2) == 0U &&
+          lwc_ns_dev_max_frm(&nt, LWC_NS_MAX_DEVICES, 2) == 0U);
+    n = uplink_mac(f, nwk, a, fc++, NULL, 0, 0, true);
+    CHECK(lwc_ns_answer(&nt, lwc_ns_uplink(&nt, f, n, &up), &up, &rx, &dl) && dl.ack && !dl.tx_param);
+    /* a new session: unknown again */
+    join_request(jr, KEY, 0x923, 2);
+    CHECK(lwc_ns_join(&nt, jr, 23, acc, sizeof acc, &alen, NULL) == LWC_NS_JOIN_ACCEPT);
+    CHECK(!nt.link[idx].tp_done && lwc_ns_dev_max_frm(&nt, idx, 2) == dwell2);
+
+    /* EU868 and US915: no TxParamSetupReq */
+    static const lwc_region_id_t no[] = {LWC_REGION_EU868, LWC_REGION_US915};
+    for (size_t t = 0; t < sizeof no / sizeof no[0]; t++) {
+        lwc_ns_init(&nt);
+        CHECK(lwc_ns_set_region(&nt, lwc_region(no[t])));
+        CHECK(lwc_ns_add(&nt, 0x868, JOIN_EUI, KEY, LWC_NS_MAC_1_0_4, NULL, &idx) == LWC_NS_OK);
+        join_request(jr, KEY, 0x868, 1);
+        const uint32_t j = nt.join_nonce;
+        CHECK(lwc_ns_join(&nt, jr, 23, acc, sizeof acc, &alen, NULL) == LWC_NS_JOIN_ACCEPT);
+        lwc_lw_session_keys(KEY, j, 0, 1, nwk, app);
+        nt.link[idx].ch_done = true;
+        n = uplink_mac(f, nwk, nt.dev[idx].dev_addr, 0, NULL, 0, 0, false);
+        CHECK(!lwc_ns_answer(&nt, lwc_ns_uplink(&nt, f, n, &up), &up, &rx, &dl) && !dl.tx_param);
+    }
+
+    /* AU915: 1.0.4 devices only, after the sub-band pair, never beside it */
+    const lwc_region_t *au = lwc_region(LWC_REGION_AU915);
+    lwc_ns_init(&nt);
+    CHECK(lwc_ns_set_region(&nt, au) && nt.subband == 1);
+    size_t i4 = 0, i2 = 0;
+    CHECK(lwc_ns_add(&nt, 0x104, JOIN_EUI, KEY, LWC_NS_MAC_1_0_4, NULL, &i4) == LWC_NS_OK);
+    CHECK(lwc_ns_add(&nt, 0x102, JOIN_EUI, KEY, LWC_NS_MAC_1_0_2, NULL, &i2) == LWC_NS_OK);
+    uint8_t nwk2[16], app2[16];
+    join_request(jr, KEY, 0x104, 1);
+    uint32_t j4 = nt.join_nonce;
+    CHECK(lwc_ns_join(&nt, jr, 23, acc, sizeof acc, &alen, NULL) == LWC_NS_JOIN_ACCEPT);
+    join_request(jr, KEY, 0x102, 1);
+    const uint32_t j2 = nt.join_nonce;
+    CHECK(lwc_ns_join(&nt, jr, 23, acc, sizeof acc, &alen, NULL) == LWC_NS_JOIN_ACCEPT);
+    lwc_lw_session_keys(KEY, j4, 0, 1, nwk, app);
+    lwc_lw_session_keys(KEY, j2, 0, 1, nwk2, app2);
+    static const uint8_t ack[] = {0x03, 0x07, 0x03, 0x07};
+    const uint32_t a4 = nt.dev[i4].dev_addr, a2 = nt.dev[i2].dev_addr;
+    n = uplink_mac(f, nwk, a4, 0, NULL, 0, 0, false);
+    CHECK(lwc_ns_answer(&nt, lwc_ns_uplink(&nt, f, n, &up), &up, &rx, &dl) && dl.ch_mask && !dl.tx_param);
+    n = uplink_mac(f, nwk, a4, 1, ack, sizeof ack, 0, false);
+    CHECK(lwc_ns_answer(&nt, lwc_ns_uplink(&nt, f, n, &up), &up, &rx, &dl) && nt.link[i4].ch_done && dl.tx_param);
+    CHECK(lwc_lw_data_parse(dl.frame, dl.len, &d) == LWC_LW_OK && d.fopts[0] == 0x09 &&
+          d.fopts[1] == 0x1D); /* uplink dwell, MaxEIRP 30 dBm (index 13) */
+    n = uplink_mac(f, nwk2, a2, 0, NULL, 0, 0, false);
+    CHECK(lwc_ns_answer(&nt, lwc_ns_uplink(&nt, f, n, &up), &up, &rx, &dl) && dl.ch_mask && !dl.tx_param);
+    n = uplink_mac(f, nwk2, a2, 1, ack, sizeof ack, 0, false);
+    CHECK(!lwc_ns_answer(&nt, lwc_ns_uplink(&nt, f, n, &up), &up, &rx, &dl) && nt.link[i2].ch_done &&
+          !nt.link[i2].tp_pending);
+}
+
 int main(void)
 {
     lwc_ns_init(&ns);
@@ -925,6 +1026,7 @@ int main(void)
     adr_flow();
     adr_fixed_dr();
     fixed_regions();
+    tx_param();
 
     /* routing */
     CHECK(lwc_ns_forward(LWC_MODE_TTN, true) && lwc_ns_forward(LWC_MODE_TTN, false));

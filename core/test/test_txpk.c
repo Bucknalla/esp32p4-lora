@@ -66,25 +66,6 @@ static void test_jit(void)
     CHECK(lwc_jit_admit(&f, 0, 50000000, 1000, 99, NULL) == LWC_JIT_FULL);
 }
 
-static void test_dutycycle(void)
-{
-    lwc_dutycycle_t dc;
-    lwc_dc_init(&dc, 0);
-    CHECK(lwc_dc_band(868100000U) == 2 && lwc_dc_permille(2) == 10);
-    CHECK(lwc_dc_band(869525000U) == 4 && lwc_dc_permille(4) == 100);
-    CHECK(lwc_dc_band(868650000U) == -1); /* gap between g1 and g2 */
-    CHECK(lwc_dc_band(870000000U) == -1);
-    /* g1 1 %: 36 s per hour */
-    CHECK(lwc_dc_take(&dc, 0, 868100000U, 36000000U));
-    CHECK(!lwc_dc_take(&dc, 0, 868100000U, 1U));
-    /* 100 s later: 1 s refilled */
-    CHECK(lwc_dc_take(&dc, 100000000LL, 868100000U, 1000000U));
-    CHECK(!lwc_dc_take(&dc, 100000000LL, 868100000U, 1U));
-    /* other band unaffected */
-    CHECK(lwc_dc_take(&dc, 100000000LL, 869525000U, 1000000U));
-    CHECK(!lwc_dc_take(&dc, 0, 870500000U, 1U));
-}
-
 static void test_airtime(void)
 {
     /* Reference values: Semtech LoRa calculator / TTN airtime calculator. */
@@ -100,7 +81,6 @@ int main(void)
 {
     test_airtime();
     test_jit();
-    test_dutycycle();
     if (failures != 0) {
         fprintf(stderr, "test_txpk: %d failure(s)\n", failures);
         return 1;

@@ -57,6 +57,9 @@ size_t lwc_mac_parse_up(const uint8_t *p, size_t n, lwc_mac_up_t *out)
             }
             out->link_adr_status &= (uint8_t)(a[0] & LWC_MAC_ADR_ALL_ACK);
             break;
+        case LWC_MAC_TX_PARAM_SETUP:
+            out->tx_param_setup_ans = true;
+            break;
         case LWC_MAC_DEV_STATUS: {
             out->dev_status_ans = true;
             out->battery = a[0];
@@ -116,6 +119,35 @@ bool lwc_mac_link_adr_req(uint8_t *buf, size_t cap, size_t *len, uint8_t dr, uin
 bool lwc_mac_dev_status_req(uint8_t *buf, size_t cap, size_t *len)
 {
     const uint8_t c[1] = {LWC_MAC_DEV_STATUS};
+    return put(buf, cap, len, c, sizeof c);
+}
+
+static const uint8_t k_max_eirp[16] = {8, 10, 12, 13, 14, 16, 18, 20, 21, 24, 26, 27, 29, 30, 33, 36};
+
+int lwc_mac_max_eirp_dbm(uint8_t idx)
+{
+    return idx < 16U ? k_max_eirp[idx] : -1;
+}
+
+int lwc_mac_max_eirp_idx(int dbm)
+{
+    int best = -1;
+    for (int i = 0; i < 16; i++) {
+        if (k_max_eirp[i] <= dbm) {
+            best = i;
+        }
+    }
+    return best;
+}
+
+bool lwc_mac_tx_param_setup_req(uint8_t *buf, size_t cap, size_t *len, bool dl_dwell, bool ul_dwell,
+                                uint8_t max_eirp_idx)
+{
+    if (max_eirp_idx > 15U) {
+        return false;
+    }
+    const uint8_t c[2] = {LWC_MAC_TX_PARAM_SETUP,
+                          (uint8_t)((dl_dwell ? 0x20U : 0U) | (ul_dwell ? 0x10U : 0U) | max_eirp_idx)};
     return put(buf, cap, len, c, sizeof c);
 }
 

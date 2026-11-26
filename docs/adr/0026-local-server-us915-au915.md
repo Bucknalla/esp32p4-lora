@@ -94,7 +94,9 @@ None of these holds in US915 or AU915:
 ## Consequences
 
 - The local server is ready for US915 and AU915, but it cannot complete a
-  join until those regions may transmit (R4).
+  join until those regions may transmit. ADR-0027 adds their transmit rules
+  but not the permission: that needs the 915 MHz card's transmit power
+  measured, and the owner's approval.
 - In hybrid mode in US915 and AU915, a join from a device registered here is
   now taken by the local server. It is stored and uses up a DevNonce, but it
   is not answered (the radio refuses to transmit) and not forwarded, as in
@@ -106,7 +108,7 @@ None of these holds in US915 or AU915:
 
 - **Which TxParamSetupReq and dwell sizes to use.** AU915 has
   TxParamSetupReq, so `lwc_ns_max_frm` uses the 400 ms dwell sizes, as in
-  AS923. Sending TxParamSetupReq is R4.
+  AS923. ADR-0027 sends TxParamSetupReq.
 - **CN470 in the local server.** This needs port-0 MAC commands or the
   RP002-1.0.1+ plans.
 

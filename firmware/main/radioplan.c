@@ -11,6 +11,7 @@
 #include "freertos/semphr.h"
 #include "lwc/ns.h"
 #include "lwc/txpk.h"
+#include "lwc/txrule.h"
 #include "nvs.h"
 #include "sdkconfig.h"
 
@@ -358,7 +359,7 @@ esp_err_t radioplan_set_rx(const radio_rx_cfg_t *c)
     load();
     const lwc_region_t *rg = s_region;
     if (!lwc_ns_rx_ok(rg, c->rx1_delay_s, c->rx2_hz, c->rx2_dr) ||
-        (rg->id == LWC_REGION_EU868 && lwc_dc_band(c->rx2_hz) < 0)) {
+        (lwc_region_tx_enabled(rg) && lwc_txrule_band(lwc_txrule(rg->id), c->rx2_hz) < 0)) {
         unlock();
         ESP_LOGW(TAG, "receive windows rejected");
         return ESP_ERR_INVALID_ARG;

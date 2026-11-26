@@ -472,6 +472,15 @@ size_t lwc_ns_max_frm(const lwc_region_t *r, int dr)
     return lwc_region_max_n(r, dr, r->tx_param_setup);
 }
 
+size_t lwc_ns_dev_max_frm(const lwc_ns_t *ns, size_t idx, int dr)
+{
+    if (ns == NULL || idx >= LWC_NS_MAX_DEVICES) {
+        return 0U;
+    }
+    const size_t n = lwc_ns_max_frm(ns->region, dr);
+    return (n != 0U && ns->link[idx].tp_done) ? lwc_region_max_n(ns->region, dr, false) : n;
+}
+
 bool lwc_ns_answer(lwc_ns_t *ns, lwc_ns_up_res_t res, const lwc_ns_uplink_t *up, const lwc_ns_rx_t *rx,
                    lwc_ns_dl_t *dl)
 {
@@ -532,6 +541,19 @@ bool lwc_ns_answer_app(lwc_ns_t *ns, lwc_ns_up_res_t res, const lwc_ns_uplink_t 
                 refused = true;
             }
         }
+        bool tp_missed = false;
+        if (l->tp_pending) { /* TxParamSetupAns has no payload: it is there or not */
+            l->tp_pending = false;
+            if (m.tx_param_setup_ans) {
+                l->tp_done = true;
+            } else {
+                l->tp_wait = (uint8_t)(LWC_NS_CH_RETRY << (l->tp_tries < 4U ? l->tp_tries : 4U));
+                if (l->tp_tries < UINT8_MAX) {
+                    l->tp_tries++;
+                }
+                tp_missed = true;
+            }
+        }
         adr_rx(r, l, &m, up, rx);
         uint8_t dr = 0, pw = 0;
         const bool adr = adr_want(r, l, up, rx, &dr, &pw);
@@ -572,13 +594,29 @@ bool lwc_ns_answer_app(lwc_ns_t *ns, lwc_ns_up_res_t res, const lwc_ns_uplink_t 
             dl->adr_power = pw;
             need = true;
         }
+        /* ADR-0027: TxParamSetupReq with the region's defaults (LoRaMac-node v4.7.0:
+         * uplink dwell on, downlink dwell off, the region's MaxEIRP), so the
+         * server knows the device's downlink dwell. After the sub-band pair,
+         * never beside it. AU915: 1.0.4 devices only (1.0.2 has no
+         * TxParamSetupReq there, and an unknown command ends the device's
+         * parsing). */
+        const int eirp = lwc_mac_max_eirp_idx(r->max_eirp_dbm);
+        if (r->tx_param_setup && (!r->fixed || (l->ch_done && d->mac == LWC_NS_MAC_1_0_4)) && eirp >= 0 &&
+            !l->tp_done && !l->tp_pending && !tp_missed && !dl->ch_mask) {
+            if (l->tp_wait != 0U) {
+                l->tp_wait--;
+            } else if (lwc_mac_tx_param_setup_req(fopts, sizeof fopts, &fo, false, true, (uint8_t)eirp)) {
+                dl->tx_param = true;
+                need = true;
+            }
+        }
     }
     size_t lim = 0;
     if (app != NULL && app->port >= 1U && app->port <= 223U && (app->len == 0U || app->data != NULL)) {
         /* RX1 at RX1DROffset 0 (the join-accept's DLSettings) */
         const int up_dr = lwc_ns_dr(ns->region, rx->sf, rx->bw_khz);
-        const size_t n1 = lwc_ns_max_frm(ns->region, lwc_region_rx1_dr(ns->region, up_dr, 0, false));
-        const size_t n2 = lwc_ns_max_frm(ns->region, d->rx2_dr);
+        const size_t n1 = lwc_ns_dev_max_frm(ns, up->idx, lwc_region_rx1_dr(ns->region, up_dr, 0, false));
+        const size_t n2 = lwc_ns_dev_max_frm(ns, up->idx, d->rx2_dr);
         lim = n1 < n2 ? n1 : n2;
         dl->app = app->len + fo <= lim;
         dl->app_too_big = !dl->app;
@@ -619,6 +657,9 @@ bool lwc_ns_answer_app(lwc_ns_t *ns, lwc_ns_up_res_t res, const lwc_ns_uplink_t 
     }
     if (dl->ch_mask) {
         l->ch_pending = true;
+    }
+    if (dl->tx_param) {
+        l->tp_pending = true;
     }
     d->fcnt_down++;
     return true;
@@ -714,7 +755,7 @@ bool lwc_ns_class_c_down(lwc_ns_t *ns, size_t idx, const lwc_ns_app_t *app, lwc_
         app->port > 223U || (app->len > 0U && app->data == NULL)) {
         return false;
     }
-    if (app->len > lwc_ns_max_frm(ns->region, d->rx2_dr)) {
+    if (app->len > lwc_ns_dev_max_frm(ns, idx, d->rx2_dr)) {
         dl->app_too_big = true;
         return false;
     }
